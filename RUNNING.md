@@ -497,7 +497,7 @@ the SDK's own code (not ours) while CPU1 renders is not guarded against; the SDK
 
 The unit's final mix goes out over USB audio (`audio_output.c`), so a PC can record what it really plays. `dualcore.html?go=1&seconds=40&shares=0,50&songs=...`
 plays the songs (results carry `startEpoch`), `ffmpeg -f dshow -audio_buffer_size 50 -i audio="Microphone (USB-Audio)"` records, `node render_host.js song.mid host.wav --seconds=40`
-renders the same messages through the player's own code on the host (no CPU limit, reverb/chorus 30), and
+renders the same messages through the player's own code on the host (no CPU limit, reverb 20, chorus 30), and
 `node analyze_usb.js rec.wav host.wav --start=<seconds from recording start to song start> --length=40` finds the lag (envelope, then samples), matches the level by RMS
 and reports per 93 ms frame the octave-band distance, frames where the unit is 6/12 dB quieter than the host (missing notes), clicks and zero runs.
 Sample-by-sample correlation is low by nature (reverb/chorus, timing of MIDI over USB); the figures are similarity to the host render, not quality.
@@ -769,7 +769,7 @@ did arrive in every run on 2026-11-01 (they are played shortly after boot). Meas
 | CC1 modulation wheel | Per channel: vibrato, 5.5 Hz, up to +-50 cents at 127 |
 | CC64 sustain pedal | Per channel: a note released while it is down sounds on until the pedal goes up |
 | CC120 / CC121 / CC123 | All sound off / reset volume, expression, pan, bend, wheel and pedal / all notes off, **for that channel only** |
-| CC91 / CC93 | Reverb and chorus send **per channel**, 30 and 20 until set. The panel's KNOB3/KNOB4 master levels (30 for reverb and 30 for chorus by default, since 2026-11-09; they were 127) scale them |
+| CC91 / CC93 | Reverb and chorus send **per channel**, 30 and 20 until set. The panel's KNOB3/KNOB4 master levels (20 for reverb and 30 for chorus by default; reverb was 30 before 2026-11-15 and 127 before 2026-11-09) scale them |
 | CC10 pan | **Per channel**, live on sounding notes. Added to each zone's own pan from the SoundFont (generator 17), as an SF2 player does: at 64 (the default) the SoundFont's pan is heard as it is (the drum kit is spread), 0 moves the channel all the way left, 127 all the way right |
 
 Panel: the line `MULTI n CH   LAST CH.. PRG...` appears once a program change has been received. **HOME** switches to the channel page:

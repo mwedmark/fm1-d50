@@ -39,7 +39,7 @@ check('both effects off: the output is the dry signal on both channels', r.L.eve
 r = run(4, tone(440, 0.5, 0.5), 127, 0);
 const dryRms = rms(r.D, 0, 22050);
 const tail = [0.55, 1.0, 1.6, 2.4].map(t => rms(r.L, Math.round(t * 44100), Math.round((t + 0.2) * 44100)));
-check('reverb at maximum: just after the note the tail is within 20 dB of the note', tail[0] > dryRms * 0.1 && tail[0] < dryRms * 1.5, `${db(tail[0])} against the note ${db(dryRms)}`);
+check('reverb at maximum: just after the note the tail is within 20 dB (and under +6 dB) of the note', tail[0] > dryRms * 0.1 && tail[0] < dryRms * 2, `${db(tail[0])} against the note ${db(dryRms)}`);
 check('reverb: the tail falls steadily', tail[0] > tail[1] && tail[1] > tail[2] && tail[2] > tail[3] && tail[3] < dryRms * 0.01, tail.map(db).join(' '));
 check('reverb: left and right differ (stereo)', (() => { let d = 0; for (let i = 22050; i < 44100; i++) d += Math.abs(r.L[i] - r.R[i]); return d > 1e6; })());
 

@@ -3,7 +3,7 @@
 // resampled to 44.1 kHz, as on the device) with the FM1B bank made from it; both at 44.1 kHz, reverb and chorus off unless --fx.
 //   node compare_fluid.js notes [--programs=0,4,...] [--note=60]   velocity sweep: level and brightness per velocity, per program
 //   node compare_fluid.js spectra [--programs=..] [--notes=48,60,72]  every program's spectrum by octave band, FM-1 - FluidSynth
-//   node compare_fluid.js midi <file.mid> [--seconds=60] [--fx]     a whole MIDI file: level over time, spectrum by octave band
+//   node compare_fluid.js midi <file.mid> [--seconds=60] [--fx | --fx=reverb | --fx=chorus]     a whole MIDI file: level over time, spectrum by octave band
 // To find a cause: --interp=1 (FluidSynth linear, as the player), --polyphony=32, --rate=44100 with a 44.1 kHz bank (no resampler)
 // Common options: --bank=dist/gm_32k.fm1b  --sf2=1mgm.sf2  --fluidsynth=<exe>  --out=test_fluid/out (WAVs to listen to, A/B)
 // FluidSynth: tools/fluidsynth/ (the Windows zip from github.com/FluidSynth/fluidsynth/releases, unpacked; git ignores it).
@@ -28,13 +28,16 @@ function findFluid() {
 const sf2 = path.resolve(root, opt.sf2 || '1mgm.sf2');
 // --interp=0|1|4|7 (none, linear, the default 4-point, 7-point) and --polyphony=N (default 256) change FluidSynth, to find
 // what makes a difference.
+// fx: false (both off), true (both on), or 'reverb' / 'chorus' (only that one)
+const FXLEVEL = +(opt.fxlevel || 127);   // the player's reverb/chorus level (the firmware's default: reverb 20, chorus 30)
+const fxOn = (fx, which) => fx === true || fx === which;
 function fluid(midiPath, wavPath, fx) {
   const extra = [];
   if (opt.polyphony) extra.push('-o', 'synth.polyphony=' + opt.polyphony);
   if (opt.interp !== undefined) { const cmd = path.join(outDir, 'interp.txt'); fs.writeFileSync(cmd, `interp ${opt.interp}
 `); extra.push('-f', cmd); }
   execFileSync(findFluid(), ['-n', '-i', '-q', '-r', String(RATE), '-O', 'float', '-T', 'wav', '-g', '0.5', ...extra,
-    '-R', fx ? '1' : '0', '-C', fx ? '1' : '0', '-F', wavPath, sf2, midiPath], { stdio: ['ignore', 'ignore', 'inherit'] });
+    '-R', fxOn(fx, 'reverb') ? '1' : '0', '-C', fxOn(fx, 'chorus') ? '1' : '0', '-F', wavPath, sf2, midiPath], { stdio: ['ignore', 'ignore', 'inherit'] });
   return readWav(wavPath);
 }
 
@@ -45,10 +48,11 @@ const sources = [path.join(root, 'test_fluid/wrap.c'), ...['fm1b.c', 'sf2fx.c', 
 const inputs = [...sources, ...['fm1b.h', 'fm1b_config.h', 'sf2fx.h', 'sf2out.h', 'fm1b_dqt.inc', 'fm1b_dqt6.inc', 'resample_table.inc'].map(f => path.join(app, f))];
 const linear = !('interp4' in opt);                      // as the firmware: linear (FM1B_INTERP4 0); --interp4 the 4-point one
 const playerRate = +(opt.rate || 32000);                 // --rate=44100: the player at 44.1 kHz (no resampler), for a bank made at that rate
+const tune = opt.damp || opt.feedback;                    // --damp=Q15 --feedback=Q15: the reverb's tuning (sf2fx.c, defaults 9000 and 30800)
 function engine() {
-  const wasm = path.join(root, `test_fluid/player_${playerRate}${linear ? '_linear' : ''}.wasm`);
+  const wasm = path.join(root, `test_fluid/player_${playerRate}${linear ? '_linear' : ''}${tune ? '_d' + opt.damp + '_f' + opt.feedback : ''}.wasm`);
   if (!fs.existsSync(wasm) || inputs.some(s => fs.statSync(s).mtimeMs > fs.statSync(wasm).mtimeMs))
-    execFileSync(path.join(sdk, 'bin/clang.exe'), ['--sysroot=' + path.join(sdk, 'share/wasi-sysroot'), '-O2', '-DFM1_HOST_TEST', `-DFM1B_RATE=${playerRate}U`, `-DFM1B_INTERP4=${linear ? 0 : 1}`,
+    execFileSync(path.join(sdk, 'bin/clang.exe'), ['--sysroot=' + path.join(sdk, 'share/wasi-sysroot'), '-O2', '-DFM1_HOST_TEST', `-DFM1B_RATE=${playerRate}U`, `-DFM1B_INTERP4=${linear ? 0 : 1}`, ...(tune ? ['-DSF2FX_DAMP=' + (opt.damp || 9000), '-DSF2FX_FEEDBACK=' + (opt.feedback || 30800)] : []),
       '-mexec-model=reactor', '-Wl,--no-entry', '-Wl,--export-dynamic', '-Wall', '-Werror',
       ...['fm1_open/app', 'fm1_open/app/synth', 'fm1_open/sdk/include'].map(d => '-I' + path.join(root, d)), ...sources, '-o', wasm], { stdio: 'inherit' });
   const w = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(wasm)), { wasi_snapshot_preview1: new Proxy({}, { get: () => () => 0 }) }).exports;
@@ -61,7 +65,7 @@ function player(events, seconds, fx) {
   const w = engine(), bank = fs.readFileSync(bankPath);
   new Uint8Array(w.memory.buffer, w.cf_bank(), bank.length).set(bank);
   if (w.cf_bind(bank.length) !== 0 || w.cf_program(0) !== 0) throw new Error('bank rejected: ' + bankPath);
-  w.cf_fx(fx ? 127 : 0, fx ? 127 : 0);
+  w.cf_fx(fxOn(fx, 'reverb') ? FXLEVEL : 0, fxOn(fx, 'chorus') ? FXLEVEL : 0);
   const msb = new Uint8Array(16), lsb = new Uint8Array(16);
   const midi = d => {                                    // as transfer.c's fm1_app_midi_received
     const type = d[0] & 0xf0, ch = d[0] & 15;
@@ -268,7 +272,7 @@ function spectra() {
 
 // ---- midi: a whole file ----
 function midiFile() {
-  const file = path.resolve(pos[1] || ''), fx = !!opt.fx;
+  const file = path.resolve(pos[1] || ''), fx = opt.fx === 'reverb' || opt.fx === 'chorus' ? opt.fx : !!opt.fx;
   const all = readMidi(fs.readFileSync(file)), seconds = Math.min(+(opt.seconds || 60), all.length ? all[all.length - 1].t + 2 : 0);
   const events = all.filter(e => e.t < seconds);
   events.push({ t: seconds - 0.01, d: [0xb0, 123, 0] });
@@ -299,7 +303,7 @@ function midiFile() {
     if (m) { dist += Math.sqrt(s / m); ++nd; }
   }
   writeWav(path.join(outDir, name + '_fm1.wav'), ours.L, ours.R, Math.sqrt(sumA / sumB));
-  console.log(`${path.basename(file)}: ${seconds.toFixed(1)} s, ${events.length} events, reverb and chorus ${fx ? 'on' : 'off'}; lag ${(d / RATE * 1000).toFixed(1)} ms, gain to match ${f1(g)} dB`);
+  console.log(`${path.basename(file)}: ${seconds.toFixed(1)} s, ${events.length} events, ${fx === 'reverb' || fx === 'chorus' ? 'only ' + fx : 'reverb and chorus ' + (fx ? 'on' : 'off')}; lag ${(d / RATE * 1000).toFixed(1)} ms, gain to match ${f1(g)} dB`);
   console.log(`player: up to ${ours.peakVoices} of ${ours.voices} voices, ${ours.cut} cut for the limit (HELD ${ours.held} still sounding, TAIL ${ours.tail} releasing), the limiter held ${(ours.limited / RATE).toFixed(1)} s`);
   console.log(`level over time (100 ms): correlation ${corr.toFixed(3)}, mean |diff| ${mean(diffs.map(Math.abs)).toFixed(2)} dB, 90th percentile ${diffs.map(Math.abs).sort((x, y) => x - y)[Math.floor(diffs.length * 0.9)].toFixed(2)} dB`);
   console.log('octave band (Hz) ' + BANDS.map(f => String(f >= 1000 ? f / 1000 + 'k' : f).padStart(6)).join(''));
