@@ -81,8 +81,8 @@
       <div class="pickbar">
         <button type="button" data-pick="all">All</button><button type="button" data-pick="none">None</button>
         <button type="button" data-pick="melodic">Melodic only</button><button type="button" data-pick="drums">Drums only</button>
-        <button type="button" id="pickFill" title="Choose a MIDI file: tick the instruments and drum kits it plays">Fill from a MIDI file</button>
-        <input type="file" id="pickMidi" accept=".mid,.midi,audio/midi" hidden>
+        <button type="button" id="pickFill" title="Choose one or more MIDI files: tick the instruments and drum kits they play">Fill from MIDI files</button>
+        <input type="file" id="pickMidi" accept=".mid,.midi,audio/midi" multiple hidden>
         <input id="pickFilter" type="search" placeholder="Filter by name or number" aria-label="Filter the instruments">
       </div>
       <div id="pickList" class="picklist" role="group" aria-label="Instruments to put in the bank"></div>
@@ -1090,19 +1090,25 @@ function writeSf2(bank, name) {
       fmtBytes(bytes) + (kbit ? ' as BFP8 (the MP3 packing makes that about half at 64 kbit/s)' : '') + ', against the device\'s ' + fmtBytes(FM1_SAMPLE_BANK) +
       (bytes > FM1_SAMPLE_BANK * (kbit ? MP3_FILL : 1) ? ' <span class="warn">(too much' + (kbit ? ' before packing' : '') + ')</span>' : '') + '. Tables and loops add a little.';
   }
-  // "Fill from a MIDI file": tick what the file plays (midiUsage and pickForMidi, in the core script) and nothing else. Whether it fits the flash is
+  // "Fill from MIDI files": tick what the files play (midiUsage and pickForMidi, in the core script) and nothing else. Whether it fits the flash is
   // what the line above says; the other buttons and the ticks change the choice afterwards.
-  async function fillFromMidi(file) {
-    const info = $('pickMidiInfo');
+  async function fillFromMidi(files) {
+    const info = $('pickMidiInfo'), name = files.length === 1 ? files[0].name : files.length + ' files';
     try {
-      const usage = midiUsage(new Uint8Array(await file.arrayBuffer()));
+      // several files: what any of them plays is ticked (the notes of each program are added up)
+      const usage = { melodic: new Map(), kits: new Map() };
+      for (const file of files) {
+        let one;
+        try { one = midiUsage(new Uint8Array(await file.arrayBuffer())); } catch (e) { throw new Error(file.name + ': ' + (e.message || e)); }
+        for (const k of ['melodic', 'kits']) for (const [p, n] of one[k]) usage[k].set(p, (usage[k].get(p) || 0) + n);
+      }
       const boxes = pickBoxes(), { take, missing } = pickForMidi(sf, boxes.map(c => +c.value), usage), ticked = new Set(take);
       for (const c of boxes) c.checked = ticked.has(+c.value);
       pickSum();
       info.className = 'meta'; info.hidden = false;
-      info.textContent = file.name + ': ' + usage.melodic.size + ' instruments and ' + usage.kits.size + ' drum kit' + (usage.kits.size === 1 ? '' : 's') + ' played; ' + take.length + ' ticked.' +
+      info.textContent = name + ': ' + usage.melodic.size + ' instruments and ' + usage.kits.size + ' drum kit' + (usage.kits.size === 1 ? '' : 's') + ' played; ' + take.length + ' ticked.' +
         (missing.length ? ' The font has no ' + missing.map(m => typeof m === 'number' ? 'program ' + (m + 1) : m).join(', ') + ', which the file plays.' : '');
-    } catch (e) { info.className = 'meta warn'; info.hidden = false; info.textContent = file.name + ': ' + (e.message || e); }
+    } catch (e) { info.className = 'meta warn'; info.hidden = false; info.textContent = (e.message || e); }
   }
   $('preset').addEventListener('change', () => { $('pick').hidden = $('preset').value !== 'pick'; if (!$('pick').hidden) pickSum(); });
   $('pickList').addEventListener('change', pickSum);
@@ -1114,7 +1120,7 @@ function writeSf2(bank, name) {
     for (const c of pickBoxes()) if (!c.parentElement.hidden) c.checked = how === 'all' || how === c.dataset.group;
     pickSum();
   });
-  $('pickMidi').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) fillFromMidi(f); });
+  $('pickMidi').addEventListener('change', e => { const f = [...e.target.files]; e.target.value = ''; if (f.length) fillFromMidi(f); });
   $('pickFilter').addEventListener('input', () => {
     const q = $('pickFilter').value.trim().toLowerCase();
     for (const l of $('pickList').querySelectorAll('label')) l.hidden = !!q && !l.dataset.find.includes(q);

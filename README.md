@@ -72,8 +72,8 @@ The converter is hosted at <https://mwedmark.github.io/fm1-sf2/converter.html> (
 1. **Drop an `.sf2` file** on the page. It shows its size, presets and samples.
 2. **Preset**: *All presets with key mapping* makes a full General MIDI bank (program numbers, drum kits, every zone). A single preset
    makes a small bank of just that instrument. *Chosen instruments* shows a tick box for every melodic preset and drum kit (with
-   *All*, *None*, *Melodic only*, *Drums only*, *Fill from a MIDI file* and a filter by name or number) and how many bytes the ticked ones' sounds take,
-   to see what fits before converting. *Fill from a MIDI file* asks for a `.mid` file and ticks just the instruments and drum kits it plays (a drum kit the font lacks is
+   *All*, *None*, *Melodic only*, *Drums only*, *Fill from MIDI files* and a filter by name or number) and how many bytes the ticked ones' sounds take,
+   to see what fits before converting. *Fill from MIDI files* asks for one or more `.mid` files (select several to build one bank for a whole set) and ticks just the instruments and drum kits they play (a drum kit the font lacks is
    played by the nearest kit below it, as the firmware does, and the font's lowest kit always comes along). The line above then shows the size, so a song is a small bank:
    Africa is 250 KB and Dancing Queen 340 KB in BFP8 from `1mgm.sf2`. Each ticked instrument keeps its program number; the font's other programs point at one
    empty preset, so a program change to one of them makes the channel silent (a program the bank has no preset for leaves the
