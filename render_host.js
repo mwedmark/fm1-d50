@@ -1,6 +1,6 @@
 // Renders a MIDI file through the SF2 player's own output stage on the host (WebAssembly: fm1b + sf2fx + sf2out, as the firmware has them), with no CPU
 // limit: what the FM-1 should sound like when it keeps up. The messages are the ones dualcore.html plays (midi_events.js), the effect levels the firmware's
-// defaults (reverb 20, chorus 30). Stereo 32-bit float WAV at 44.1 kHz, not scaled.
+// defaults (reverb 14, chorus 30). Stereo 32-bit float WAV at 44.1 kHz, not scaled.
 //   node render_host.js <song.mid> <out.wav> [--seconds=75] [--bank=test_fluid/cmp/mp3_64_44k_fill_unpacked.fm1b] [--rate=44100] [--interp4=1] [--tail=3]
 const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process'), { parseMidi } = require('./midi_events');
 const root = __dirname, opt = {}, pos = [];
