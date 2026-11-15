@@ -29,7 +29,7 @@ const sf2 = path.resolve(root, opt.sf2 || '1mgm.sf2');
 // --interp=0|1|4|7 (none, linear, the default 4-point, 7-point) and --polyphony=N (default 256) change FluidSynth, to find
 // what makes a difference.
 // fx: false (both off), true (both on), or 'reverb' / 'chorus' (only that one)
-const FXLEVEL = +(opt.fxlevel || 127);   // the player's reverb/chorus level (the firmware's default: reverb 20, chorus 30)
+const FXLEVEL = +(opt.fxlevel || 127);   // the player's reverb/chorus level (the firmware's default: reverb 14, chorus 30)
 const fxOn = (fx, which) => fx === true || fx === which;
 function fluid(midiPath, wavPath, fx) {
   const extra = [];
@@ -48,11 +48,11 @@ const sources = [path.join(root, 'test_fluid/wrap.c'), ...['fm1b.c', 'sf2fx.c', 
 const inputs = [...sources, ...['fm1b.h', 'fm1b_config.h', 'sf2fx.h', 'sf2out.h', 'fm1b_dqt.inc', 'fm1b_dqt6.inc', 'resample_table.inc'].map(f => path.join(app, f))];
 const linear = !('interp4' in opt);                      // as the firmware: linear (FM1B_INTERP4 0); --interp4 the 4-point one
 const playerRate = +(opt.rate || 32000);                 // --rate=44100: the player at 44.1 kHz (no resampler), for a bank made at that rate
-const tune = opt.damp || opt.feedback;                    // --damp=Q15 --feedback=Q15: the reverb's tuning (sf2fx.c, defaults 9000 and 30800)
+const tune = opt.damp || opt.feedback;                    // --damp=Q15 --feedback=Q15: the reverb's tuning (sf2fx.c, defaults 9000 and 29400)
 function engine() {
   const wasm = path.join(root, `test_fluid/player_${playerRate}${linear ? '_linear' : ''}${tune ? '_d' + opt.damp + '_f' + opt.feedback : ''}.wasm`);
   if (!fs.existsSync(wasm) || inputs.some(s => fs.statSync(s).mtimeMs > fs.statSync(wasm).mtimeMs))
-    execFileSync(path.join(sdk, 'bin/clang.exe'), ['--sysroot=' + path.join(sdk, 'share/wasi-sysroot'), '-O2', '-DFM1_HOST_TEST', `-DFM1B_RATE=${playerRate}U`, `-DFM1B_INTERP4=${linear ? 0 : 1}`, ...(tune ? ['-DSF2FX_DAMP=' + (opt.damp || 9000), '-DSF2FX_FEEDBACK=' + (opt.feedback || 30800)] : []),
+    execFileSync(path.join(sdk, 'bin/clang.exe'), ['--sysroot=' + path.join(sdk, 'share/wasi-sysroot'), '-O2', '-DFM1_HOST_TEST', `-DFM1B_RATE=${playerRate}U`, `-DFM1B_INTERP4=${linear ? 0 : 1}`, ...(tune ? ['-DSF2FX_DAMP=' + (opt.damp || 9000), '-DSF2FX_FEEDBACK=' + (opt.feedback || 29400)] : []),
       '-mexec-model=reactor', '-Wl,--no-entry', '-Wl,--export-dynamic', '-Wall', '-Werror',
       ...['fm1_open/app', 'fm1_open/app/synth', 'fm1_open/sdk/include'].map(d => '-I' + path.join(root, d)), ...sources, '-o', wasm], { stdio: 'inherit' });
   const w = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync(wasm)), { wasi_snapshot_preview1: new Proxy({}, { get: () => () => 0 }) }).exports;
