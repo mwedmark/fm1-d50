@@ -92,10 +92,10 @@
     <div class="row">
       <label class="f"><span>Encoding</span>
         <select id="codec">
-          <option value="sea">SEA5 (the FM-1's own format, 5.7 bit/sample)</option>
-          <option value="sea6">SEA6 (6.7 bit/sample, about 5 dB less noise)</option>
+          <option value="sea">SEA5 (5.7 bit/sample; simulator and download only: the FM-1 firmware does not play it)</option>
+          <option value="sea6">SEA6 (6.7 bit/sample; simulator and download only)</option>
           <option value="bfp8" selected>BFP8 (8 bit with a scale per 32 samples, 8.25 bit/sample, easy to decode)</option>
-          <option value="pcm">Raw PCM</option>
+          <option value="pcm">Raw PCM (simulator and download only)</option>
           <option value="mp3_64">MP3 64 kbit/s, packed for the live-cache firmware (BFP8 at 44,100 Hz underneath)</option>
           <option value="mp3_128">MP3 128 kbit/s, packed for the live-cache firmware</option>
           <option value="mp3_256">MP3 256 kbit/s, packed for the live-cache firmware</option>
@@ -1379,6 +1379,7 @@ function writeSf2(bank, name) {
     if (send.busy || !bank) return;
     let portsOpen = null;
     const bin = bankBytes();
+    if (!bank.packed && !bank.bfp) { sendMsg('The FM-1 firmware plays only BFP8 and MP3 banks. Convert again with BFP8 or MP3; nothing was sent or erased.', true); return; }
     if (bin.length > FM1_SAMPLE_BANK) { sendMsg('The bank (' + fmtBytes(bin.length) + ') is larger than the flash (' + fmtBytes(FM1_SAMPLE_BANK) + ').', true); return; }
     if (!navigator.requestMIDIAccess) { sendMsg('This browser has no Web MIDI. Use Chrome or Edge.', true); return; }
     try {
