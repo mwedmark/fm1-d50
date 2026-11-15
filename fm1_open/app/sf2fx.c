@@ -9,12 +9,19 @@
 /* Lengths at 44.1 kHz, scaled to the player's rate so the times stay. The damping filter's coefficient changes with the rate:
  * 1 - (1 - 0.2747)^(44100 / 32000) = 0.3577 keeps its cutoff at 32 kHz. */
 #define AT_RATE(n) ((int)(((n) * FM1B_RATE + 22050U) / 44100U))
+/* Tuning for experiments (test_fluid compare: --damp=, --feedback=): the reverb's feedback and the damping filter's coefficient, Q15 */
+#ifndef SF2FX_FEEDBACK
+#define SF2FX_FEEDBACK 30800   /* 0.94: a tail about 2.8 s like FluidSynth's (28800 gave 1.4 s), 2026-11-15 */
+#endif
+#ifndef SF2FX_DAMP
+#define SF2FX_DAMP (FM1B_RATE == 44100U ? 9000 : FM1B_RATE == 32000U ? 11722 : 9000)
+#endif
 enum {
     COMB0 = AT_RATE(1116U), COMB1 = AT_RATE(1188U), COMB2 = AT_RATE(1277U), COMB3 = AT_RATE(1356U),   /* Freeverb's comb lengths */
     ALLPASS0 = AT_RATE(556U), ALLPASS1 = AT_RATE(441U), ALLPASS2 = AT_RATE(341U), ALLPASS3 = AT_RATE(225U), /* left 0,1; right 2,3 */
     CHORUS_LENGTH = 2048, CHORUS_BASE = AT_RATE(700U), CHORUS_DEPTH = AT_RATE(300U),               /* 16 ms +- 6.8 ms */
     CHORUS_RATE = (int)(77900ULL * 44100U / FM1B_RATE),            /* 0.8 Hz as a 32-bit phase step */
-    REVERB_FEEDBACK = 28800, REVERB_DAMP = FM1B_RATE == 44100U ? 9000 : FM1B_RATE == 32000U ? 11722 : 9000,   /* Q15: 0.88; 0.27 at 44.1 kHz */
+    REVERB_FEEDBACK = SF2FX_FEEDBACK, REVERB_DAMP = SF2FX_DAMP,   /* Q15: 0.88; 0.27 at 44.1 kHz */
     QUIET_LEVEL = 48, QUIET_BLOCKS = 1100                           /* about 3.2 s of silence at 128 frames a block */
 };
 static struct {
@@ -25,9 +32,9 @@ static struct {
     int32_t damp[4];
 } fx;
 static uint32_t chorus_phase, quiet_blocks;
-/* Master levels, gain = level * 258 in Q15. They default to 30 (reverb) and 30 (chorus), not full; a channel gets master x send
+/* Master levels, gain = level * 258 in Q15. They default to 20 (reverb, 30 before 2026-11-15) and 30 (chorus), not full; a channel gets master x send
  * (the channels' sends are fm1b's, 30 and 20 by default, MIDI CC 91 and CC 93). */
-enum { MASTER_REVERB = 30, MASTER_CHORUS = 30 };
+enum { MASTER_REVERB = 20, MASTER_CHORUS = 30 };
 static volatile int32_t reverb_gain = MASTER_REVERB * 258, chorus_gain = MASTER_CHORUS * 258;
 static volatile unsigned reverb_level = MASTER_REVERB, chorus_level = MASTER_CHORUS;
 static volatile int32_t pan_left = 1024, pan_right = 1024;     /* gains of the dry signal, Q10 */
