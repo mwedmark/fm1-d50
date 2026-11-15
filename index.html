@@ -101,8 +101,15 @@
           <option value="mp3_256">MP3 256 kbit/s, packed for the live-cache firmware</option>
         </select></label>
       <label class="f"><span>Sample rate</span>
-        <select id="rate">
+        <select id="rateMode" title="Auto: the highest rate at which the bank still fits the FM-1's flash. Manual: the rate typed in the box.">
+          <option value="auto" selected>Auto (as high as fits)</option>
+          <option value="manual">Manual</option>
+        </select>
+        <input id="rateHz" type="number" min="4000" max="44118" step="1" value="32000" style="width:6em" aria-label="Sample rate in Hz (Manual)">
+        <select id="rate" aria-label="Common sample rates (fills the box)">
           <option value="32000" selected>32,000 Hz (SEA)</option>
+          <option value="16000">16,000 Hz</option>
+          <option value="24000">24,000 Hz</option>
           <option value="11029">11,029 Hz (FM-1 ÷ 4)</option>
           <option value="14706">14,706 Hz (FM-1 ÷ 3)</option>
           <option value="22059">22,059 Hz (FM-1 ÷ 2)</option>
@@ -1079,16 +1086,30 @@ function writeSf2(bank, name) {
   // About how many bytes the ticked instruments' sounds take in the codec chosen (the sounds they share counted once; loops,
   // which are unrolled to a whole number of frames, and the tables are left out), to see what fits before converting.
   function soundBytes(list) {
-    const kbit = mp3Kbit(), codec = $('codec').value;
-    return estimateSoundBytes(sf, list, kbit ? 44100 : +$('rate').value,
-      kbit ? 33 / 32 : codec === 'sea' ? 228 / 320 : codec === 'sea6' ? 268 / 320 : codec === 'bfp8' ? 33 / 32 : +$('bits').value / 8);
+    return estimateSoundBytes(sf, list, mp3Kbit() ? 44100 : rateFor(list), bytesPerSample());
   }
+  // Bytes one sample takes in the codec chosen (the MP3 packing is judged by its BFP8 bank underneath).
+  function bytesPerSample() {
+    const codec = $('codec').value;
+    return mp3Kbit() || codec === 'bfp8' ? 33 / 32 : codec === 'sea' ? 228 / 320 : codec === 'sea6' ? 268 / 320 : +$('bits').value / 8;
+  }
+  // The rate the sounds of `list` are estimated at: the box's in Manual; in Auto the highest at which they about fill the flash (the conversion then
+  // measures the real bank and lowers it until the file fits).
+  const RATE_MIN = 4000, RATE_MAX = 44118, AUTO_FILL = 0.97;
+  const manualRate = () => Math.round(+$('rateHz').value) || 0;
+  const isAuto = () => $('rateMode').value === 'auto' && !mp3Kbit();
+  function autoGuess(list) {
+    const perHz = estimateSoundBytes(sf, list, 1, bytesPerSample());
+    return perHz > 0 ? Math.max(RATE_MIN, Math.min(RATE_MAX, Math.floor(FM1_SAMPLE_BANK * AUTO_FILL / perHz))) : RATE_MAX;
+  }
+  const rateFor = list => isAuto() ? autoGuess(list) : manualRate();
   function pickSum() {
     const list = chosen(), kbit = mp3Kbit(), bytes = soundBytes(list);
     const melodic = list.filter(i => slotOf(sf.presets[i]) < 128).length;
     $('pickSum').innerHTML = list.length + ' of ' + pickBoxes().length + ' ticked (' + melodic + ' melodic, ' + (list.length - melodic) + ' drum kits): sounds about ' +
       fmtBytes(bytes) + (kbit ? ' as BFP8 (the MP3 packing makes that about half at 64 kbit/s)' : '') + ', against the device\'s ' + fmtBytes(FM1_SAMPLE_BANK) +
-      (bytes > FM1_SAMPLE_BANK * (kbit ? MP3_FILL : 1) ? ' <span class="warn">(too much' + (kbit ? ' before packing' : '') + ')</span>' : '') + '. Tables and loops add a little.';
+      (bytes > FM1_SAMPLE_BANK * (kbit ? MP3_FILL : 1) ? ' <span class="warn">(too much' + (kbit ? ' before packing' : '') + ')</span>' : '') + '. Tables and loops add a little.' +
+      (isAuto() ? ' Auto: about ' + rateFor(list) + ' Hz.' : '');
   }
   // "Fill from MIDI files": tick what the files play (midiUsage and pickForMidi, in the core script) and nothing else. Whether it fits the flash is
   // what the line above says; the other buttons and the ticks change the choice afterwards.
@@ -1112,7 +1133,7 @@ function writeSf2(bank, name) {
   }
   $('preset').addEventListener('change', () => { $('pick').hidden = $('preset').value !== 'pick'; if (!$('pick').hidden) pickSum(); });
   $('pickList').addEventListener('change', pickSum);
-  for (const id of ['codec', 'rate', 'bits']) $(id).addEventListener('change', () => { if (sf && !$('pick').hidden) pickSum(); });
+  for (const id of ['codec', 'rate', 'rateMode', 'rateHz', 'bits']) $(id).addEventListener('change', () => { if (sf && !$('pick').hidden) pickSum(); });
   $('opts').querySelector('.pickbar').addEventListener('click', e => {
     if (e.target.id === 'pickFill') { $('pickMidi').click(); return; }
     const how = e.target.dataset && e.target.dataset.pick; if (!how) return;
@@ -1131,8 +1152,8 @@ function writeSf2(bank, name) {
   // The file of the bank: the packed one for MP3, else as written.
   const bankBytes = () => bank.packed ? bank.packed.bytes : writeFm1(bank, bank.info);
   const bankFileName = (kbit = bank.packed && bank.packed.kbit) => baseName + (kbit ? '_fm1_mp3_' + kbit + '.fm1b' : '_fm1.bin');
-  const bankOptions = () => mp3Kbit() ? { rate: 44100, bits: 8, sea: false, seaBits: 5, bfp: true } :
-    { rate: +$('rate').value, bits: +$('bits').value, sea: $('codec').value.startsWith('sea'), seaBits: $('codec').value === 'sea6' ? 6 : 5, bfp: $('codec').value === 'bfp8' };
+  const bankOptions = (rate = manualRate()) => mp3Kbit() ? { rate: 44100, bits: 8, sea: false, seaBits: 5, bfp: true } :
+    { rate, bits: +$('bits').value, sea: $('codec').value.startsWith('sea'), seaBits: $('codec').value === 'sea6' ? 6 : 5, bfp: $('codec').value === 'bfp8' };
   let converting = false;
   async function convert() {
     if (converting) return;
@@ -1142,7 +1163,23 @@ function writeSf2(bank, name) {
     const picking = $('preset').value === 'pick', list = picking ? chosen() : null;
     if (picking && !list.length) { $('result').hidden = true; showErr('Tick at least one instrument.'); return; }
     try {
-      bank = buildBank(sf, picking ? list : +$('preset').value, bankOptions());
+      const sel = picking ? list : +$('preset').value;
+      if (isAuto()) {
+        // Auto: start at the estimate and build the real bank; while the file is too large, lower the rate by the share it is over
+        let rate = autoGuess(picking ? list : sel < 0 ? sf.presets.map((p, i) => i) : [sel]);
+        for (let n = 0; ; n++) {
+          bank = buildBank(sf, sel, bankOptions(rate));
+          const size = writeFm1(bank, bankInfo(bankFileName(0))).length;
+          if (size <= FM1_SAMPLE_BANK || n >= 8) break;
+          const next = Math.min(rate - 1, Math.floor(rate * FM1_SAMPLE_BANK / size * 0.995));
+          if (next < RATE_MIN) { if (rate === RATE_MIN) break; rate = RATE_MIN; } else rate = next;
+        }
+        $('rateHz').value = bank.rate;
+      } else {
+        const rate = manualRate();
+        if (!mp3Kbit() && !(rate >= RATE_MIN && rate <= RATE_MAX)) { showErr('The sample rate must be between ' + RATE_MIN + ' and ' + RATE_MAX + ' Hz.'); return; }
+        bank = buildBank(sf, sel, bankOptions(rate));
+      }
     } catch (e) { showErr('The conversion failed: ' + e.message); return; }
     if (!bank.zones.length) { $('result').hidden = true; showErr('The preset has no playable sounds.'); return; }
     if (picking) {                                           // the font's instruments not ticked: silent at their program numbers
@@ -1302,10 +1339,13 @@ function writeSf2(bank, name) {
   $('go').addEventListener('click', convert);
   const syncCodec = () => {                                  // SEA is always coded from 16 bit; MP3 is packed from BFP8 at 44.1 kHz
     $('bits').disabled = $('codec').value !== 'pcm';
-    $('rate').disabled = !!mp3Kbit();     // an MP3 bank is made at 44,100 Hz whatever the menu says: show the nearest
-    if (mp3Kbit()) $('rate').value = '44118';
+    $('rateMode').disabled = $('rate').disabled = !!mp3Kbit();     // an MP3 bank is made at 44,100 Hz whatever the menu says: show the nearest
+    $('rateHz').disabled = !!mp3Kbit() || isAuto();
+    if (mp3Kbit()) { $('rate').value = '44118'; $('rateHz').value = '44118'; }
   };
   $('codec').addEventListener('change', syncCodec);
+  $('rateMode').addEventListener('change', syncCodec);
+  $('rate').addEventListener('change', () => { $('rateHz').value = $('rate').value; $('rateMode').value = 'manual'; syncCodec(); });
   syncCodec();
   $('dlBin').addEventListener('click', () => bank && download(bankBytes(), bankFileName(), 'application/octet-stream'));
   // ---- Send the bank to the FM-1 (the SF2 player firmware receives it as SysEx and writes it to flash) ----
