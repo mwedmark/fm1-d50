@@ -72,10 +72,10 @@ The converter is hosted at <https://mwedmark.github.io/fm1-sf2/converter.html> (
 1. **Drop an `.sf2` file** on the page. It shows its size, presets and samples.
 2. **Preset**: *All presets with key mapping* makes a full General MIDI bank (program numbers, drum kits, every zone). A single preset
    makes a small bank of just that instrument. *Chosen instruments* shows a tick box for every melodic preset and drum kit (with
-   *All*, *None*, *Melodic only*, *Drums only*, *Fill the flash* and a filter by name or number) and how many bytes the ticked ones' sounds take,
-   to see what fits before converting. *Fill the flash* ticks the most used instruments (the first drum kit, then pianos, guitars, basses, strings and so on)
-   until the bank just fits the FM-1's flash in the chosen encoding; it builds a real bank to check, so it takes a few seconds. For an MP3 bank the fit is an estimate, so look at
-   the size after *Convert*. Each ticked instrument keeps its program number; the font's other programs point at one
+   *All*, *None*, *Melodic only*, *Drums only*, *Fill from a MIDI file* and a filter by name or number) and how many bytes the ticked ones' sounds take,
+   to see what fits before converting. *Fill from a MIDI file* asks for a `.mid` file and ticks just the instruments and drum kits it plays (a drum kit the font lacks is
+   played by the nearest kit below it, as the firmware does, and the font's lowest kit always comes along). The line above then shows the size, so a song is a small bank:
+   Africa is 250 KB and Dancing Queen 340 KB in BFP8 from `1mgm.sf2`. Each ticked instrument keeps its program number; the font's other programs point at one
    empty preset, so a program change to one of them makes the channel silent (a program the bank has no preset for leaves the
    channel playing what it played). The FM-1's panel steps over the empty programs and starts on the first one that has sounds.
 3. **Encoding**: the codec of the samples, see [section 4](#4-codecs). BFP8 is the default and the one to use. **MP3 64, 128 or 256 kbit/s**

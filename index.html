@@ -81,11 +81,13 @@
       <div class="pickbar">
         <button type="button" data-pick="all">All</button><button type="button" data-pick="none">None</button>
         <button type="button" data-pick="melodic">Melodic only</button><button type="button" data-pick="drums">Drums only</button>
-        <button type="button" id="pickFill" title="Tick the most useful instruments that fit in the FM-1's sample flash in the chosen encoding">Fill the flash</button>
+        <button type="button" id="pickFill" title="Choose a MIDI file: tick the instruments and drum kits it plays">Fill from a MIDI file</button>
+        <input type="file" id="pickMidi" accept=".mid,.midi,audio/midi" hidden>
         <input id="pickFilter" type="search" placeholder="Filter by name or number" aria-label="Filter the instruments">
       </div>
       <div id="pickList" class="picklist" role="group" aria-label="Instruments to put in the bank"></div>
       <p class="meta" id="pickSum"></p>
+      <p class="meta" id="pickMidiInfo" hidden></p>
     </div>
     <div class="row">
       <label class="f"><span>Encoding</span>
@@ -312,28 +314,68 @@ function estimateSoundBytes(sf, list, rate, perSample) {
   }
   return bytes;
 }
-// The General MIDI programs most songs use, most needed first: pianos, guitars, basses, strings, brass, organs, synths.
-const FILL_ORDER = [0, 4, 24, 25, 26, 27, 29, 30, 32, 33, 34, 35, 38, 48, 49, 40, 41, 42, 56, 57, 60, 61, 64, 65, 66, 68, 71, 73, 52, 53, 19, 16, 17, 18,
-  11, 12, 13, 14, 81, 80, 88, 89, 90, 92, 95, 46, 45, 47, 104, 105];
-// Which of the presets `candidates` (indices into sf.presets; banks 0 and 128 only) to put in a bank of `budget` sound bytes: the first drum kit,
-// then the common programs, then the rest by program number and the other kits last. An instrument that does not fit is skipped and the
-// next one tried, so small ones still fill the gap. bytesOf(list) estimates the bytes of a list of presets.
-function fillFlashPick(sf, candidates, bytesOf, budget) {
-  const slot = i => { const p = sf.presets[i]; return p.bank === 0 ? p.preset : p.bank === 128 ? 128 + p.preset : -1; };
-  const usable = candidates.filter(i => slot(i) >= 0);
-  const firstKit = Math.min(...usable.filter(i => slot(i) >= 128).map(slot));
-  const rank = i => { const s = slot(i); return s >= 128 ? (s === firstKit ? -1 : 1000 + s) : FILL_ORDER.includes(s) ? FILL_ORDER.indexOf(s) : FILL_ORDER.length + s; };
-  const take = [];
-  for (const i of usable.sort((a, b) => rank(a) - rank(b))) if (bytesOf([...take, i]) <= budget) take.push(i);
-  return take;
+// Which General MIDI instruments and drum kits a Standard MIDI File plays: { melodic: Map program -> notes, kits: Map program -> notes }. The events of
+// all tracks are put in time order first, so a program change in one track is in force for the notes of another. Channel 10 plays a kit, chosen by its
+// program change (bank select does not matter there, as in the firmware); on other channels the bank select 120 (or 1 with 0) before a program change
+// makes it a kit, as transfer.c reads it. A channel that never changed program plays program 0.
+function midiUsage(bytes) {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), dv = new DataView(u8.buffer, u8.byteOffset, u8.byteLength);
+  const tag = o => String.fromCharCode(u8[o], u8[o + 1], u8[o + 2], u8[o + 3]);
+  if (u8.length < 14 || tag(0) !== 'MThd') throw new Error('Not a MIDI file.');
+  const events = [];
+  let pos = 8 + dv.getUint32(4), order = 0;
+  while (pos + 8 <= u8.length) {
+    const end = Math.min(u8.length, pos + 8 + dv.getUint32(pos + 4)), isTrack = tag(pos) === 'MTrk';
+    let at = pos + 8, tick = 0, status = 0;                                      // status: the running status of channel messages
+    const vlq = () => { let v = 0, c; do { c = u8[at++]; v = v * 128 + (c & 127); } while (c & 128 && at < end); return v; };
+    while (isTrack && at < end) {
+      tick += vlq();
+      const b = u8[at];
+      if (b === 0xff) { at += 2; const len = vlq(); at += len; }                                  // meta: type, length, data (kept lenient: running status goes on after it)
+      else if (b === 0xf0 || b === 0xf7) { ++at; const len = vlq(); at += len; }                  // sysex
+      else if (b >= 0xf0) { ++at; }
+      else {
+        if (b >= 0x80) { status = b; ++at; } else if (!status) break;
+        const two = (status & 0xe0) !== 0xc0;                                    // C0 and D0 have one data byte
+        events.push({ tick, order: order++, status, d1: u8[at], d2: two ? u8[at + 1] : 0 });
+        at += two ? 2 : 1;
+      }
+    }
+    pos = end;
+  }
+  events.sort((a, b) => a.tick - b.tick || a.order - b.order);
+  const state = Array.from({ length: 16 }, () => ({ program: 0, msb: 0, lsb: 0, kit: false }));
+  const melodic = new Map(), kits = new Map();
+  for (const e of events) {
+    const ch = e.status & 15, st = state[ch], type = e.status & 0xf0;
+    if (type === 0xb0) { if (e.d1 === 0) st.msb = e.d2; else if (e.d1 === 32) st.lsb = e.d2; }
+    else if (type === 0xc0) { st.program = e.d1; st.kit = st.msb === 120 || (st.msb === 1 && st.lsb === 0); }
+    else if (type === 0x90 && e.d2 > 0) {
+      const into = ch === 9 || st.kit ? kits : melodic;
+      into.set(st.program, (into.get(st.program) || 0) + 1);
+    }
+  }
+  return { melodic, kits };
 }
-// The estimate leaves out the unrolled loops and the tables (15 % of a bank with many short loops), so a pick is checked against a real bank:
-// the instruments added last are dropped until the bank `buildBytes(list)` makes fits `limit` (found by bisection). Plain banks only (an MP3 bank is packed after).
-function trimToFit(take, buildBytes, limit) {
-  let lo = 1, hi = take.length;                       // the largest number of instruments, in priority order, whose bank fits (a bisection: a bank is slow to build)
-  if (hi < 2 || buildBytes(take) <= limit) return take.slice();
-  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (buildBytes(take.slice(0, mid)) <= limit) lo = mid; else hi = mid - 1; }
-  return take.slice(0, lo);
+// The presets of `candidates` (indices into sf.presets) a MIDI file needs: each melodic program it plays, and for each drum kit it asks for the kit at that program or
+// the nearest one below it (else the font's lowest kit), as the firmware picks a kit. The font's lowest kit is always in when the file has drums: the firmware plays the
+// bank's first kit until a program change. { take, missing }: missing lists the programs the font has no instrument for ("kit 24" for a kit).
+function pickForMidi(sf, candidates, usage) {
+  const slot = i => { const p = sf.presets[i]; return p.bank === 0 ? p.preset : p.bank === 128 ? 128 + p.preset : -1; };
+  const bySlot = new Map(candidates.filter(i => slot(i) >= 0).map(i => [slot(i), i]));
+  const take = new Set(), missing = [];
+  for (const program of [...usage.melodic.keys()].sort((a, b) => a - b)) {
+    if (bySlot.has(program)) take.add(bySlot.get(program)); else missing.push(program);
+  }
+  const kitSlots = [...bySlot.keys()].filter(s => s >= 128).sort((a, b) => a - b);
+  if (usage.kits.size && kitSlots.length) {
+    take.add(bySlot.get(kitSlots[0]));
+    for (const program of [...usage.kits.keys()].sort((a, b) => a - b)) {
+      const below = kitSlots.filter(s => s - 128 <= program).pop();
+      take.add(bySlot.get(below === undefined ? kitSlots[0] : below));
+    }
+  } else if (usage.kits.size) missing.push('kits');
+  return { take: [...take], missing };
 }
 
 // ---- Resampling -----------------------------------------------------------
@@ -1048,26 +1090,31 @@ function writeSf2(bank, name) {
       fmtBytes(bytes) + (kbit ? ' as BFP8 (the MP3 packing makes that about half at 64 kbit/s)' : '') + ', against the device\'s ' + fmtBytes(FM1_SAMPLE_BANK) +
       (bytes > FM1_SAMPLE_BANK * (kbit ? MP3_FILL : 1) ? ' <span class="warn">(too much' + (kbit ? ' before packing' : '') + ')</span>' : '') + '. Tables and loops add a little.';
   }
-  // "Fill the flash" (fillFlashPick, in the core script): the MP3 packing roughly halves the sounds, so an MP3 bank has room for MP3_FILL times as
-  // much BFP8. The estimate leaves 4 % for the tables and the loops; the size the conversion makes is the real answer (shown after Convert).
-  function fillFlash() {
-    const boxes = pickBoxes(), kbit = mp3Kbit();
-    let take = fillFlashPick(sf, boxes.map(c => +c.value), soundBytes, FM1_SAMPLE_BANK * (kbit ? MP3_FILL : 1) * 0.96);
-    if (!kbit) take = trimToFit(take, list => writeFm1(buildBank(sf, list, bankOptions()), bankInfo('fill')).length, FM1_SAMPLE_BANK);
-    const ticked = new Set(take);
-    for (const c of boxes) c.checked = ticked.has(+c.value);
-    pickSum();
+  // "Fill from a MIDI file": tick what the file plays (midiUsage and pickForMidi, in the core script) and nothing else. Whether it fits the flash is
+  // what the line above says; the other buttons and the ticks change the choice afterwards.
+  async function fillFromMidi(file) {
+    const info = $('pickMidiInfo');
+    try {
+      const usage = midiUsage(new Uint8Array(await file.arrayBuffer()));
+      const boxes = pickBoxes(), { take, missing } = pickForMidi(sf, boxes.map(c => +c.value), usage), ticked = new Set(take);
+      for (const c of boxes) c.checked = ticked.has(+c.value);
+      pickSum();
+      info.className = 'meta'; info.hidden = false;
+      info.textContent = file.name + ': ' + usage.melodic.size + ' instruments and ' + usage.kits.size + ' drum kit' + (usage.kits.size === 1 ? '' : 's') + ' played; ' + take.length + ' ticked.' +
+        (missing.length ? ' The font has no ' + missing.map(m => typeof m === 'number' ? 'program ' + (m + 1) : m).join(', ') + ', which the file plays.' : '');
+    } catch (e) { info.className = 'meta warn'; info.hidden = false; info.textContent = file.name + ': ' + (e.message || e); }
   }
   $('preset').addEventListener('change', () => { $('pick').hidden = $('preset').value !== 'pick'; if (!$('pick').hidden) pickSum(); });
   $('pickList').addEventListener('change', pickSum);
   for (const id of ['codec', 'rate', 'bits']) $(id).addEventListener('change', () => { if (sf && !$('pick').hidden) pickSum(); });
   $('opts').querySelector('.pickbar').addEventListener('click', e => {
-    if (e.target.id === 'pickFill') { fillFlash(); return; }
+    if (e.target.id === 'pickFill') { $('pickMidi').click(); return; }
     const how = e.target.dataset && e.target.dataset.pick; if (!how) return;
     // the buttons act on the instruments the filter shows
     for (const c of pickBoxes()) if (!c.parentElement.hidden) c.checked = how === 'all' || how === c.dataset.group;
     pickSum();
   });
+  $('pickMidi').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) fillFromMidi(f); });
   $('pickFilter').addEventListener('input', () => {
     const q = $('pickFilter').value.trim().toLowerCase();
     for (const l of $('pickList').querySelectorAll('label')) l.hidden = !!q && !l.dataset.find.includes(q);
