@@ -81,6 +81,7 @@
       <div class="pickbar">
         <button type="button" data-pick="all">All</button><button type="button" data-pick="none">None</button>
         <button type="button" data-pick="melodic">Melodic only</button><button type="button" data-pick="drums">Drums only</button>
+        <button type="button" id="pickFill" title="Tick the most useful instruments that fit in the FM-1's sample flash in the chosen encoding">Fill the flash</button>
         <input id="pickFilter" type="search" placeholder="Filter by name or number" aria-label="Filter the instruments">
       </div>
       <div id="pickList" class="picklist" role="group" aria-label="Instruments to put in the bank"></div>
@@ -297,6 +298,42 @@ function allSampleZones(sf) {
     zones.push({ lo: 0, hi: 127, sample: i, root: sh.pitch <= 127 ? sh.pitch : 60, loop: looped.has(i), loopOffStart: 0, loopOffEnd: 0 });
   }
   return zones;
+}
+
+// ---- Choosing what fits ----------------------------------------------------
+
+const MP3_FILL = 1.9;     // an MP3 bank holds about this many times its flash in BFP8 sounds
+// About how many bytes the sounds of the presets `list` take at `rate` and `perSample` bytes a sample (shared sounds counted once; loops and tables left out).
+function estimateSoundBytes(sf, list, rate, perSample) {
+  const seen = new Set(); let bytes = 0;
+  for (const i of list) for (const z of presetZones(sf, i)) {
+    if (seen.has(z.sample)) continue; seen.add(z.sample);
+    const sh = sf.shdr[z.sample]; bytes += Math.max(0, sh.end - sh.start) * rate / (sh.rate > 0 ? sh.rate : 44100) * perSample;
+  }
+  return bytes;
+}
+// The General MIDI programs most songs use, most needed first: pianos, guitars, basses, strings, brass, organs, synths.
+const FILL_ORDER = [0, 4, 24, 25, 26, 27, 29, 30, 32, 33, 34, 35, 38, 48, 49, 40, 41, 42, 56, 57, 60, 61, 64, 65, 66, 68, 71, 73, 52, 53, 19, 16, 17, 18,
+  11, 12, 13, 14, 81, 80, 88, 89, 90, 92, 95, 46, 45, 47, 104, 105];
+// Which of the presets `candidates` (indices into sf.presets; banks 0 and 128 only) to put in a bank of `budget` sound bytes: the first drum kit,
+// then the common programs, then the rest by program number and the other kits last. An instrument that does not fit is skipped and the
+// next one tried, so small ones still fill the gap. bytesOf(list) estimates the bytes of a list of presets.
+function fillFlashPick(sf, candidates, bytesOf, budget) {
+  const slot = i => { const p = sf.presets[i]; return p.bank === 0 ? p.preset : p.bank === 128 ? 128 + p.preset : -1; };
+  const usable = candidates.filter(i => slot(i) >= 0);
+  const firstKit = Math.min(...usable.filter(i => slot(i) >= 128).map(slot));
+  const rank = i => { const s = slot(i); return s >= 128 ? (s === firstKit ? -1 : 1000 + s) : FILL_ORDER.includes(s) ? FILL_ORDER.indexOf(s) : FILL_ORDER.length + s; };
+  const take = [];
+  for (const i of usable.sort((a, b) => rank(a) - rank(b))) if (bytesOf([...take, i]) <= budget) take.push(i);
+  return take;
+}
+// The estimate leaves out the unrolled loops and the tables (15 % of a bank with many short loops), so a pick is checked against a real bank:
+// the instruments added last are dropped until the bank `buildBytes(list)` makes fits `limit` (found by bisection). Plain banks only (an MP3 bank is packed after).
+function trimToFit(take, buildBytes, limit) {
+  let lo = 1, hi = take.length;                       // the largest number of instruments, in priority order, whose bank fits (a bisection: a bank is slow to build)
+  if (hi < 2 || buildBytes(take) <= limit) return take.slice();
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (buildBytes(take.slice(0, mid)) <= limit) lo = mid; else hi = mid - 1; }
+  return take.slice(0, lo);
 }
 
 // ---- Resampling -----------------------------------------------------------
@@ -999,23 +1036,33 @@ function writeSf2(bank, name) {
   const chosen = () => pickBoxes().filter(c => c.checked).map(c => +c.value);
   // About how many bytes the ticked instruments' sounds take in the codec chosen (the sounds they share counted once; loops,
   // which are unrolled to a whole number of frames, and the tables are left out), to see what fits before converting.
+  function soundBytes(list) {
+    const kbit = mp3Kbit(), codec = $('codec').value;
+    return estimateSoundBytes(sf, list, kbit ? 44100 : +$('rate').value,
+      kbit ? 33 / 32 : codec === 'sea' ? 228 / 320 : codec === 'sea6' ? 268 / 320 : codec === 'bfp8' ? 33 / 32 : +$('bits').value / 8);
+  }
   function pickSum() {
-    const list = chosen(), kbit = mp3Kbit(), codec = $('codec').value, rate = kbit ? 32000 : +$('rate').value;
-    const perSample = kbit ? 33 / 32 : codec === 'sea' ? 228 / 320 : codec === 'sea6' ? 268 / 320 : codec === 'bfp8' ? 33 / 32 : +$('bits').value / 8;
-    const seen = new Set(); let bytes = 0;
-    for (const i of list) for (const z of presetZones(sf, i)) {
-      if (seen.has(z.sample)) continue; seen.add(z.sample);
-      const sh = sf.shdr[z.sample]; bytes += Math.max(0, sh.end - sh.start) * rate / (sh.rate > 0 ? sh.rate : 44100) * perSample;
-    }
+    const list = chosen(), kbit = mp3Kbit(), bytes = soundBytes(list);
     const melodic = list.filter(i => slotOf(sf.presets[i]) < 128).length;
     $('pickSum').innerHTML = list.length + ' of ' + pickBoxes().length + ' ticked (' + melodic + ' melodic, ' + (list.length - melodic) + ' drum kits): sounds about ' +
       fmtBytes(bytes) + (kbit ? ' as BFP8 (the MP3 packing makes that about half at 64 kbit/s)' : '') + ', against the device\'s ' + fmtBytes(FM1_SAMPLE_BANK) +
-      (bytes > FM1_SAMPLE_BANK ? ' <span class="warn">(too much' + (kbit ? ' before packing' : '') + ')</span>' : '') + '. Tables and loops add a little.';
+      (bytes > FM1_SAMPLE_BANK * (kbit ? MP3_FILL : 1) ? ' <span class="warn">(too much' + (kbit ? ' before packing' : '') + ')</span>' : '') + '. Tables and loops add a little.';
+  }
+  // "Fill the flash" (fillFlashPick, in the core script): the MP3 packing roughly halves the sounds, so an MP3 bank has room for MP3_FILL times as
+  // much BFP8. The estimate leaves 4 % for the tables and the loops; the size the conversion makes is the real answer (shown after Convert).
+  function fillFlash() {
+    const boxes = pickBoxes(), kbit = mp3Kbit();
+    let take = fillFlashPick(sf, boxes.map(c => +c.value), soundBytes, FM1_SAMPLE_BANK * (kbit ? MP3_FILL : 1) * 0.96);
+    if (!kbit) take = trimToFit(take, list => writeFm1(buildBank(sf, list, bankOptions()), bankInfo('fill')).length, FM1_SAMPLE_BANK);
+    const ticked = new Set(take);
+    for (const c of boxes) c.checked = ticked.has(+c.value);
+    pickSum();
   }
   $('preset').addEventListener('change', () => { $('pick').hidden = $('preset').value !== 'pick'; if (!$('pick').hidden) pickSum(); });
   $('pickList').addEventListener('change', pickSum);
   for (const id of ['codec', 'rate', 'bits']) $(id).addEventListener('change', () => { if (sf && !$('pick').hidden) pickSum(); });
   $('opts').querySelector('.pickbar').addEventListener('click', e => {
+    if (e.target.id === 'pickFill') { fillFlash(); return; }
     const how = e.target.dataset && e.target.dataset.pick; if (!how) return;
     // the buttons act on the instruments the filter shows
     for (const c of pickBoxes()) if (!c.parentElement.hidden) c.checked = how === 'all' || how === c.dataset.group;
@@ -1031,6 +1078,8 @@ function writeSf2(bank, name) {
   // The file of the bank: the packed one for MP3, else as written.
   const bankBytes = () => bank.packed ? bank.packed.bytes : writeFm1(bank, bank.info);
   const bankFileName = (kbit = bank.packed && bank.packed.kbit) => baseName + (kbit ? '_fm1_mp3_' + kbit + '.fm1b' : '_fm1.bin');
+  const bankOptions = () => mp3Kbit() ? { rate: 44100, bits: 8, sea: false, seaBits: 5, bfp: true } :
+    { rate: +$('rate').value, bits: +$('bits').value, sea: $('codec').value.startsWith('sea'), seaBits: $('codec').value === 'sea6' ? 6 : 5, bfp: $('codec').value === 'bfp8' };
   let converting = false;
   async function convert() {
     if (converting) return;
@@ -1040,8 +1089,7 @@ function writeSf2(bank, name) {
     const picking = $('preset').value === 'pick', list = picking ? chosen() : null;
     if (picking && !list.length) { $('result').hidden = true; showErr('Tick at least one instrument.'); return; }
     try {
-      bank = buildBank(sf, picking ? list : +$('preset').value, kbit ? { rate: 44100, bits: 8, sea: false, seaBits: 5, bfp: true } :
-        { rate: +$('rate').value, bits: +$('bits').value, sea: $('codec').value.startsWith('sea'), seaBits: $('codec').value === 'sea6' ? 6 : 5, bfp: $('codec').value === 'bfp8' });
+      bank = buildBank(sf, picking ? list : +$('preset').value, bankOptions());
     } catch (e) { showErr('The conversion failed: ' + e.message); return; }
     if (!bank.zones.length) { $('result').hidden = true; showErr('The preset has no playable sounds.'); return; }
     if (picking) {                                           // the font's instruments not ticked: silent at their program numbers
@@ -1199,10 +1247,10 @@ function writeSf2(bank, name) {
   window.addEventListener('drop', e => e.preventDefault());
 
   $('go').addEventListener('click', convert);
-  const syncCodec = () => {                                  // SEA is always coded from 16 bit; MP3 is packed from BFP8 at 32 kHz
+  const syncCodec = () => {                                  // SEA is always coded from 16 bit; MP3 is packed from BFP8 at 44.1 kHz
     $('bits').disabled = $('codec').value !== 'pcm';
-    $('rate').disabled = !!mp3Kbit();
-    if (mp3Kbit()) $('rate').value = '32000';
+    $('rate').disabled = !!mp3Kbit();     // an MP3 bank is made at 44,100 Hz whatever the menu says: show the nearest
+    if (mp3Kbit()) $('rate').value = '44118';
   };
   $('codec').addEventListener('change', syncCodec);
   syncCodec();
@@ -1236,6 +1284,7 @@ function writeSf2(bank, name) {
   const SEND_ERRORS = { 1: 'malformed frame', 2: 'outside the flash', 3: 'flash error', 4: 'checksum mismatch', 5: 'no transfer in progress' };
   async function sendBank() {
     if (send.busy || !bank) return;
+    let portsOpen = null;
     const bin = bankBytes();
     if (bin.length > FM1_SAMPLE_BANK) { sendMsg('The bank (' + fmtBytes(bin.length) + ') is larger than the flash (' + fmtBytes(FM1_SAMPLE_BANK) + ').', true); return; }
     if (!navigator.requestMIDIAccess) { sendMsg('This browser has no Web MIDI. Use Chrome or Edge.', true); return; }
@@ -1245,16 +1294,21 @@ function writeSf2(bank, name) {
       const output = send.access.outputs.get($('midiOut').value);
       const input = [...send.access.inputs.values()].find(i => i.name === output.name) || [...send.access.inputs.values()].find(i => /fm-?1/i.test(i.name));
       if (!input) { sendMsg('Found no MIDI input belonging to ' + output.name + ' (the FM-1\'s reply is needed).', true); return; }
-      await input.open(); await output.open();
+      await input.open(); await output.open(); portsOpen = [input, output];
       send.busy = true; $('sendFm1').disabled = true;
       const frames = uploadFrames(bin);
       for (const [i, frame] of frames.entries()) {
-        sendMsg(i === 0 ? 'Erasing the FM-1\'s flash ...' : i === frames.length - 1 ? 'Checking the bank ...' : 'Sending ' + Math.round(100 * i / frames.length) + ' %');
+        const last = i === frames.length - 1;
+        sendMsg(i === 0 ? 'Erasing the FM-1\'s flash (up to a minute) ...' : last ? 'Checking the bank ...' : 'Sending ' + Math.round(100 * i / frames.length) + ' %');
         let status = -1;
+        // The waits are install.html's: the first frame erases the flash (up to a minute) and the last checks the whole bank (up to 30 s). The
+        // answer comes when that is done, so a shorter wait reports a silent FM-1 that is only busy.
         for (let attempt = 0; attempt < 3 && status < 0; attempt++) {     // a lost frame is sent again: writing the same bytes twice is harmless
-          try { status = await exchange(output, input, frame, i === 0 ? 30000 : 3000); } catch (e) { if (i === 0) break; }
+          try { status = await exchange(output, input, frame, i === 0 ? 90000 : last ? 30000 : 4000); } catch (e) { if (i === 0) break; }
         }
-        if (status < 0) throw new Error('The FM-1 does not answer. Is it running the SF2 player firmware?');
+        if (status < 0) throw new Error(i === 0 ? 'The FM-1 did not answer when the flash was to be erased. Is it running the SF2 player firmware, and is "' + output.name + '" its port? Look at the UPLOAD line on the FM-1\'s screen.'
+          : last ? 'The FM-1 did not answer the final check of the bank (frame ' + (i + 1) + ' of ' + frames.length + ').'
+          : 'The FM-1 stopped answering at frame ' + (i + 1) + ' of ' + frames.length + '.');
         if (status !== 0) throw new Error('The FM-1 rejected frame ' + (i + 1) + ': ' + (SEND_ERRORS[status] || 'error ' + status) +
           (bank.packed && i === frames.length - 1 && status === 1 ? '. An MP3 bank plays only on the live-cache firmware.' : ''));
       }
@@ -1263,6 +1317,7 @@ function writeSf2(bank, name) {
       sendMsg(e.message || String(e), true);
     } finally {
       send.busy = false; $('sendFm1').disabled = false;
+      if (portsOpen) await Promise.allSettled(portsOpen.map(p => p.close()));    // as install.html does: an open port blocks the next page that wants it
     }
   }
   $('sendFm1').addEventListener('click', sendBank);
