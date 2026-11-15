@@ -1344,11 +1344,29 @@ function writeSf2(bank, name) {
     try {
       if (!send.access) send.access = await navigator.requestMIDIAccess({ sysex: true });
       if (!midiPorts()) { sendMsg('No MIDI output found. Connect the FM-1 over USB and try again.', true); return; }
-      const output = send.access.outputs.get($('midiOut').value);
-      const input = [...send.access.inputs.values()].find(i => i.name === output.name) || [...send.access.inputs.values()].find(i => /fm-?1/i.test(i.name));
-      if (!input) { sendMsg('Found no MIDI input belonging to ' + output.name + ' (the FM-1\'s reply is needed).', true); return; }
-      await input.open(); await output.open(); portsOpen = [input, output];
       send.busy = true; $('sendFm1').disabled = true;
+      sendMsg('Looking for the FM-1 ...');
+      // Windows often names the USB port generically ("USB Audio Device"), so the name decides nothing: every output (the one chosen
+      // first) is asked the bank-check question (cmd 9), which only the SF2 player answers (status 0 same bank, 4 another, 1 older firmware).
+      const wanted = send.access.outputs.get($('midiOut').value);
+      const outs = [wanted, ...[...send.access.outputs.values()].filter(o => o !== wanted && o.state === 'connected')].filter(Boolean);
+      const ins = [...send.access.inputs.values()].filter(i => i.state === 'connected');
+      const ask = [0xf0, 0x7d, 0x53, 0x46, 2, 9, ...num35(bin.length), ...num35(crc32(bin)), 0xf7];
+      let output = null, input = null;
+      search: for (const o of outs) {
+        const same = ins.filter(i => i.name === o.name), rest = ins.filter(i => i.name !== o.name);
+        for (const i of [...same, ...rest]) {
+          try {
+            await i.open(); await o.open();
+            const ok = await exchange(o, i, Uint8Array.from(ask), 1500).then(() => true, () => false);
+            if (ok) { output = o; input = i; portsOpen = [i, o]; break search; }
+          } catch (e) { /* port busy or gone: next */ }
+          await Promise.allSettled([i.close()]);
+        }
+        await Promise.allSettled([o.close()]);
+      }
+      if (!output) { sendMsg('No MIDI port answered. Is the FM-1 connected over USB, running the SF2 player firmware (no other program using its port)? Ports tried: ' + outs.map(o => o.name).join(', ') + '.', true); return; }
+      $('midiOut').value = output.id;
       const frames = uploadFrames(bin);
       for (const [i, frame] of frames.entries()) {
         const last = i === frames.length - 1;
