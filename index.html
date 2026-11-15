@@ -308,6 +308,18 @@ function readSample(sf, sh) {
     if (base + i * 2 + 2 > sf.buf.byteLength) break;
     out[i] = sf.dv.getInt16(base + i * 2, true);
   }
+  // A stereo pair (left = type 4, linked to the right = type 2): play the mean of both channels as mono, not the left one alone.
+  // If the channels cancel (the mean is under a third of the louder one's level: opposite phase) the left one is kept.
+  const r = sh.type === 4 ? sf.shdr[sh.link] : null;
+  if (r && r.type === 2 && r !== sh) {
+    const rb = sf.smplOff + r.start * 2, m = Math.min(n, Math.max(0, r.end - r.start)), mix = new Float32Array(n);
+    let el = 0, er = 0, em = 0;
+    for (let i = 0; i < n; i++) {
+      const l = out[i], rr = i < m && rb + i * 2 + 2 <= sf.buf.byteLength ? sf.dv.getInt16(rb + i * 2, true) : l;
+      mix[i] = (l + rr) / 2; el += l * l; er += rr * rr; em += mix[i] * mix[i];
+    }
+    if (em * 9 >= Math.max(el, er)) return mix;
+  }
   return out;
 }
 
