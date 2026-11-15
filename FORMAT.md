@@ -526,7 +526,7 @@ drops its filter that keeps only "the layers that answer to velocity 100" and wr
 `test_zone.js` get banks with ranges (a note at velocity 40 and one at 100 start different zones; a range that holds neither starts none).
 
 **3. Stereo.** A stereo pair is two samples in the file (sample type 4 left, 2 right, linked by the sample link field); the converter
-takes the left one now. First step, with no change to the engine: write the pair as two zones that cover the same keys and velocities,
+takes the mean of both channels as one mono sample now. First step, with no change to the engine: write the pair as two zones that cover the same keys and velocities,
 with the zone pan at -500 (left) and +500 (right), which the pan code already plays, stacked by layer entries. A note then takes two
 voices and twice the CPU, so the 32 voices are 16 notes; measure that against the CPU figures above before choosing it for a font.
 Both channels are stored, so twice the samples (as separate mono MP3 streams there is no gain from the channels being alike). Only if
@@ -722,7 +722,7 @@ const fm1_zone *fm1_find(const uint8_t *f, int bank128, int program, int note, u
 ## What is left out
 
 The key number's scaling of the modulation envelope, velocity layers (the layer that answers to
-velocity 100 is used), stereo (the left channel is used), modulators (the wheel's vibrato is the player's own), and sample start
+velocity 100 is used), stereo (a pair is played as the mean of its two channels, mono; `test_stereo.js`), modulators (the wheel's vibrato is the player's own), and sample start
 offsets. The first three and the percussion kits are proposed in "Proposal: more of the SoundFont" above.
 
 ## Envelopes: 12 bytes each
