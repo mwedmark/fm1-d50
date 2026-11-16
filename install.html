@@ -488,8 +488,9 @@
 
   (async () => {
     try {
-      const r = await fetch('dist/install/manifest.json', { cache: 'no-store' });
-      if (!r.ok) throw new Error('dist/install/manifest.json is missing. Run node make_install.js after building the firmware.');
+      const set = /^[\w-]+$/.test(new URLSearchParams(location.search).get('set') || '') ? new URLSearchParams(location.search).get('set') : 'install';   // ?set=install_fxpool: another folder under dist/ (make_install.js --out=dist/install_fxpool)
+      const r = await fetch('dist/' + set + '/manifest.json', { cache: 'no-store' });
+      if (!r.ok) throw new Error('dist/' + set + '/manifest.json is missing. Run node make_install.js after building the firmware.');
       manifest = await r.json();
       pkg = plainPkg = await FM1Web.prepare(manifest.firmware);  // fetches the package and checks its SHA-256, header and loader
       if (manifest.stock) FM1Web.prepare(manifest.stock).then(p => { stockPkg = p; }, e => log('original V15: ' + e.message));

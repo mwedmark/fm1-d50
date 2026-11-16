@@ -34,6 +34,7 @@ if (bank.toString('latin1', 0, 4) !== 'FM1B') throw new Error(bankPath + ' is no
 let crc = 0xffffffff;
 for (const b of bank) { crc ^= b; for (let k = 0; k < 8; k++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1)); }
 const out = option('out') || path.join(root, 'dist/install');
+const urlBase = path.relative(root, out).replace(/\\/g, '/') + '/';   // the page fetches from there (install.html?set=<folder name under dist/>)
 fs.mkdirSync(out, { recursive: true });
 fs.writeFileSync(path.join(out, 'firmware.fwsc'), firmware);
 fs.writeFileSync(path.join(out, 'bank.fm1b'), bank);
@@ -44,7 +45,7 @@ const name = option('name') || (fs.existsSync(dist) ? fs.readdirSync(dist) : [])
   .find(f => fs.statSync(path.join(dist, f)).size === firmware.length && fs.readFileSync(path.join(dist, f)).equals(firmware)) || '';
 // the update metadata of a package of ours (the version in the address: never a cached package)
 const entry = (bytes, id, file) => ({ schema: 1, product, family: 7, release_version: id.release_version, build_id: id.build_id,
-  sha256: sha(bytes), bytes: bytes.length, loader_sha256: sha(loader), url: 'dist/install/' + file + '?v=' + sha(bytes).slice(0, 12), voices });
+  sha256: sha(bytes), bytes: bytes.length, loader_sha256: sha(loader), url: urlBase + file + '?v=' + sha(bytes).slice(0, 12), voices });
 let live = null;
 if (option('live-fwsc')) {
   const bytes = fs.readFileSync(option('live-fwsc'));
@@ -58,10 +59,10 @@ if (option('live-fwsc')) {
 const manifest = {
   name,
   firmware: entry(firmware, identity, 'firmware.fwsc'),
-  bank: { url: 'dist/install/bank.fm1b?v=' + sha(bank).slice(0, 12), bytes: bank.length, crc32: (~crc) >>> 0, source: path.relative(root, bankPath).replace(/\\/g, '/') },
+  bank: { url: urlBase + 'bank.fm1b?v=' + sha(bank).slice(0, 12), bytes: bank.length, crc32: (~crc) >>> 0, source: path.relative(root, bankPath).replace(/\\/g, '/') },
   // as fm1_open/sdk/Build.ps1 describes it for the SDK (kind 'stock': its loader is the vendor one, the same as ours)
   stock: { schema: 1, kind: 'stock', product: 'FM-1_015', family: 7, release_version: 'V15', build_id: STOCK_SHA, sha256: STOCK_SHA,
-    bytes: stock.length, loader_sha256: 'ef1f2db89b011fa53e71df363f0122de0ea896618c53fb53e8da676322004541', url: 'dist/install/stock.fwsc?v=' + STOCK_SHA.slice(0, 12) },
+    bytes: stock.length, loader_sha256: 'ef1f2db89b011fa53e71df363f0122de0ea896618c53fb53e8da676322004541', url: urlBase + 'stock.fwsc?v=' + STOCK_SHA.slice(0, 12) },
   ...(identity.live_cache ? { main_live: true } : {}),
   ...(live ? { live } : {}),
   made: new Date().toISOString(),
