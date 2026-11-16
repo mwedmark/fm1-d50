@@ -445,7 +445,7 @@ try {
     $aclTx = ' + 1024'
     $aclRx = ' + 4096'
     $linker = [IO.File]::ReadAllText((Join-Path $sdk 'config/linker.ld.in')).Replace('@SBC_DECODER@',$sbcRoot).Replace('@ACL_TX_EXTRA@',$aclTx).Replace('@ACL_RX_EXTRA@',$aclRx)
-    $fxRules = if ($FxPool) { "        . = ALIGN(256);`n        fm1_fx_pool_begin = .;`n        *(.bss.fm1_effects)`n        *(.bss.fm1_cache_pool)`n        fm1_fx_pool_end = .;" } else { '' }
+    $fxRules = if ($FxPool) { "        . = ALIGN(256);`n        fm1_fx_pool_begin = .;`n        *(.bss.fm1_effects)`n        fm1_fx_pool_split = .;`n        *(.bss.fm1_transport_bt_pcm)`n        *(.bss.fm1_cache_pool)`n        fm1_fx_pool_end = .;" } else { '' }
     $linker = $linker.Replace('@FX_POOL@',$fxRules)
     Write-Text (Join-Path $build 'generated/linker') $linker
     $link = @('--plugin',(Join-Path $bin 'LLVMgold.dll'),'-o','sdk.elf') + $objects + @(

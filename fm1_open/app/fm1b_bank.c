@@ -23,9 +23,10 @@
 #endif
 #if FM1B_FX_POOL
 /* -FxPool (sdk/Build.ps1): the linker lays this pool right after the engine library's two idle effect units (fm1_fx_states, 48 832 bytes: the SDK's stock groove
- * effects, which this firmware never starts; RUNNING.md 1c), and the cache uses both as one pool. What stays out: the units' state words (-1 = idle: the engine
- * writes them), and what else the library keeps in the same section before this pool. */
-extern uint8_t fm1_fx_pool_begin[];
+ * effects, which this firmware never starts; RUNNING.md 1c) and its Bluetooth audio buffer (fm1_transport_bt_pcm, 16 384 bytes: A2DP is switched off in this build,
+ * project.c), and the cache uses all three as one pool. What stays out: the units' state words (-1 = idle: the engine writes them), and what else the library keeps
+ * in the same section as the units. */
+extern uint8_t fm1_fx_pool_begin[], fm1_fx_pool_split[];
 static uint8_t cache_pool[FM1B_CACHE_KB * 1024U] __attribute__((aligned(4), section(".bss.fm1_cache_pool")));
 enum { FX_UNIT = 24416, FX_STATE = 24380, FX_UNITS = 2 };
 #else
@@ -58,10 +59,10 @@ void fm1b_device_init(void)
 {
 #if FM1B_PACKED
 #if FM1B_FX_POOL
-    if (cache_pool > fm1_fx_pool_begin && (unsigned)(cache_pool - fm1_fx_pool_begin) >= FX_UNITS * FX_UNIT) {        /* the linker put the two where it was asked to */
+    if (fm1_fx_pool_split > fm1_fx_pool_begin && (unsigned)(fm1_fx_pool_split - fm1_fx_pool_begin) >= FX_UNITS * FX_UNIT && cache_pool >= fm1_fx_pool_split) {   /* the linker put them where it was asked to */
         fm1b_cache_attach(fm1_fx_pool_begin, (unsigned)(cache_pool + sizeof cache_pool - fm1_fx_pool_begin));
         for (unsigned u = 0; u < FX_UNITS; ++u) fm1b_cache_reserve(u * FX_UNIT + FX_STATE, 4U);
-        fm1b_cache_reserve(FX_UNITS * FX_UNIT, (unsigned)(cache_pool - fm1_fx_pool_begin) - FX_UNITS * FX_UNIT);
+        fm1b_cache_reserve(FX_UNITS * FX_UNIT, (unsigned)(fm1_fx_pool_split - fm1_fx_pool_begin) - FX_UNITS * FX_UNIT);
     } else
         fm1b_cache_attach(cache_pool, sizeof cache_pool);
 #else

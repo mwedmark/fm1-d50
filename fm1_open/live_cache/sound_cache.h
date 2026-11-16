@@ -14,9 +14,9 @@
 #ifndef SOUND_CACHE_ENTRIES                                   /* sounds in the pool at once (28 bytes each); when all are taken the least recently used goes, as when the pool is full */
 #if defined(FM1B_CACHE_KB) && FM1B_CACHE_KB < 160             /* the firmware: 7 per 8 KB of pool (a decoded sound of 1mgm.sf2 is 2.8 KB on average), RAM is short */
 #ifndef FM1B_FX_POOL
-#define FM1B_FX_POOL 0                                         /* 1: the pool also covers the SDK's idle effect units, 48 KB more (app/fm1b_bank.c) */
+#define FM1B_FX_POOL 0                                         /* 1: the pool also covers the SDK's idle effect units and Bluetooth audio buffer, 64 KB more (app/fm1b_bank.c) */
 #endif
-#define SOUND_CACHE_ENTRIES (((unsigned)FM1B_CACHE_KB + (FM1B_FX_POOL ? 48U : 0U)) * 7U / 8U + 4U)  /* 84 KB: 73 (+4 entries that stand for reserved bytes, sound_cache_reserve) (with 160 and with 84 the song in fm1-emu gave the same, 2026-11-11) */
+#define SOUND_CACHE_ENTRIES (((unsigned)FM1B_CACHE_KB + (FM1B_FX_POOL ? 64U : 0U)) * 7U / 8U + 4U)  /* 84 KB: 73 (+4 entries that stand for reserved bytes, sound_cache_reserve) (with 160 and with 84 the song in fm1-emu gave the same, 2026-11-11) */
 #else
 #define SOUND_CACHE_ENTRIES 160U
 #endif
