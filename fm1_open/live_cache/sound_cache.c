@@ -18,6 +18,18 @@ void sound_cache_init(struct sound_cache *c, const struct sound_source *source, 
     c->stats = (struct sound_cache_stats){0, 0, 0, 0, 0};
 }
 
+int sound_cache_reserve(struct sound_cache *c, uint32_t offset, uint32_t bytes)
+{
+    for (unsigned i = 0; i < SOUND_CACHE_ENTRIES; ++i)
+        if (!c->entry[i].state) {
+            struct sound_cache_entry *e = &c->entry[i];
+            e->sound = SOUND_CACHE_RESERVED; e->offset = offset; e->bytes = bytes; e->frames = 0; e->groups_ready = 0; e->pins = 0; e->hold_groups = 0; e->last_use = 0;
+            e->state = 2;
+            return 1;
+        }
+    return 0;
+}
+
 /* The offset of the smallest gap that holds `bytes`, or -1. */
 static int64_t find_gap(const struct sound_cache *c, uint32_t bytes)
 {
@@ -48,7 +60,7 @@ static int evict_one(struct sound_cache *c)
 {
     int victim = -1;
     for (unsigned i = 0; i < SOUND_CACHE_ENTRIES; ++i)
-        if (c->entry[i].state == 2 && c->entry[i].pins == 0 && (victim < 0 || c->entry[i].last_use < c->entry[victim].last_use))
+        if (c->entry[i].state == 2 && c->entry[i].pins == 0 && c->entry[i].sound != SOUND_CACHE_RESERVED && (victim < 0 || c->entry[i].last_use < c->entry[victim].last_use))
             victim = (int)i;
     if (victim < 0)
         return 0;

@@ -10,6 +10,8 @@ param(
     [switch]$LiveCache = $true,
     [int]$CacheKB = 84,
     [int]$CacheFrames = 2,
+    # -FxPool: lay the live cache's pool over the engine library's two idle effect units (48 832 bytes of SRAM that this firmware never uses; fm1b_bank.c, RUNNING.md 1c).
+    [switch]$FxPool,
     [string]$Toolchain = $env:FM1_PI32_TOOLCHAIN,
     [string]$SourceUrl = $env:FM1_SOURCE_URL
 )
@@ -383,6 +385,7 @@ foreach ($dir in $include) { $flags += '-I' + (Join-Path $root $dir) }
 # The live cache build also leaves out the MIDI file player (FM1_MIDIPLAY=0; its code stays, the plain build has it): with it the image
 # was 2 235 bytes over the layout (2026-11-08), and a song takes its RAM from the same runtime heap the cache leaves short.
 if ($LiveCache) { $flags += @('-DFM1B_BFP8_ONLY=1', '-DFM1B_PACKED=1', "-DFM1B_CACHE_KB=$CacheKB", "-DFM1B_CACHE_FRAMES=${CacheFrames}U", '-DFM1_MIDIPLAY=0') }
+if ($FxPool) { if (!$LiveCache) { throw '-FxPool needs the live cache.' }; $flags += '-DFM1B_FX_POOL=1' }
 $objects = @()
 $commands = @()
 Push-Location -LiteralPath $build
@@ -442,6 +445,8 @@ try {
     $aclTx = ' + 1024'
     $aclRx = ' + 4096'
     $linker = [IO.File]::ReadAllText((Join-Path $sdk 'config/linker.ld.in')).Replace('@SBC_DECODER@',$sbcRoot).Replace('@ACL_TX_EXTRA@',$aclTx).Replace('@ACL_RX_EXTRA@',$aclRx)
+    $fxRules = if ($FxPool) { "        . = ALIGN(256);`n        fm1_fx_pool_begin = .;`n        *(.bss.fm1_effects)`n        *(.bss.fm1_cache_pool)`n        fm1_fx_pool_end = .;" } else { '' }
+    $linker = $linker.Replace('@FX_POOL@',$fxRules)
     Write-Text (Join-Path $build 'generated/linker') $linker
     $link = @('--plugin',(Join-Path $bin 'LLVMgold.dll'),'-o','sdk.elf') + $objects + @(
         '-flto','--plugin-opt=-pi32v2-always-use-itblock=false','--plugin-opt=-enable-ipra=true',

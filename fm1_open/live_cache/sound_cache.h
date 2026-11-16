@@ -13,11 +13,15 @@
 
 #ifndef SOUND_CACHE_ENTRIES                                   /* sounds in the pool at once (28 bytes each); when all are taken the least recently used goes, as when the pool is full */
 #if defined(FM1B_CACHE_KB) && FM1B_CACHE_KB < 160             /* the firmware: 7 per 8 KB of pool (a decoded sound of 1mgm.sf2 is 2.8 KB on average), RAM is short */
-#define SOUND_CACHE_ENTRIES ((unsigned)FM1B_CACHE_KB * 7U / 8U)  /* 84 KB: 73 (with 160 and with 84 the song in fm1-emu gave the same, 2026-11-11) */
+#ifndef FM1B_FX_POOL
+#define FM1B_FX_POOL 0                                         /* 1: the pool also covers the SDK's idle effect units, 48 KB more (app/fm1b_bank.c) */
+#endif
+#define SOUND_CACHE_ENTRIES (((unsigned)FM1B_CACHE_KB + (FM1B_FX_POOL ? 48U : 0U)) * 7U / 8U + 4U)  /* 84 KB: 73 (+4 entries that stand for reserved bytes, sound_cache_reserve) (with 160 and with 84 the song in fm1-emu gave the same, 2026-11-11) */
 #else
 #define SOUND_CACHE_ENTRIES 160U
 #endif
 #endif
+#define SOUND_CACHE_RESERVED 0xffffffffU                      /* the `sound` of an entry that stands for reserved bytes */
 #define SOUND_CACHE_QUEUE 32U                                 /* sounds waiting to be decoded */
 
 enum sound_cache_result {
@@ -58,6 +62,9 @@ struct sound_cache {
 };
 
 void sound_cache_init(struct sound_cache *cache, const struct sound_source *source, uint8_t *pool, uint32_t pool_bytes);
+/* Bytes of the pool that something else owns (the SDK's idle effect states, which the pool is laid over): an entry that is never a sound and never goes, so no sound is
+ * placed there. After sound_cache_init; 0 if there is no entry left. */
+int sound_cache_reserve(struct sound_cache *cache, uint32_t offset, uint32_t bytes);
 
 /* A note needs `sound`. Returns an entry number and pins it (hit, or a new decode started or queued), SOUND_CACHE_DIRECT with the address in *direct, or
  * SOUND_CACHE_NO_ROOM. */

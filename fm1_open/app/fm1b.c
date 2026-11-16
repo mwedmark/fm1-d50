@@ -244,6 +244,7 @@ static struct {
     struct mp3_stream stream;
     uint8_t *pool;
     uint32_t pool_bytes;
+    uint32_t reserved_at[4], reserved_bytes[4]; unsigned reserved;     /* bytes of the pool that are not the cache's (fm1b_cache_reserve) */
     struct pk_request req[PK_RING];
     struct pk_grant grant[PK_RING];
     uint8_t unpin[PK_UNPIN_RING];
@@ -311,9 +312,14 @@ static void packed_start(const uint8_t *image)
     pk.req_head = pk.req_tail = pk.grant_head = pk.grant_tail = pk.unpin_head = pk.unpin_tail = 0;
     pk.pending_count = 0;
     sound_cache_init(&pk.cache, &source, pk.pool, pk.pool_bytes);
+    for (unsigned i = 0; i < pk.reserved; ++i) sound_cache_reserve(&pk.cache, pk.reserved_at[i], pk.reserved_bytes[i]);
     for (unsigned i = 0; i < FM1B_VOICES; ++i) voices[i].has_entry = voices[i].packed = voices[i].waiting = 0;
 }
-void fm1b_cache_attach(uint8_t *pool, unsigned bytes) { pk.pool = pool; pk.pool_bytes = bytes; }
+void fm1b_cache_attach(uint8_t *pool, unsigned bytes) { pk.pool = pool; pk.pool_bytes = bytes; pk.reserved = 0; }
+void fm1b_cache_reserve(unsigned offset, unsigned bytes)
+{
+    if (pk.reserved < 4U && bytes) { pk.reserved_at[pk.reserved] = offset; pk.reserved_bytes[pk.reserved] = bytes; ++pk.reserved; }
+}
 static FM1_DSP_CODE void pk_unpin_later(unsigned entry)                      /* interrupt: the ring cannot fill up (it holds more than there are voices and grants) */
 {
     uint32_t head = pk.unpin_head;

@@ -189,6 +189,7 @@ void fm1b_info(struct fm1b_info *info);
  * reads the cache; the CONTROL TASK must call fm1b_cache_service() every few ms: it answers the notes' requests, drops what no voice plays, and decodes for
  * at most mp3_frames MP3 frames (1152 samples each). Returns the sounds still waiting or being decoded. */
 void fm1b_cache_attach(uint8_t *pool, unsigned bytes);
+void fm1b_cache_reserve(unsigned offset, unsigned bytes);       /* after fm1b_cache_attach: these bytes of the pool are not the cache's (at most 4 ranges) */
 unsigned fm1b_cache_service(unsigned mp3_frames);
 struct fm1b_cache_stats {
     uint32_t hits, misses, evictions, no_room, decoded_mp3_frames, requested, lost, waiting, pinned;   /* lost: notes over before their sound came; pinned: pins held now */
