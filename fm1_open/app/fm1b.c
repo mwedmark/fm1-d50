@@ -25,6 +25,7 @@ struct voice {
     uint32_t groups;                          /* the sound's length in BFP8 groups */
     uint16_t serial;                          /* tells this note from the next one in the same slot, for the cache's answers */
     uint8_t packed, waiting, has_entry, entry;   /* waiting: the cache has not granted the sound yet; has_entry: a cache entry is pinned for it */
+    uint8_t bits;                             /* mantissa bits of its groups: 8 (BFP8), or 4..7 for a sound stored narrower (codec 4) */
 #endif
     int32_t gain, level, level_step;          /* gain: the voice's peak; level: the gain now, with the envelope, ramped per frame */
     const void *owner;
@@ -110,7 +111,7 @@ static FM1_DSP_CODE void drop_count(const struct voice *v, unsigned guard)
     else ++drops_held;
 }
 enum { CUT_RELEASE = 13500 };
-enum { FORMAT_PCM8, FORMAT_PCM16, FORMAT_PCM12, FORMAT_SEA, FORMAT_BFP8 };
+enum { FORMAT_PCM8, FORMAT_PCM16, FORMAT_PCM12, FORMAT_SEA, FORMAT_BFP8, FORMAT_BFPN };   /* BFPN: a packed bank's codec 4 sound, v->bits a sample */
 enum { BFP_GROUP = 32, BFP_GROUP_BYTES = 33 };   /* BFP8: a shift byte, then 32 signed 8-bit mantissas */
 #if FM1B_FLASH_PROBE
 #if FM1B_INTERP4
@@ -237,6 +238,12 @@ static inline __attribute__((always_inline)) int region_ok(uint32_t offset, uint
  * A voice that has no grant yet, or has played up to the groups decoded so far, stands still (voice_run returns before it moves anything). The control
  * task calls fm1b_cache_service() often (a few ms): that is the latency of a note whose sound is not in the cache, or even of one that is. */
 enum { PK_RING = 32, PK_UNPIN_RING = 64, PK_PENDING = 32 };
+/* FM1B_WARM: a program change has the cache decode a few of the new sound's MP3 sounds before the first note asks (the notes C4, C3, C5, C2, C6, F#4: where most
+ * playing is), one at a time and only while no note waits; they are not pinned, so a note or the pool's room takes precedence (least recently used goes first). */
+#ifndef FM1B_WARM
+#define FM1B_WARM 0
+#endif
+enum { PK_WARM_RING = 32, PK_WARM_MAX = 12 };
 struct pk_request { uint32_t sound; uint8_t slot; uint16_t serial; };
 struct pk_grant { uint8_t slot, entry; uint16_t serial; };
 static struct {
@@ -254,6 +261,13 @@ static struct {
     volatile uint8_t squeeze;                                 /* control -> interrupt: 1 + the slot of a releasing voice to cut (packed_squeeze), 0 none */
     volatile uint16_t squeeze_serial;
     uint32_t squeezed;                                        /* releasing voices cut for that (interrupt) */
+#if FM1B_WARM
+    volatile uint8_t warm_ring[PK_WARM_RING];                 /* interrupt -> control: presets a program change selected */
+    volatile uint32_t warm_head, warm_tail;
+    uint32_t warm_sound[PK_WARM_MAX], warm_bytes;             /* control: sounds to decode ahead (a few from the middle of the keyboard), and what they take */
+    unsigned warm_count, warm_next;
+    uint32_t warmed;                                          /* decodes started or refreshed that way */
+#endif
 } pk;
 static FM1_DSP_CODE uint32_t pk_find(uint32_t data)                          /* the sound whose unpacked offset is `data`, or ~0 */
 {
@@ -285,7 +299,7 @@ static const uint8_t *pk_direct(void *context, uint32_t sound)
 {
     (void)context;
     const uint8_t *e = pk_entry(sound);
-    return e[16] == 0U ? bank.image + bank.pack_smp + rd32(e + 8) : NULL;
+    return e[16] == 0U || e[16] == 4U ? bank.image + bank.pack_smp + rd32(e + 8) : NULL;
 }
 static void pk_begin(void *context, uint32_t sound, struct mp3_sound_job *job, uint8_t *out)
 {
@@ -311,6 +325,9 @@ static void packed_start(const uint8_t *image)
     pk.stream.bytes = bank.stream_bytes;
     pk.req_head = pk.req_tail = pk.grant_head = pk.grant_tail = pk.unpin_head = pk.unpin_tail = 0;
     pk.pending_count = 0;
+#if FM1B_WARM
+    pk.warm_head = pk.warm_tail = 0; pk.warm_count = pk.warm_next = 0; pk.warm_bytes = 0;
+#endif
     sound_cache_init(&pk.cache, &source, pk.pool, pk.pool_bytes);
     for (unsigned i = 0; i < pk.reserved; ++i) sound_cache_reserve(&pk.cache, pk.reserved_at[i], pk.reserved_bytes[i]);
     for (unsigned i = 0; i < FM1B_VOICES; ++i) voices[i].has_entry = voices[i].packed = voices[i].waiting = 0;
@@ -381,8 +398,9 @@ static FM1_DSP_CODE int packed_voice_start(struct voice *v, unsigned slot, uint3
     const uint8_t *e = pk_entry(sound);
     v->packed = 1;
     v->groups = (length + 31U) / 32U;
-    if (e[16] == 0U) {                                        /* stored BFP8: plays in the bank */
-        if ((uint64_t)bank.pack_smp + rd32(e + 8) + (uint64_t)v->groups * 33U > bank.pack_table) return 0;
+    v->bits = e[16] == 4U ? e[17] : 8U;
+    if (e[16] == 0U || e[16] == 4U) {                         /* stored (BFP8, or narrower): plays in the bank */
+        if ((uint64_t)bank.pack_smp + rd32(e + 8) + (uint64_t)v->groups * (1U + 4U * v->bits) > bank.pack_table) return 0;
         v->base = bank.image + bank.pack_smp + rd32(e + 8);
         return 1;
     }
@@ -429,6 +447,83 @@ static void packed_squeeze_pick(void)
     __asm__ volatile("" ::: "memory");
     pk.squeeze = (uint8_t)(best + 1);
 }
+#if FM1B_WARM
+/* Interrupt (program_apply) or panel: this preset was selected. A full ring drops it. */
+static FM1_DSP_CODE void packed_warm_later(int32_t preset)
+{
+    uint32_t head = pk.warm_head;
+    if (preset < 0 || preset > 255 || head - pk.warm_tail >= PK_WARM_RING) return;
+    pk.warm_ring[head % PK_WARM_RING] = (uint8_t)preset;
+    __asm__ volatile("" ::: "memory");
+    pk.warm_head = head + 1U;
+}
+/* Control task: the MP3 sounds under a few notes of the preset go on the list (no more than PK_WARM_MAX, and the pool's third in all, none above its quarter). */
+static void packed_warm_plan(uint32_t preset)
+{
+    static const uint8_t notes[] = {60, 48, 72, 36, 84, 66};
+    if (preset >= bank.preset_count) return;
+    const uint8_t *p = bank.image + bank.presets + preset * 24U;
+    uint32_t first = rd16(p), count = rd16(p + 2);
+    for (unsigned i = 0; i < sizeof notes && pk.warm_count < PK_WARM_MAX; ++i) {
+        uint32_t key = bank.image[bank.keymaps + preset * 128U + notes[i]];
+        if (key == 0xffU || key >= count || first + key >= bank.zone_count) continue;
+        uint32_t sound = pk_find(rd32(bank.image + bank.zones + (first + key) * 24U));
+        if (sound == ~0U || pk_entry(sound)[16] == 0U) continue;   /* a stored sound plays in the bank: nothing to decode */
+        unsigned seen = 0;
+        for (unsigned k = 0; k < pk.warm_count; ++k) seen |= pk.warm_sound[k] == sound;
+        uint32_t bytes = (mp3_sound_bytes(pk_frames(NULL, sound)) + 3U) & ~3U;
+        if (seen || !bytes || bytes > pk.pool_bytes / 4U || pk.warm_bytes + bytes > pk.pool_bytes / 3U) continue;
+        pk.warm_sound[pk.warm_count++] = sound;
+        pk.warm_bytes += bytes;
+    }
+}
+/* Control task: when nothing else waits for the decoder, ask for the next sound on the list and let go of it again at once (it stays in the pool, unpinned). */
+static void packed_warm_step(void)
+{
+    while (pk.warm_tail != pk.warm_head && pk.warm_count < PK_WARM_MAX) {
+        uint32_t preset = pk.warm_ring[pk.warm_tail % PK_WARM_RING];
+        __asm__ volatile("" ::: "memory");
+        pk.warm_tail = pk.warm_tail + 1U;
+        packed_warm_plan(preset);
+    }
+    if (pk.warm_next >= pk.warm_count) { pk.warm_next = pk.warm_count = 0; pk.warm_bytes = 0; return; }
+    if (pk.pending_count || pk.req_tail != pk.req_head || sound_cache_pending(&pk.cache)) return;   /* a note waits or a decode runs: not now */
+    int entry = sound_cache_request(&pk.cache, pk.warm_sound[pk.warm_next++], NULL);
+    if (entry >= 0) { sound_cache_unpin(&pk.cache, entry); ++pk.warmed; }
+}
+#endif
+/* Control task: a looped sound's first groups (drop_groups, up to the loop's start less a group for the interpolation) are never read again once every voice that plays
+ * the sound is past them: the voices read through their own base pointers and the data does not move, so the groups can simply go back to the pool for other sounds.
+ * A voice that has been granted the sound but not yet taken it (the entry has more pins than voices) holds it whole. */
+#ifndef FM1B_DROP_HEADS
+#define FM1B_DROP_HEADS 0                                          /* 1: give a looped sound's heads back (off: on the FM-1 it made more decoding and more dropouts, 2026-11-16) */
+#endif
+static void packed_drop_heads(void)
+{
+#if !FM1B_DROP_HEADS
+    return;
+#endif
+    for (unsigned i = 0; i < SOUND_CACHE_ENTRIES; ++i) {
+        const struct sound_cache_entry *e = &pk.cache.entry[i];
+        if (e->state != 2 || !e->drop_groups || e->dropped || !e->pins) continue;
+        uint32_t past = ((uint32_t)e->drop_groups + 1U) * 32U;
+        unsigned holders = 0, behind = 0;
+        for (unsigned k = 0; k < FM1B_VOICES; ++k) {
+            const volatile struct voice *v = &voices[k];
+            if (!v->has_entry || v->entry != i) continue;
+            ++holders;
+            if (v->active && v->position < past) ++behind;
+        }
+        if (!behind && holders == e->pins) sound_cache_drop_head(&pk.cache, (int)i);
+    }
+}
+#ifdef FM1_HOST_TEST
+uint32_t fm1b_test_entry(unsigned i, unsigned which)                        /* tests: 0 state, 1 offset, 2 bytes, 3 dropped, 4 pins */
+{
+    const struct sound_cache_entry *e = &pk.cache.entry[i];
+    return which == 0 ? e->state : which == 1 ? e->offset : which == 2 ? e->bytes : which == 3 ? e->dropped : e->pins;
+}
+#endif
 /* Control task. */
 unsigned fm1b_cache_service(unsigned mp3_frames)
 {
@@ -459,6 +554,10 @@ unsigned fm1b_cache_service(unsigned mp3_frames)
         pk.grant_head = pk.grant_head + 1U;
     }
     pk.pending_count = keep;
+    packed_drop_heads();
+#if FM1B_WARM
+    packed_warm_step();
+#endif
     if (no_room && !pk.squeeze) packed_squeeze_pick();         /* the interrupt cuts a releasing voice, so a sound can go */
     sound_cache_step(&pk.cache, mp3_frames);
     return sound_cache_pending(&pk.cache) + pk.pending_count;
@@ -467,7 +566,13 @@ void fm1b_cache_stats(struct fm1b_cache_stats *s)
 {
     s->hits = pk.cache.stats.hits; s->misses = pk.cache.stats.misses; s->evictions = pk.cache.stats.evictions;
     s->no_room = pk.cache.stats.no_room; s->decoded_mp3_frames = pk.cache.stats.decoded_mp3_frames;
+    s->heads_dropped = pk.cache.stats.heads_dropped;
     s->requested = pk.requested; s->lost = pk.lost; s->waiting = pk.pending_count; s->squeezed = pk.squeezed;
+#if FM1B_WARM
+    s->warmed = pk.warmed;
+#else
+    s->warmed = 0;
+#endif
     s->pinned = 0;
     for (unsigned i = 0; i < SOUND_CACHE_ENTRIES; ++i) s->pinned += pk.cache.entry[i].pins;
 }
@@ -576,7 +681,8 @@ int fm1b_bind(const uint8_t *image, unsigned bytes, const int16_t *dqt)
         for (uint32_t i = 0; i < bank.pack_count; ++i) {      /* every sound lies in the sample data; the MP3 stream ends where its last sound does */
             const uint8_t *e = image + bank.pack_table + i * bank.pack_stride;
             uint64_t end = (uint64_t)bank.pack_smp + rd32(e + 8) + rd32(e + 12);
-            if (end > bank.pack_table || e[16] > 2U || e[16] == 1U || (i && rd32(e) < rd32(e - bank.pack_stride)))
+            /* codec 0 BFP8 stored, 2 MP3, 4 BFP stored with e[17] mantissa bits (4..7): groups of 1 + 4 * bits bytes */
+            if (end > bank.pack_table || (e[16] != 0U && e[16] != 2U && e[16] != 4U) || (e[16] == 4U && (e[17] < 4U || e[17] > 7U)) || (i && rd32(e) < rd32(e - bank.pack_stride)))
                 return -1;
             if (e[16] == 2U && rd32(e + 8) + rd32(e + 12) > bank.stream_bytes)
                 bank.stream_bytes = rd32(e + 8) + rd32(e + 12);
@@ -609,6 +715,9 @@ int fm1b_program(unsigned program_bank, unsigned program)
     if (p < 0)
         return -1;
     bank.preset = p;
+#if FM1B_PACKED && FM1B_WARM
+    if (bank.packed) packed_warm_later(p);
+#endif
     bank.program = program;
     bank.last_note = -1;
     bank.last_zone_record = NULL;
@@ -1403,6 +1512,9 @@ static FM1_DSP_CODE void program_apply(unsigned channel, unsigned program_bank, 
     if (p < 0)
         return;
     channel_preset[channel] = p;
+#if FM1B_PACKED && FM1B_WARM
+    if (bank.packed) packed_warm_later(p);
+#endif
     channel_program[channel] = (uint8_t)(program | (program_bank ? 128U : 0U));
     bank.last_program_channel = (int32_t)channel;
     bank.last_program = (int32_t)program;
@@ -1532,6 +1644,22 @@ static FM1_DSP_CODE void group_at(struct voice *v, uint32_t g, int16_t *out)
     v->state[4] = w0; v->state[5] = w1; v->state[6] = w2; v->state[7] = w3;
     v->state_group = (int32_t)g;
 }
+#if FM1B_PACKED
+/* A group of `bits`-bit mantissas (4..7): a shift byte, then 32 mantissas packed low bit first (sample i is bits i*bits .. i*bits + bits - 1 of the 4 * bits bytes).
+ * Mantissa `i` of the group at g: two bytes read (the second may be the next group's shift byte, or the byte after the sound: only bits below it are used). */
+static inline __attribute__((always_inline)) int bfpn_mantissa(const uint8_t *g, unsigned i, unsigned bits)
+{
+    unsigned bit = i * bits;
+    const uint8_t *b = g + 1 + (bit >> 3);
+    uint32_t w = (uint32_t)b[0] | (uint32_t)b[1] << 8;
+    return (int32_t)(w << (32U - (bit & 7U) - bits)) >> (32U - bits);
+}
+static inline __attribute__((always_inline)) int bfpn_sample(const uint8_t *pcm, uint32_t at, unsigned bits)
+{
+    const uint8_t *g = pcm + (at / BFP_GROUP) * (1U + 4U * bits);
+    return bfpn_mantissa(g, at % BFP_GROUP, bits) * (1 << (g[0] & 15U));
+}
+#endif
 /* One sample of the zone, as 16 bits. format is a constant at each call, so each voice loop below is built for one format. */
 static inline __attribute__((always_inline)) int sample_at(struct voice *v, const uint8_t *pcm, uint32_t at, const unsigned format)
 {
@@ -1549,6 +1677,10 @@ static inline __attribute__((always_inline)) int sample_at(struct voice *v, cons
         unsigned shift = group[0] < 8U ? group[0] : 8U;
         return (int)(int8_t)group[1 + at % BFP_GROUP] * (1 << shift);
     }
+#if FM1B_PACKED
+    if (format == FORMAT_BFPN)
+        return bfpn_sample(pcm, at, v->bits);
+#endif
     if (format == FORMAT_PCM12) { /* pair k is 3 bytes at 3k: s0 = b0 | b1 low nibble << 8, s1 = b1 high nibble | b2 << 4 */
         const uint8_t *b = pcm + (at >> 1) * 3U;
         return (at & 1U) ? (int16_t)((b[1] & 0xf0U) | (unsigned)b[2] << 8) : (int16_t)((unsigned)b[0] << 4 | (b[1] & 0x0fU) << 12);
@@ -1686,6 +1818,14 @@ static inline __attribute__((always_inline)) void voice_run(struct voice *v, int
                 const int8_t *m = (const int8_t *)group + 1 + in;
                 unsigned shift = group[0] < 8U ? group[0] : 8U;
                 x = ((m[0] * w[0] + m[1] * w[1] + m[2] * w[2] + m[3] * w[3]) * (1 << shift)) >> 10;
+#if FM1B_PACKED
+            } else if (format == FORMAT_BFPN && position && in < BFP_GROUP - 3U && position + 2U < length && (!le || position + 2U < le)) {
+                const unsigned bits = v->bits;                /* the same for the narrow groups: four mantissas of one group, one shift */
+                const uint8_t *group = pcm + ((position - 1U) / BFP_GROUP) * (1U + 4U * bits);
+                int32_t sum = bfpn_mantissa(group, in, bits) * w[0] + bfpn_mantissa(group, in + 1U, bits) * w[1]
+                            + bfpn_mantissa(group, in + 2U, bits) * w[2] + bfpn_mantissa(group, in + 3U, bits) * w[3];
+                x = (sum * (1 << (group[0] & 15U))) >> 10;
+#endif
             } else {
                 uint32_t after = next + 1;                    /* the frame before is the one before in the bank, also at a loop start */
                 if (le && after >= le)
@@ -1719,6 +1859,9 @@ done:
 /* voice_run for the bank's format, without and with the effect buses: ten loops in all. */
 static FM1_DSP_CODE __attribute__((noinline)) void voice_play(struct voice *v, int32_t *out, unsigned frames)
 {
+#if FM1B_PACKED
+    if (v->packed && v->bits != 8U) { voice_run(v, out, NULL, NULL, NULL, frames, 0, 0, 0, 0, FORMAT_BFPN); return; }
+#endif
 #if FM1B_BFP8_ONLY
     voice_run(v, out, NULL, NULL, NULL, frames, 0, 0, 0, 0, FORMAT_BFP8);
 #else
@@ -1734,6 +1877,9 @@ static FM1_DSP_CODE __attribute__((noinline)) void voice_play(struct voice *v, i
 static FM1_DSP_CODE __attribute__((noinline)) void voice_play_buses(struct voice *v, int32_t *out, int32_t *rev, int32_t *cho, int32_t *side,
                                                                    unsigned frames, int32_t rg, int32_t cg, int32_t sg)
 {
+#if FM1B_PACKED
+    if (v->packed && v->bits != 8U) { voice_run(v, out, rev, cho, side, frames, rg, cg, sg, 1, FORMAT_BFPN); return; }
+#endif
 #if FM1B_BFP8_ONLY
     voice_run(v, out, rev, cho, side, frames, rg, cg, sg, 1, FORMAT_BFP8);
 #else

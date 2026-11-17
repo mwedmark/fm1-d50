@@ -15,7 +15,7 @@ void sound_cache_init(struct sound_cache *c, const struct sound_source *source, 
         c->entry[i].state = 0;
     c->queue_head = c->queue_count = 0;
     c->active = -1;
-    c->stats = (struct sound_cache_stats){0, 0, 0, 0, 0};
+    c->stats = (struct sound_cache_stats){0, 0, 0, 0, 0, 0};
 }
 
 int sound_cache_reserve(struct sound_cache *c, uint32_t offset, uint32_t bytes)
@@ -23,7 +23,7 @@ int sound_cache_reserve(struct sound_cache *c, uint32_t offset, uint32_t bytes)
     for (unsigned i = 0; i < SOUND_CACHE_ENTRIES; ++i)
         if (!c->entry[i].state) {
             struct sound_cache_entry *e = &c->entry[i];
-            e->sound = SOUND_CACHE_RESERVED; e->offset = offset; e->bytes = bytes; e->frames = 0; e->groups_ready = 0; e->pins = 0; e->hold_groups = 0; e->last_use = 0;
+            e->sound = SOUND_CACHE_RESERVED; e->offset = offset; e->bytes = bytes; e->frames = 0; e->groups_ready = 0; e->pins = 0; e->hold_groups = 0; e->drop_groups = 0; e->dropped = 0; e->last_use = 0;
             e->state = 2;
             return 1;
         }
@@ -78,7 +78,7 @@ int sound_cache_request(struct sound_cache *c, uint32_t sound, const uint8_t **d
         return SOUND_CACHE_DIRECT;
     }
     for (unsigned i = 0; i < SOUND_CACHE_ENTRIES; ++i)
-        if (c->entry[i].state && c->entry[i].sound == sound) {
+        if (c->entry[i].state && c->entry[i].sound == sound && !c->entry[i].dropped) {
             ++c->entry[i].pins;
             c->entry[i].last_use = ++c->clock;
             ++c->stats.hits;
@@ -113,6 +113,8 @@ int sound_cache_request(struct sound_cache *c, uint32_t sound, const uint8_t **d
     e->groups_ready = 0;
     e->pins = 1;
     e->hold_groups = 0;
+    e->drop_groups = 0;
+    e->dropped = 0;
     {
         uint32_t ls, le, xf;
         if (c->source.loop && c->source.loop(c->source.context, sound, &ls, &le, &xf) && xf)
@@ -123,6 +125,17 @@ int sound_cache_request(struct sound_cache *c, uint32_t sound, const uint8_t **d
     c->queue[(c->queue_head + c->queue_count++) % SOUND_CACHE_QUEUE] = (uint8_t)slot;
     ++c->stats.misses;
     return slot;
+}
+
+void sound_cache_drop_head(struct sound_cache *c, int entry)
+{
+    struct sound_cache_entry *e = &c->entry[entry];
+    if (entry < 0 || e->state != 2 || e->dropped || !e->drop_groups) return;
+    uint32_t n = (uint32_t)e->drop_groups * 33U;
+    e->offset += n;
+    e->bytes -= n;
+    e->dropped = 1;
+    ++c->stats.heads_dropped;
 }
 
 void sound_cache_unpin(struct sound_cache *c, int entry)
@@ -161,6 +174,10 @@ uint32_t sound_cache_step(struct sound_cache *c, uint32_t budget)
         } else
             e->groups_ready = c->job.groups > e->hold_groups ? c->job.groups - e->hold_groups : 0;
         if (c->job.done || c->job.error) {
+            if (c->job.done && e->hold_groups) {                   /* a looped sound: the groups before the loop start's group, less one for the interpolation, can go once voices are past it */
+                uint32_t ls, le, xf;
+                if (c->source.loop(c->source.context, e->sound, &ls, &le, &xf) && (ls >> 5) > 4U) e->drop_groups = (uint16_t)(((ls >> 5) - 1U) & ~3U);
+            }
             e->state = 2;                                      /* a sound that did not decode in full is as far as it got; its groups_ready says */
             c->active = -1;
         } else if (!n)

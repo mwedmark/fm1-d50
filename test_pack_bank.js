@@ -8,7 +8,7 @@
 const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process');
 const root = __dirname, fontFile = process.argv.slice(2).find(a => !a.startsWith('--')) || path.join(root, '1mgm.sf2');
 const packedFile = (process.argv.find(a => a.startsWith('--packed=')) || '').slice(9);
-const { pack, unpackBfp8 } = require('./pack_bank.js');
+const { pack, unpackBfp8, encodeBfp8 } = require('./pack_bank.js');
 const wasiClang = path.join(root, 'fm1_open/build/tools/wasi-sdk-27.0-x86_64-windows/bin/clang.exe');
 const clang = process.env.FM1_CLANG || (fs.existsSync(wasiClang) ? wasiClang : 'clang');
 const app = path.join(root, 'fm1_open/live_cache'), dir = path.join(root, 'test_sound_cache'), wasmPath = path.join(dir, 'harness.wasm');
@@ -75,6 +75,66 @@ check(ordered && covered, `${nPack} entries in order of their offsets, each a so
 check(sameLossless, `${nLossless} lossless entries are the bank's bytes exactly`);
 check(nMp3 > 0 && snrSum / nMp3 > 10 && snrWorst > 0, `${nMp3} MP3 sounds against the BFP8 of the bank: mean ${(snrSum / Math.max(nMp3, 1)).toFixed(1)} dB, worst ${snrWorst.toFixed(1)} dB (${xfaded} with the loop crossfade)`);
 check(loopOk, 'no MP3 entry reaches past the stream');
+// ---- the half-rate sounds of --budget-kb: a looped tone keeps its pitch (the loop is a whole number of its periods before and after) and its loop stays seamless
+{
+  const { halveSound } = require('./pack_bank.js');
+  const period = 64.4, n = 4000, loop = [1288, 3220], x = new Int16Array(n);        // a tone of 64.4 samples a cycle; the loop holds 30 cycles exactly
+  for (let i = 0; i < n; i++) x[i] = Math.round(9000 * Math.sin(2 * Math.PI * (i < loop[1] ? i : loop[0] + ((i - loop[0]) % (loop[1] - loop[0]))) / period));
+  const h = halveSound(x, n, loop), L = loop[1] - loop[0], L2 = h.loop[1] - h.loop[0];
+  const cyc = L / period, per2 = L2 / cyc;                                          // the output's samples a cycle
+  let worst = 0; for (let i = h.loop[0]; i < h.loop[1] - 1; i++) worst = Math.max(worst, Math.abs(h.pcm[i] - 9000 * Math.sin(2 * Math.PI * (i - h.loop[0]) / per2 + 2 * Math.PI * h.loop[0] / per2)));
+  const seam = Math.abs(h.pcm[h.loop[0]] - 9000 * Math.sin(2 * Math.PI * (h.loop[1] / per2)));
+  check(L2 === Math.ceil(L / 2) && h.n === h.loop[1] && h.loop[0] === Math.floor(loop[0] * h.r), `the loop is ${L} samples and becomes ${L2} (ceil of half), the sound ends where the loop does (${h.n})`);
+  check(worst < 150 && seam < 150, `the tone is the same tone at about half the rate: the output follows the sine at ${per2.toFixed(3)} samples a cycle within ${worst.toFixed(0)} of 9000, and the loop seam is ${seam.toFixed(0)} off`);
+  const step = 0.5 * Math.pow(2, h.cents / 1200);                                    // the engine: an octave up in root key halves the step, the fine tuning multiplies it
+  check(Math.abs(step - h.r) < 1e-9, `with the root key an octave up and ${h.cents.toFixed(2)} cents of fine tuning the step is ${step.toFixed(6)} of the original, which is the resampling ratio ${h.r.toFixed(6)}`);
+  const flat = halveSound(Int16Array.from({ length: 2000 }, (_, i) => Math.round(8000 * Math.sin(2 * Math.PI * i / 100))), 2000, null);
+  check(flat.n === 1000 && flat.cents === 0 && !flat.loop && Math.abs(flat.pcm[500] - 8000 * Math.sin(2 * Math.PI * 1000 / 100)) < 150, `a sound without a loop is 2000 samples and becomes ${flat.n}, with no tuning change`);
+}
+// and a bank packed with a budget: the largest sounds go to half the rate, the zones follow (root key up, loop and length halved), and the pack still checks out
+{
+  const Q = pack(new Uint8Array(src), { 'budget-kb': 24 });
+  const qv = new DataView(Q.bytes.buffer, Q.bytes.byteOffset), nz2 = qv.getUint16(14, true), oz = qv.getUint32(32, true);
+  let ok = Q.halved > 0;
+  for (let i = 0; i < nz2; i++) { const o = oz + i * 24, len = qv.getUint32(o + 4, true), ls = qv.getUint32(o + 8, true), le = qv.getUint32(o + 12, true), loop = Q.bytes[o + 17] & 1; if (loop && !(le > ls && le <= len)) ok = false; }
+  check(ok && Q.halved > 0, `packed with a 24 KB budget: ${Q.halved} sounds at half rate; every zone's loop lies inside its sound`);
+}
+// and one packed with --drop-kb: sounds are left out, their zones take another zone's sample of the same preset, every zone still points at a sound the pack table has
+{
+  const total = P.length, D = pack(new Uint8Array(src), { 'drop-kb': 120, fill: 1, flash: 300000 }), E = pack(new Uint8Array(src), { fill: 1, flash: 300000 });
+  const qv = new DataView(D.bytes.buffer, D.bytes.byteOffset), nz2 = qv.getUint16(14, true), oz = qv.getUint32(32, true), op = qv.getUint32(80, true), np = qv.getUint32(84, true);
+  const known = new Set(); let mp3 = 0;
+  for (let i = 0; i < np; i++) { known.add(qv.getUint32(op + i * 24, true)); if (D.bytes[op + i * 24 + 16] === 2) mp3 += qv.getUint32(op + i * 24 + 4, true); }
+  let ok = true, loopOk = true, same = 0;
+  for (let i = 0; i < nz2; i++) { const o = oz + i * 24, len = qv.getUint32(o + 4, true), ls = qv.getUint32(o + 8, true), le = qv.getUint32(o + 12, true), loop = D.bytes[o + 17] & 1; if (!known.has(qv.getUint32(o, true))) ok = false; if (loop && !(le > ls && le <= len)) loopOk = false; }
+  check(D.dropped > 0 && np === D.sounds && np < E.sounds, `packed with --drop-kb 120: ${D.dropped} of ${E.sounds} sounds left out, ${np} in the pack table`);
+  check(ok && loopOk, 'every zone still points at a sound with an entry, and every loop lies inside its sound');
+  check(mp3 <= 120 * 1024 + 4096, `the MP3 sounds decode to ${(mp3 / 1024).toFixed(0)} KB, within the 120 KB asked (the cost of a whole bank: ${(E.bytes.length / 1024).toFixed(0)} KB file, ${E.sounds - E.lossless} MP3 sounds)`);
+}
+// --mp3 none: every sound BFP8, thinned (left out, halved, re-encoded) until the file fits; the halved BFP8 sounds decode to what was encoded
+{
+  const F = 300000, N = pack(new Uint8Array(src), { mp3: 'none', flash: F });
+  const qv = new DataView(N.bytes.buffer, N.bytes.byteOffset), nz2 = qv.getUint16(14, true), oz = qv.getUint32(32, true), op = qv.getUint32(80, true), np = qv.getUint32(84, true);
+  const len = new Map(); let mp3 = 0; for (let i = 0; i < np; i++) { len.set(qv.getUint32(op + i * 24, true), qv.getUint32(op + i * 24 + 4, true)); if (N.bytes[op + i * 24 + 16] !== 0) mp3++; }
+  let ok = true; for (let i = 0; i < nz2; i++) { const o = oz + i * 24, n = qv.getUint32(o + 4, true), ls = qv.getUint32(o + 8, true), le = qv.getUint32(o + 12, true), at = qv.getUint32(o, true); if (!len.has(at) || Math.ceil(n / 32) * 33 > len.get(at) || ((N.bytes[o + 17] & 1) && !(le > ls && le <= n))) ok = false; }
+  check(N.bytes.length <= F && mp3 === 0 && N.halved > 0 && ok, `--mp3 none in ${F} bytes: ${N.bytes.length} bytes, no MP3, ${N.halved} halvings, ${N.dropped} left out; every zone inside a sound of the pack table`);
+  const x = Int16Array.from({ length: 100 }, (_, i) => Math.round(20000 * Math.sin(i / 3))), y = unpackBfp8(encodeBfp8(x), 0, 100);
+  check(x.every((v, i) => Math.abs(v - y[i]) <= 128), "BFP8 encoding of a loud sine (shift 8) comes back within half a step");
+}
+// --mp3-only / --keep: only the picked sounds may be MP3, the kept ones stay BFP8 at full rate, a selector that picks nothing or is not one is an error
+{
+  const F = 300000, S = pack(new Uint8Array(src), { 'mp3-only': 'drums', keep: 'p0,s3', flash: F, 'min-bits': 5 });
+  const drums = l => /(^|; )d\d/.test(l.used), kept = l => /(^|; )p0(\/| )/.test(l.used) || l.no === 3;
+  const mp3Outside = S.list.filter(l => l.became.startsWith('mp3') && !drums(l)).length, nMp3 = S.list.filter(l => l.became.startsWith('mp3')).length;
+  const keptOk = S.list.filter(kept).every(l => l.became === 'bfp8 (kept)') && S.list.filter(l => l.became.includes('kept')).every(kept);
+  check(S.bytes.length <= F && nMp3 > 0 && mp3Outside === 0 && keptOk, `--mp3-only drums --keep p0,s3 in ${F} bytes: ${nMp3} MP3 sounds, all of drum kits; ${S.list.filter(kept).length} kept sounds BFP8 at full rate; ${JSON.stringify(S.shape)}`);
+  const changed = S.list.filter(l => /^bfp[5-7]|\//.test(l.became)).length;
+  check(S.heard.length === nMp3 + changed, `the preview has what the device plays for the ${nMp3} MP3 sounds and the ${changed} lossless ones with fewer bits or a lower rate`);
+  const U = pack(new Uint8Array(src), { mp3: 'oneshot', 'mp3-only': 's3', flash: F, 'min-bits': 5 });
+  check(U.list.filter(l => l.became.startsWith('mp3')).every(l => !l.loop || l.no === 3), '--mp3 oneshot with --mp3-only: an MP3 sound has no loop or is one of the picked');
+  const throws = o => { try { pack(new Uint8Array(src), o); return false; } catch (e) { return true; } };
+  check(throws({ keep: 'q1' }) && throws({ keep: 'p0:x' }) && throws({ 'mp3-only': 'd99' }), 'a selector that is not one, or that picks no sound, is an error');
+}
 const budget = 536576;
 console.log(`file ${P.length} bytes against ${budget} (${(P.length / budget * 100).toFixed(0)} %)`);
 console.log(failed ? `${failed} FAILED` : 'all passed'); process.exit(failed ? 1 : 0);

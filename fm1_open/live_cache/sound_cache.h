@@ -43,10 +43,12 @@ struct sound_cache_entry {
     uint16_t pins;
     uint8_t state;                                            /* 0 unused, 1 being decoded, 2 ready */
     uint8_t hold_groups;                                      /* the last groups, which the loop crossfade changes, are not ready before the sound is done */
+    uint16_t drop_groups;                                     /* once decoded: the groups at the start that nothing reads after a voice is past the loop's start (a multiple of 4); 0 none */
+    uint8_t dropped;                                          /* 1: those groups are given back (sound_cache_drop_head): the entry is no longer a whole sound and is not a hit */
 };
 
 struct sound_cache_stats {
-    uint32_t hits, misses, evictions, no_room, decoded_mp3_frames;
+    uint32_t hits, misses, evictions, no_room, decoded_mp3_frames, heads_dropped;
 };
 
 struct sound_cache {
@@ -71,6 +73,9 @@ int sound_cache_reserve(struct sound_cache *cache, uint32_t offset, uint32_t byt
 int sound_cache_request(struct sound_cache *cache, uint32_t sound, const uint8_t **direct);
 
 void sound_cache_unpin(struct sound_cache *cache, int entry);
+/* A sound with a loop: its first `drop_groups` groups are never read again once every voice that plays it is `drop_groups + 1` groups in (the voice keeps reading its own base pointer:
+ * nothing moves). They go back to the pool: the entry now starts after them and is no longer found by sound_cache_request. The caller checks the voices (fm1b.c, packed_drop_heads). */
+void sound_cache_drop_head(struct sound_cache *cache, int entry);
 const uint8_t *sound_cache_data(const struct sound_cache *cache, int entry);
 uint32_t sound_cache_groups_ready(const struct sound_cache *cache, int entry);
 int sound_cache_ready(const struct sound_cache *cache, int entry);

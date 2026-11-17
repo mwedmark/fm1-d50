@@ -23,7 +23,7 @@
 # -Rate, -DualCore, -Interp4 and the like write fm1_open\app\fm1b_rate.h (read by fm1b.h and live_cache\mp3_sound.h) the same way, and remove it after.
 # The dual-core code calls two functions of the SDK's library that are local symbols: the build links, reads their addresses with llvm-nm into
 # fm1_open\app\cpu1_sdk_addr.h (not committed) and links again until the addresses it was built with are the ones in the image (two or three links).
-param([Parameter(Mandatory)][string]$Name, [string]$Bank, [string]$Toolchain = 'D:\JL\pi32', [switch]$LiveCache = $true, [int]$CacheKB = 84, [int]$CacheFrames = 2, [switch]$FxPool,
+param([Parameter(Mandatory)][string]$Name, [string]$Bank, [string]$Toolchain = 'D:\JL\pi32', [switch]$LiveCache = $true, [int]$CacheKB = 84, [int]$CacheFrames = 2, [switch]$FxPool, [switch]$Warm, [switch]$DropHeads,
       [ValidateSet(32000, 44100)][int]$Rate = 44100, [ValidateSet('auto', 'on', 'off')][string]$DualCore = 'auto', [switch]$Interp4, [switch]$Linear, [switch]$SplitCheck, [switch]$FlashProbe, [ValidateRange(1,64)][int]$Voices = 40, [switch]$ClockSwitch)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -84,7 +84,7 @@ function Read-SdkAddr {
     $m
 }
 function Invoke-Link([int]$kb) {
-    $live = @{ LiveCache = [bool]$LiveCache; CacheKB = $kb; CacheFrames = $CacheFrames; FxPool = [bool]$FxPool }
+    $live = @{ LiveCache = [bool]$LiveCache; CacheKB = $kb; CacheFrames = $CacheFrames; FxPool = [bool]$FxPool; Warm = [bool]$Warm; DropHeads = [bool]$DropHeads }
     if ($split) { $script:written = @{}; foreach ($s in $sdkSymbols) { $script:written[$s] = 0x01C40000 }; Write-SdkAddr $script:written }   # placeholders of the same size
     ./sdk/Build.ps1 -FirmwareOnly -Toolchain $Toolchain @live
     if (!$?) { throw 'The build failed.' }
