@@ -159,7 +159,7 @@
     <div class="actions">
       <button id="dlSf2">Download .sf2</button>
       <button id="dlBin">Download .bin</button>
-      <button id="dlFlash" title="The bank as the fm1-emu emulator's flash file: open emu/index.html?flash=<file> with the firmware's .fwsc">Download .flash (emulator)</button>
+      <button id="dlFlash" title="The firmware (the install page's) and this bank in one fm1-emu save file: in the emulator click Import... and pick it">Download for the emulator (firmware + bank)</button>
       <button id="sendFm1" title="Writes the bank to the FM-1's flash over MIDI (SF2 player firmware, Chrome/Edge with Web MIDI)">Send to FM-1</button>
       <select id="midiOut" aria-label="MIDI output to the FM-1" hidden></select>
     </div>
@@ -1517,14 +1517,37 @@ function writeSf2(bank, name) {
   $('rate').addEventListener('change', () => { $('rateHz').value = $('rate').value; $('rateMode').value = 'manual'; syncCodec(); });
   syncCodec();
   $('dlBin').addEventListener('click', () => bank && download(bankBytes(), bankFileName(), 'application/octet-stream'));
-  // The bank as the fm1-emu emulator's flash file (emu/index.html?flash=...), as make_flash_overlay.js writes it: per 4096-byte sector a little-endian u32
-  // flash offset and the sector, the bank at the start of the user partition (0x7C000), the last sector padded with 0xFF.
-  function flashOverlay(b, start = 0x7C000) {
-    const S = 4096, n = Math.ceil(b.length / S), out = new Uint8Array(n * (4 + S)).fill(0xff), dv = new DataView(out.buffer);
-    for (let i = 0; i < n; i++) { dv.setUint32(i * (4 + S), start + i * S, true); out.set(b.subarray(i * S, Math.min(b.length, (i + 1) * S)), i * (4 + S) + 4); }
+  // The firmware and the bank in one file for the fm1-emu emulator: its save format (emu/persistence.js exportSave, "Import..." on its page), JSON with the
+  // whole update package (.fwsc, base64), its SHA-256 and the changed flash sectors, here the bank's from the start of the user partition (0x7C000), the
+  // last one padded with 0xFF. The firmware is the install page's (dist/install/manifest.json): its live-cache build for a packed bank. (Firmware
+  // sectors laid over another firmware's flash do not work: the emulator boots the package it was given and goes silent.)
+  function bankSectors(b, start = 0x7C000) {
+    const S = 4096, out = [];
+    for (let at = 0; at < b.length; at += S) { const d = new Uint8Array(S).fill(0xff); d.set(b.subarray(at, Math.min(b.length, at + S))); out.push({ at: start + at, data: d }); }
     return out;
   }
-  $('dlFlash').addEventListener('click', () => bank && download(flashOverlay(bankBytes()), bankFileName().replace(/\.(fm1b|bin)$/, '') + '.flash', 'application/octet-stream'));
+  const base64 = b => { let s = ''; for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192)); return btoa(s); };
+  async function emulatorSave(b) {
+    const r = await fetch('dist/install/manifest.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('dist/install/manifest.json is missing (run node make_install.js)');
+    const m = await r.json(), fw = bank.packed && !m.main_live ? m.live && m.live.firmware : m.firmware;
+    if (!fw) throw new Error('the install page has no live-cache firmware for a packed bank');
+    const p = await fetch(fw.url);
+    if (!p.ok) throw new Error(fw.url + ': HTTP ' + p.status);
+    const pkg = new Uint8Array(await p.arrayBuffer());
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', pkg))].map(x => x.toString(16).padStart(2, '0')).join('');
+    const name = (bank.packed && !m.main_live ? m.live.name : m.name || 'sf2player').replace(/\.fwsc$/i, '') + ' + ' + bankFileName().replace(/\.(fm1b|bin)$/, '');
+    return JSON.stringify({ format: 'fm1-emulator-save', version: 1, hash, name: name.slice(0, 256), package: base64(pkg),
+      sectors: bankSectors(b).map(s => ({ at: s.at, data: base64(s.data) })) });
+  }
+  $('dlFlash').addEventListener('click', async () => {
+    if (!bank) return;
+    const b = $('dlFlash'), was = b.textContent;
+    b.disabled = true; b.textContent = 'Building ...';
+    try { download(await emulatorSave(bankBytes()), bankFileName().replace(/\.(fm1b|bin)$/, '') + '.fm1save', 'application/json'); }
+    catch (e) { alert('The emulator file could not be made: ' + e.message); }
+    finally { b.disabled = false; b.textContent = was; }
+  });
   // ---- Send the bank to the FM-1 (the SF2 player firmware receives it as SysEx and writes it to flash) ----
   const send = { access: null, busy: false };
   function sendMsg(text, bad) { const el = $('sendStatus'); el.hidden = !text; el.textContent = text || ''; el.className = bad ? 'meta warn' : 'meta'; }
