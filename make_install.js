@@ -34,7 +34,9 @@ if (bank.toString('latin1', 0, 4) !== 'FM1B') throw new Error(bankPath + ' is no
 let crc = 0xffffffff;
 for (const b of bank) { crc ^= b; for (let k = 0; k < 8; k++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1)); }
 const out = option('out') || path.join(root, 'dist/install');
-const urlBase = path.relative(root, out).replace(/\\/g, '/') + '/';   // the page fetches from there (install.html?set=<folder name under dist/>)
+// the page fetches from dist/<folder>/ beside install.html (install.html?set=<folder>): the URL is that, wherever the folder is written (the site
+// build writes site/dist/install, whose page is site/install.html; a path from the repo root would say site/dist/install and miss)
+const urlBase = 'dist/' + path.basename(out) + '/';
 fs.mkdirSync(out, { recursive: true });
 fs.writeFileSync(path.join(out, 'firmware.fwsc'), firmware);
 fs.writeFileSync(path.join(out, 'bank.fm1b'), bank);
