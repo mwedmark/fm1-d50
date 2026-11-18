@@ -448,7 +448,7 @@ included. The sound data (`banks/default.fm1b`) and the MIDI files are not code 
 
 The corresponding source of every release is this repository at the release's tag.
 
-**The starter bank.** `banks/default.fm1b` (a 44.1 kHz bank, some sounds MP3 and the rest BFP8; also attached to each release as `gm_44k_fill.fm1b`, and what the install page puts on the FM-1) is a
+**The starter bank.** `banks/default.fm1b` (a 44.1 kHz bank without MP3: every sound BFP8, some with fewer bits; also attached to each release as `gm_44k_lossless.fm1b`, and what the install page puts on the FM-1; `banks/gm_mp3.fm1b` is the earlier one, with some sounds as MP3) is a
 General MIDI bank converted from a SoundFont whose header names E-mu Systems (1993) as the copyright holder. It is included so that you can
 get going at once; the SoundFont itself is not in the repository. If you want other sounds, make your own bank with the converter.
 
