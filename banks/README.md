@@ -7,6 +7,13 @@ and listed on the MIDI player page. **`default.fm1b` is selected when the site s
 - At most 1 MB (the emulator takes 256 flash sectors).
 - Everything in this folder is published on the public site. Add only a bank you may redistribute.
 
+## The banks here
+
+- `default.fm1b`: `1mgm.sf2` at 44.1 kHz, BFP8 with 16 sounds as MP3 (the live cache); also the install page's starter bank.
+- `gm_lossless.fm1b`: the same SoundFont without MP3 (no cache): `make_bank.js bfp8 44100 soundfonts/1mgm.sf2`, then
+  `pack_bank.js --mp3 none --min-bits 5 --drop-first 0`. Every sound is in it at full rate; 53 of 165 have fewer mantissa bits (28 at 7, 24 at 6, one at 5),
+  so it needs the firmware of 2026-11-17 or later (codec 4).
+
 ## Made by the workflow instead of committed
 
 The `bank` job of `.github/workflows/firmware.yml` can make `default.fm1b` itself: it takes the SoundFont `soundfonts/1mgm.sf2` of this repo (its result is the site's default bank) (or, if that is not there, fetches one from the repository secret `SF2_URL`:
