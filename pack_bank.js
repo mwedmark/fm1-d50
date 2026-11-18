@@ -12,6 +12,7 @@
 //   with a scale tuning or exclusive class, and lossless sounds stay. The flash it frees takes more sounds lossless (--fill 1). Can be combined with --budget-kb (halving comes after).
 // --mp3 none: no MP3 at all (every sound BFP8: no cache); --mp3 oneshot: only sounds without a loop may be MP3. What is lossless and does not fit in --flash is thinned:
 //   sounds that cost little are left out (as --drop-kb), then the biggest are halved (re-encoded as BFP8), then any sound that can be left out.
+//   --drop-first 0 skips the first step: a sound whose neighbour can stand in a few semitones away (a piano's middle samples) loses bits instead.
 // --min-bits N (4..7, with --mp3 none or oneshot): a lossless sound may also lose mantissa bits, down to N (codec 4); each step, a bit or a halving, is the one that
 //   costs the least error per byte saved.
 // --keep SEL, --mp3-only SEL: pick sounds by hand (by program, drum kit, key or number; see select() below), e.g. --mp3-only drums:42-46,49,51,57 --keep p0.
@@ -286,7 +287,7 @@ function pack(src, opt = {}) {
   };
   if (mp3Mode !== 'all' || mp3Set || keepSet) {                                                   // the lossless sounds must fit: first the cheap losses, then fewer bits or half rate, then any
     const over = () => sizeNow() > flash - margin, mine = t => lossless.has(t);
-    dropWhile(mine, over, 2 / 1024);
+    if (opt['drop-first'] !== 0) dropWhile(mine, over, 2 / 1024);                                   // --drop-first 0: fewer bits or half rate before any sound is left out
     shrinkWhile(mine, over, opt["min-bits"] || 8);
     dropWhile(mine, over, Infinity);
   }
@@ -378,7 +379,7 @@ if (typeof require !== 'undefined' && typeof module !== 'undefined' && require.m
   const fs = require('fs');
   const a = process.argv.slice(2), pos = a.filter((x, i) => !x.startsWith('--') && !(i && a[i - 1].startsWith('--')));
   const opt = {}; for (let i = 0; i < a.length; i++) if (a[i].startsWith('--')) { const v = a[++i]; opt[a[i - 1].slice(2)] = isNaN(Number(v)) ? v : Number(v); }
-  if (pos.length !== 2) { console.error('usage: node pack_bank.js in.fm1b out.fm1b [--kbit 64] [--flash 536576] [--margin 3072] [--fill 1] [--max-seconds 0.75] [--trim-loop 1] [--budget-kb 400] [--drop-kb 300] [--mp3 oneshot|none] [--min-bits 5] [--keep SEL] [--mp3-only SEL] [--list 1]'); process.exit(1); }
+  if (pos.length !== 2) { console.error('usage: node pack_bank.js in.fm1b out.fm1b [--kbit 64] [--flash 536576] [--margin 3072] [--fill 1] [--max-seconds 0.75] [--trim-loop 1] [--budget-kb 400] [--drop-kb 300] [--mp3 oneshot|none] [--min-bits 5] [--drop-first 0] [--keep SEL] [--mp3-only SEL] [--list 1]'); process.exit(1); }
   const r = pack(new Uint8Array(fs.readFileSync(pos[0])), opt);
   fs.writeFileSync(pos[1], r.bytes);
   if (opt.list) for (const l of r.list) console.log(`s${l.no}\t${l.seconds.toFixed(2)} s${l.loop ? ' loop' : ''}\t${l.became}\t${l.used}`);

@@ -118,6 +118,9 @@ check(loopOk, 'no MP3 entry reaches past the stream');
   const len = new Map(); let mp3 = 0; for (let i = 0; i < np; i++) { len.set(qv.getUint32(op + i * 24, true), qv.getUint32(op + i * 24 + 4, true)); if (N.bytes[op + i * 24 + 16] !== 0) mp3++; }
   let ok = true; for (let i = 0; i < nz2; i++) { const o = oz + i * 24, n = qv.getUint32(o + 4, true), ls = qv.getUint32(o + 8, true), le = qv.getUint32(o + 12, true), at = qv.getUint32(o, true); if (!len.has(at) || Math.ceil(n / 32) * 33 > len.get(at) || ((N.bytes[o + 17] & 1) && !(le > ls && le <= n))) ok = false; }
   check(N.bytes.length <= F && mp3 === 0 && N.halved > 0 && ok, `--mp3 none in ${F} bytes: ${N.bytes.length} bytes, no MP3, ${N.halved} halvings, ${N.dropped} left out; every zone inside a sound of the pack table`);
+  // --drop-first 0: fewer bits come before leaving sounds out, so with room enough for 5-bit sounds none is left out
+  const B = pack(new Uint8Array(src), { mp3: 'none', flash: F, 'min-bits': 5 }), B0 = pack(new Uint8Array(src), { mp3: 'none', flash: F, 'min-bits': 5, 'drop-first': 0 });
+  check(B0.bytes.length <= F && B0.dropped <= B.dropped && B0.narrowed >= B.narrowed, `--drop-first 0: ${B0.dropped} left out (${B.dropped} without it), ${B0.narrowed} with fewer bits (${B.narrowed})`);
   const x = Int16Array.from({ length: 100 }, (_, i) => Math.round(20000 * Math.sin(i / 3))), y = unpackBfp8(encodeBfp8(x), 0, 100);
   check(x.every((v, i) => Math.abs(v - y[i]) <= 128), "BFP8 encoding of a loud sine (shift 8) comes back within half a step");
 }
