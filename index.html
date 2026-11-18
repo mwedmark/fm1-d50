@@ -102,9 +102,9 @@
         <select id="codec">
           <option value="sea">SEA5 (5.7 bit/sample; simulator and download only: the FM-1 firmware does not play it)</option>
           <option value="sea6">SEA6 (6.7 bit/sample; simulator and download only)</option>
-          <option value="bfp8" selected>BFP8 (8 bit with a scale per 32 samples, 8.25 bit/sample, easy to decode)</option>
+          <option value="bfp8">BFP8 (8 bit with a scale per 32 samples, 8.25 bit/sample, easy to decode)</option>
           <option value="pcm">Raw PCM (simulator and download only)</option>
-          <option value="lossless">Lossless, fewer bits where needed, for the live-cache firmware of 2026-11-17 or later (no MP3, no cache: every sound plays from flash)</option>
+          <option value="lossless" selected>Lossless, fewer bits where needed, for the live-cache firmware of 2026-11-17 or later (no MP3, no cache: every sound plays from flash)</option>
           <option value="mp3_64">MP3 64 kbit/s, packed for the live-cache firmware (BFP8 at 44,100 Hz underneath)</option>
           <option value="mp3_128">MP3 128 kbit/s, packed for the live-cache firmware</option>
           <option value="mp3_256">MP3 256 kbit/s, packed for the live-cache firmware</option>
@@ -1247,7 +1247,7 @@ function writeSf2(bank, name) {
   function packChoice() {
     const mode = $('mp3Mode').value, o = {}, mp3 = selector('mp3'), keep = selector('keep');
     for (const r of rules) if (r.keys.replace(/\s+/g, '') && !/^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(r.keys.replace(/\s+/g, ''))) throw new Error('"' + r.keys + '" is not a list of keys: write MIDI note numbers and ranges, e.g. 42,44,46 or 60-72.');
-    if (isLossless()) return { mp3: 'none', 'min-bits': 5, ...(keep ? { keep } : {}) };   // no MP3 whatever the rules say
+    if (isLossless()) return { mp3: 'none', 'min-bits': 5, 'drop-first': 0, ...(keep ? { keep } : {}) };   // no MP3 whatever the rules say; fewer bits before any sound is left out
     if (mode === 'oneshot') o.mp3 = 'oneshot';
     if (mode !== 'all' && mp3) o['mp3-only'] = mp3;
     if (mode === 'chosen' && !mp3) o.mp3 = 'none';
@@ -1579,7 +1579,7 @@ function writeSf2(bank, name) {
     if (send.busy || !bank) return;
     let portsOpen = null;
     const bin = bankBytes();
-    if (!bank.packed && !bank.bfp) { sendMsg('The FM-1 firmware plays only BFP8 and MP3 banks. Convert again with BFP8 or MP3; nothing was sent or erased.', true); return; }
+    if (!bank.packed && !bank.bfp) { sendMsg('The FM-1 firmware plays only lossless, BFP8 and MP3 banks. Convert again with one of them; nothing was sent or erased.', true); return; }
     if (bin.length > FM1_SAMPLE_BANK) { sendMsg('The bank (' + fmtBytes(bin.length) + ') is larger than the flash (' + fmtBytes(FM1_SAMPLE_BANK) + ').', true); return; }
     if (!navigator.requestMIDIAccess) { sendMsg('This browser has no Web MIDI. Use Chrome or Edge.', true); return; }
     try {
@@ -1622,7 +1622,7 @@ function writeSf2(bank, name) {
           : last ? 'The FM-1 did not answer the final check of the bank (frame ' + (i + 1) + ' of ' + frames.length + ').'
           : 'The FM-1 stopped answering at frame ' + (i + 1) + ' of ' + frames.length + '.');
         if (status !== 0) throw new Error('The FM-1 rejected frame ' + (i + 1) + ': ' + (SEND_ERRORS[status] || 'error ' + status) +
-          (bank.packed && i === frames.length - 1 && status === 1 ? '. An MP3 bank plays only on the live-cache firmware.' : ''));
+          (bank.packed && i === frames.length - 1 && status === 1 ? '. A packed bank (lossless or MP3) plays only on the live-cache firmware.' : ''));
       }
       sendMsg('Done: ' + fmtBytes(bin.length) + ' is in the FM-1\'s flash and plays right away. It stays when the FM-1 is switched off.');
     } catch (e) {
