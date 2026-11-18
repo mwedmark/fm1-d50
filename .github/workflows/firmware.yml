@@ -195,17 +195,17 @@ jobs:
         run: |
           set -e
           cp LICENSE fm1_open/THIRD_PARTY.md fw/
-          cp banks/default.fm1b fw/gm_44k_fill.fm1b
+          cp banks/default.fm1b fw/gm_44k_lossless.fm1b
           cat > notes.md <<'NOTES'
           **What's new:** up to 40 notes can sound at once (32 before), so dense chords, pads and full-band songs drop fewer notes. Tested on an FM-1; nothing to change on your side, and existing banks keep working.
 
           Firmware package for the M-VAVE FM-1 (install it with https://mwedmark.github.io/fm1-sf2/install.html): the SF2 player at 44.1 kHz, with both CPU cores sharing the voices, four-point interpolation and the live cache. It plays MP3-packed banks made at 44.1 kHz (the converter page makes them) and BFP8 banks of any rate. Tested on an FM-1.
 
-          `gm_44k_fill.fm1b`: a General MIDI bank (44.1 kHz, 533 KB: a few sounds as MP3, the rest BFP8) to get started with; install.html puts it on the FM-1 with the firmware. Its sounds come from a General MIDI SoundFont whose header names E-mu Systems (1993) as the copyright holder; it is included for convenience, and you can replace it with a bank of your own made with the converter. Banks made for the 32 kHz firmware of v0.5.x (MP3 at 32 kHz) do not play on this one: convert them again.
+          `gm_44k_lossless.fm1b`: a General MIDI bank (44.1 kHz, 521 KB, no MP3: every sound BFP8, some with fewer bits; it needs this firmware or later) to get started with; install.html puts it on the FM-1 with the firmware. Its sounds come from a General MIDI SoundFont whose header names E-mu Systems (1993) as the copyright holder; it is included for convenience, and you can replace it with a bank of your own made with the converter. Banks made for the 32 kHz firmware of v0.5.x (MP3 at 32 kHz) do not play on this one: convert them again.
 
           Licence: GPL-3.0 with the FM1 SDK linking exception (`LICENSE`). The proprietary engine and the other third-party components keep their own terms (`THIRD_PARTY.md`); the engine may be redistributed in binary form for M-VAVE FM-1 devices only. The corresponding source is this repository at the tag of this release.
           NOTES
           sed -i 's/^          //' notes.md
           flag=""; if echo "$TAG" | grep -Eiq '^v?0\.|alpha|beta|rc'; then flag="--prerelease"; fi   # 0.x, alpha, beta and rc are pre-releases (the Firmware Hub tags them beta)
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" $flag --title "$TAG" --notes-file notes.md \
-            fw/sf2player.fwsc fw/gm_44k_fill.fm1b fw/LICENSE fw/THIRD_PARTY.md
+            fw/sf2player.fwsc fw/gm_44k_lossless.fm1b fw/LICENSE fw/THIRD_PARTY.md
