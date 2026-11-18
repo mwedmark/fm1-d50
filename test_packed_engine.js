@@ -10,18 +10,21 @@ const { pack } = require('./pack_bank.js');
 const wasiClang = path.join(root, 'fm1_open/build/tools/wasi-sdk-27.0-x86_64-windows/bin/clang.exe');
 const clang = process.env.FM1_CLANG || (fs.existsSync(wasiClang) ? wasiClang : 'clang');
 const app = path.join(root, 'fm1_open/app'), lc = path.join(root, 'fm1_open/live_cache'), mp3 = path.join(root, 'fm1_open/third_party/mp3'), stubs = path.join(root, 'test_sound_cache/stubs');
-function build(out, packed) {
+function build(out, packed, warm, drop, interp) {
   const srcs = [path.join(root, 'test_mt/wrap.c'), path.join(app, 'fm1b.c'), path.join(root, 'fm1_open/web/synth/sea_decode.c'), path.join(root, 'test_sound_cache/libc_min.c')];
   if (packed) srcs.push(path.join(root, 'test_mt/wrap_cache.c'), path.join(lc, 'mp3_sound.c'), path.join(lc, 'sound_cache.c'));
   const deps = srcs.concat(['fm1b.h', 'fm1b_config.h'].map(h => path.join(app, h)), [path.join(lc, 'sound_cache.h'), path.join(lc, 'mp3_sound.h')]);
   if (!fs.existsSync(out) || deps.some(s => fs.statSync(s).mtimeMs > fs.statSync(out).mtimeMs))
-    execFileSync(clang, ['--target=wasm32', '-nostdlib', '-O2', '-ffreestanding', '-fno-builtin', '-Wall', '-Wextra', '-Wno-unused-function', '-Wno-unused-parameter', '-DFM1_HOST_TEST', ...(packed ? ['-DFM1B_PACKED=1', '-DFM1B_BFP8_ONLY=1'] : []),
+    execFileSync(clang, ['--target=wasm32', '-nostdlib', '-O2', '-ffreestanding', '-fno-builtin', '-Wall', '-Wextra', '-Wno-unused-function', '-Wno-unused-parameter', '-DFM1_HOST_TEST', ...(packed && warm ? ['-DFM1B_WARM=1'] : []), ...(packed && drop ? ['-DFM1B_DROP_HEADS=1'] : []), ...(interp ? ['-DFM1B_INTERP4=1'] : []), ...(packed ? ['-DFM1B_PACKED=1', '-DFM1B_BFP8_ONLY=1'] : []),
       '-I' + stubs, '-I' + app, '-I' + path.join(app, 'synth'), '-I' + path.join(root, 'fm1_open/sdk/include'), '-I' + lc, '-I' + mp3, '-Wl,--no-entry', '-Wl,--export-dynamic',
       '-Wl,-z,stack-size=262144', '-Wl,--initial-memory=16777216', ...srcs, '-o', out], { stdio: 'inherit' });
   return new WebAssembly.Module(fs.readFileSync(out));
 }
 fs.mkdirSync(path.join(root, 'test_mt'), { recursive: true });
 const modPacked = build(path.join(root, 'test_mt/mt_packed.wasm'), true), modPlain = build(path.join(root, 'test_mt/mt_plain.wasm'), false);
+const modWarm = build(path.join(root, 'test_mt/mt_packed_warm.wasm'), true, true);   // FM1B_WARM=1: the firmware's build
+const modDrop = build(path.join(root, 'test_mt/mt_packed_drop.wasm'), true, false, true);   // FM1B_DROP_HEADS=1
+const modInterp = build(path.join(root, 'test_mt/mt_packed_interp4.wasm'), true, false, false, true);   // FM1B_INTERP4=1: the firmware's -Interp4
 const modDecode = (() => {                                // the stand-alone C decoder, to unpack the bank for the plain engine
   const wasmPath = path.join(root, 'test_sound_cache/harness.wasm'), dir = path.join(root, 'test_sound_cache');
   const sources = [path.join(dir, 'harness.c'), path.join(lc, 'mp3_sound.c'), path.join(lc, 'sound_cache.c'), path.join(dir, 'libc_min.c')];
@@ -187,5 +190,82 @@ check(st(6) === 0, `no note was over before its sound came (${st(6)})`);
   for (let ch = 0; ch < 16; ch++) w.mt_control(ch, 123, 0);
   for (let k = 0; k < 4000; k++) { small.block(); w.mt_cache_service(40); }
   check(sound > 0 && w.mt_voices() === 0 && w.mt_cache_stat(8) === 0, `24 KB pool, 6000 blocks of random notes on random programs: ${w.mt_cache_stat(1)} decodes, ${w.mt_cache_stat(2)} dropped, ${w.mt_cache_stat(3)} no room, ${w.mt_cache_stat(6)} notes over before their sound; voices ${w.mt_voices()}, pins ${w.mt_cache_stat(8)}`);
+}
+// ---- 4. FM1B_WARM: a program change has the cache decode the sound's middle sounds before the first note asks
+{
+  const mp3Programs = []; for (let pr = 0; pr < 128 && mp3Programs.length < 6; pr++) if (!usesLossless(pr) && zonesFor(pr, 60) === 1) mp3Programs.push(pr);
+  const t = player(modWarm, P, 262144), w = t.w;
+  let warmed = 0, early = 0, baseEarly = 0, sets = 0;
+  for (const pr of mp3Programs) {
+    const base = player(modPacked, P, 262144);                // a fresh cache each time: sounds the earlier programs share would be there already
+    for (const pl of [t, base]) { pl.w.mt_panic(); pl.block(); pl.w.mt_cache_service(1000); pl.w.mt_cache_service(1000); }
+    const miss0 = t.w.mt_cache_stat(1);
+    t.w.mt_program(0, pr); t.block(); base.w.mt_program(0, pr); base.block();
+    for (let k = 0; k < 40; k++) { t.w.mt_cache_service(1000); t.block(); base.w.mt_cache_service(1000); base.block(); }   // nothing plays: only the warming decodes
+    warmed += t.w.mt_cache_stat(1) - miss0;
+    t.w.mt_note(0, 60, 100); base.w.mt_note(0, 60, 100);
+    t.block(); base.block();                                  // the note's request is made in this block
+    t.w.mt_cache_service(0); base.w.mt_cache_service(0);      // the control task answers it but decodes nothing
+    const a = t.block(), b = base.block();
+    ++sets; if (a.some(v => v !== 0)) ++early; if (b.some(v => v !== 0)) ++baseEarly;
+    t.w.mt_panic(); base.w.mt_panic(); t.block(); base.block();
+  }
+  check(warmed > 0, `a program change decodes sounds ahead: ${warmed} decodes on ${sets} programs with no note played`);
+  check(early === sets && baseEarly === 0, `with a program change before it, a note sounds in the block after the control task answered, without decoding anything (${early} of ${sets} programs); without the warming none does (${baseEarly})`);
+  w.mt_cache_service(1000); t.block(); w.mt_cache_service(1000);
+  check(w.mt_cache_stat(8) === 0, `warming leaves no pin (pins held: ${w.mt_cache_stat(8)})`);
+  const small = player(modWarm, P, 24576);                    // a small pool: the warming gives way to notes and nothing is overwritten while it plays
+  let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff; let sound = 0;
+  for (let k = 0; k < 4000; k++) {
+    if (k % 25 === 0) small.w.mt_channel_program(Math.floor(rnd() * 15), 0, Math.floor(rnd() * 128));
+    if (k % 6 === 0) small.w.mt_note(Math.floor(rnd() * 15), 36 + Math.floor(rnd() * 60), 40 + Math.floor(rnd() * 80));
+    for (const v of small.block()) sound += Math.abs(v);
+    small.w.mt_cache_service(4);
+  }
+  for (let ch = 0; ch < 16; ch++) small.w.mt_control(ch, 123, 0);
+  for (let k = 0; k < 4000; k++) { small.block(); small.w.mt_cache_service(40); }
+  check(sound > 0 && small.w.mt_voices() === 0 && small.w.mt_cache_stat(8) === 0, `24 KB pool with warming, 4000 blocks of random notes and program changes: ${small.w.mt_cache_stat(1)} decodes, ${small.w.mt_cache_stat(3)} no room; voices ${small.w.mt_voices()}, pins ${small.w.mt_cache_stat(8)}`);
+}
+// ---- 5. a looped sound's first groups go back to the pool once the voices are past them, and nothing reads them again: the same note held on two players, one of which
+// scribbles over what was given back after every block, plays bit for bit the same
+{
+  let dropped = 0, programs = 0, same = true, worst = '';
+  for (let pr = 0; pr < 128 && programs < 12; pr++) {
+    if (usesLossless(pr) || zonesFor(pr, 60) !== 1) continue;
+    const a = player(modDrop, P, 262144), b = player(modDrop, P, 262144), pool = new Uint8Array(b.w.memory.buffer, b.w.mt_pool(), 262144);
+    for (const pl of [a, b]) { pl.w.mt_program(0, pr); pl.block(); pl.w.mt_note(0, 60, 100); }
+    const seen = new Map(); let freed = []; ++programs;
+    for (let k = 0; k < 900 && same; k++) {
+      for (const pl of [a, b]) pl.w.mt_cache_service(1000);
+      for (let i = 0; i < 160; i++) {
+        if (b.w.mt_cache_entry(i, 0) === 2 && !b.w.mt_cache_entry(i, 3)) seen.set(i, b.w.mt_cache_entry(i, 1));
+        else if (b.w.mt_cache_entry(i, 3) && seen.has(i) && !freed.some(f => f.i === i)) freed.push({ i, from: seen.get(i), to: b.w.mt_cache_entry(i, 1) });
+      }
+      for (const f of freed) pool.fill(0xa5, f.from, f.to);
+      const x = a.block(), y = b.block();
+      if (!x.every((v, j) => v === y[j])) { same = false; worst = `program ${pr}, block ${k}`; }
+    }
+    dropped += b.w.mt_cache_stat(9);
+  }
+  check(dropped > 0, `held notes on ${programs} programs: ${dropped} sounds gave their first groups back to the pool`);
+  check(same, `and a player that overwrites those groups after every block plays the same as one that does not ${worst}`);
+}
+// ---- 6. codec 4 (lossless sounds with 4..7-bit mantissas): the engine plays them as the same bank with those samples as BFP8 (codec 0), to the sample
+{
+  const o = { mp3: 'none', flash: 300000, 'min-bits': 5 }, N = pack(new Uint8Array(src), o), W = pack(new Uint8Array(src), { ...o, _wide: 1 });
+  const nv = new DataView(N.bytes.buffer, N.bytes.byteOffset), widths = new Map();
+  for (let i = 0; i < nv.getUint32(84, true); i++) { const e = nv.getUint32(80, true) + i * 24; if (N.bytes[e + 16] === 4) widths.set(N.bytes[e + 17], (widths.get(N.bytes[e + 17]) || 0) + 1); }
+  for (const [mod, how] of [[modPacked, 'linear'], [modInterp, '4-point']]) {
+  const a = player(mod, N.bytes, 262144), b = player(mod, W.bytes, 262144);
+  check(a.rc === 0 && b.rc === 0 && N.narrowed > 0, `a bank of ${N.bytes.length} bytes with ${N.narrowed} narrow sounds (${[...widths].map(([k, v]) => v + ' of ' + k + ' bits').join(', ')}) binds, and its wide twin (${W.bytes.length} bytes)`);
+  let same = true, loud = 0;
+  for (const prog of PROGRAMS) {
+    const x = run(a, prog, [36, 48, 60, 67, 79], false), y = run(b, prog, [36, 48, 60, 67, 79], false);
+    for (let k = 0; k < x.length; k++) for (let i = 0; i < 128; i++) { if (x[k][i] !== y[k][i]) same = false; loud = Math.max(loud, Math.abs(x[k][i])); }
+  }
+  check(same && loud > 1000, `${how} interpolation, ${PROGRAMS.length} programs, five notes each: the narrow bank plays sample for sample as its BFP8 twin (peak ${loud})`);
+  }
+  const bad = Uint8Array.from(N.bytes), e0 = [...Array(nv.getUint32(84, true)).keys()].map(i => nv.getUint32(80, true) + i * 24).find(e => N.bytes[e + 16] === 4);
+  bad[e0 + 17] = 3; check(player(modPacked, bad, 262144).rc !== 0, 'a codec 4 entry of 3 bits is refused');
 }
 console.log(failed ? `${failed} FAILED` : 'all passed'); process.exit(failed ? 1 : 0);

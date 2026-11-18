@@ -110,8 +110,8 @@ data as it will be after unpacking). The sample data in the file is the packed s
 | 4 | u32 | unpacked bytes, in the bank's sample format (bits 0-3 of the flags) |
 | 8 | u32 | packed offset, from the start of the sample data in the file |
 | 12 | u32 | packed bytes |
-| 16 | u8 | codec: 0 stored (a copy), 1 LZMA2, 2 MP3, 3 BFP8 in LZMA2 |
-| 17 | u8 | reserved, 0 |
+| 16 | u8 | codec: 0 stored (a copy), 1 LZMA2, 2 MP3, 3 BFP8 in LZMA2, 4 narrow BFP stored |
+| 17 | u8 | codec 4: mantissa bits, 4 to 7; else 0 |
 | 18 | u16 | codec 2: samples to drop at the start of the decoded stream (the encoder delay, once per stream), else 0 |
 | 20 | u16 | codec 2: loop crossfade in samples, 0 = none; else 0. It applies to every zone with the loop flag whose sample lies in the entry |
 | 22 | u16 | reserved, 0 |
@@ -127,6 +127,11 @@ data as it will be after unpacking). The sample data in the file is the packed s
   signal, far below MP3's (17 to 22 dB), so the extra step costs next to nothing.
 - **3** is a raw LZMA2 stream of BFP8 groups that is expanded to 16-bit PCM, so it is for a 16-bit bank, where codecs 2 and 3 can sit
   together: the lossless samples keep their BFP8 quality, the long tonal ones go through MP3. In a BFP8 bank a lossless sample is codec 1.
+- **4** (a BFP8 bank, the live-cache firmware since 2026-11-17) is one sound stored in BFP with `bits` (byte 17) of mantissa instead of 8, played in place like codec 0: groups of
+  32 samples of `1 + 4 * bits` bytes, a shift byte (0 to 15) and then the 32 mantissas packed low bit first (sample i is bits `i * bits` to `i * bits + bits - 1` of the
+  group's bytes after the shift byte), a sample being the signed mantissa `<< shift`. `packed bytes` is that size, `unpacked bytes` the sound's BFP8 size as for the
+  other codecs. 6 bits is 25 bytes a group (76 % of BFP8), 5 bits 21 (64 %), with about 6 dB more noise for each bit less (`pack_bank.js --min-bits`). A firmware
+  from before refuses the bank (it takes codecs 0 and 2 only).
 
 A bank with codec 1 or 0 only can keep BFP8 (or SEA) after unpacking, which takes half the SDRAM of 16-bit. A bank with MP3 samples can
 too, if it is a BFP8 bank (codec 2 as above); 16-bit is only worth it for samples that BFP8 would spoil, and BFP8 is 43.8 dB

@@ -10,6 +10,12 @@ param(
     [switch]$LiveCache = $true,
     [int]$CacheKB = 84,
     [int]$CacheFrames = 2,
+    # -FxPool: lay the live cache's pool over the engine library's two idle effect units (48 832 bytes of SRAM that this firmware never uses; fm1b_bank.c, RUNNING.md 1c).
+    [switch]$FxPool,
+    # -Warm: a program change has the cache decode a few of the new sound's MP3 sounds ahead (fm1b.c, FM1B_WARM). -DropHeads: a looped sound's first groups go back to the pool once the voices are
+    # past them (FM1B_DROP_HEADS). Both off by default: on the FM-1 (2026-11-16) the build with them and 6 MP3 frames a control cycle gave many dropouts that the emulator did not show.
+    [switch]$Warm,
+    [switch]$DropHeads,
     [string]$Toolchain = $env:FM1_PI32_TOOLCHAIN,
     [string]$SourceUrl = $env:FM1_SOURCE_URL
 )
@@ -382,7 +388,8 @@ $flags = @('-target','pi32v2','-integrated-as','-mcpu=r3','-mfprev1','-Wuninitia
 foreach ($dir in $include) { $flags += '-I' + (Join-Path $root $dir) }
 # The live cache build also leaves out the MIDI file player (FM1_MIDIPLAY=0; its code stays, the plain build has it): with it the image
 # was 2 235 bytes over the layout (2026-11-08), and a song takes its RAM from the same runtime heap the cache leaves short.
-if ($LiveCache) { $flags += @('-DFM1B_BFP8_ONLY=1', '-DFM1B_PACKED=1', "-DFM1B_CACHE_KB=$CacheKB", "-DFM1B_CACHE_FRAMES=${CacheFrames}U", '-DFM1_MIDIPLAY=0') }
+if ($LiveCache) { $flags += @('-DFM1B_BFP8_ONLY=1', '-DFM1B_PACKED=1', "-DFM1B_CACHE_KB=$CacheKB", "-DFM1B_CACHE_FRAMES=${CacheFrames}U", "-DFM1B_WARM=$([int][bool]$Warm)", "-DFM1B_DROP_HEADS=$([int][bool]$DropHeads)", '-DFM1_MIDIPLAY=0') }
+if ($FxPool) { if (!$LiveCache) { throw '-FxPool needs the live cache.' }; $flags += '-DFM1B_FX_POOL=1' }
 $objects = @()
 $commands = @()
 Push-Location -LiteralPath $build
@@ -442,6 +449,8 @@ try {
     $aclTx = ' + 1024'
     $aclRx = ' + 4096'
     $linker = [IO.File]::ReadAllText((Join-Path $sdk 'config/linker.ld.in')).Replace('@SBC_DECODER@',$sbcRoot).Replace('@ACL_TX_EXTRA@',$aclTx).Replace('@ACL_RX_EXTRA@',$aclRx)
+    $fxRules = if ($FxPool) { "        . = ALIGN(256);`n        fm1_fx_pool_begin = .;`n        *(.bss.fm1_effects)`n        fm1_fx_pool_split = .;`n        *(.bss.fm1_transport_bt_pcm)`n        *(.bss.fm1_cache_pool)`n        fm1_fx_pool_end = .;" } else { '' }
+    $linker = $linker.Replace('@FX_POOL@',$fxRules)
     Write-Text (Join-Path $build 'generated/linker') $linker
     $link = @('--plugin',(Join-Path $bin 'LLVMgold.dll'),'-o','sdk.elf') + $objects + @(
         '-flto','--plugin-opt=-pi32v2-always-use-itblock=false','--plugin-opt=-enable-ipra=true',

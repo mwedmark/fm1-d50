@@ -13,11 +13,15 @@
 
 #ifndef SOUND_CACHE_ENTRIES                                   /* sounds in the pool at once (28 bytes each); when all are taken the least recently used goes, as when the pool is full */
 #if defined(FM1B_CACHE_KB) && FM1B_CACHE_KB < 160             /* the firmware: 7 per 8 KB of pool (a decoded sound of 1mgm.sf2 is 2.8 KB on average), RAM is short */
-#define SOUND_CACHE_ENTRIES ((unsigned)FM1B_CACHE_KB * 7U / 8U)  /* 84 KB: 73 (with 160 and with 84 the song in fm1-emu gave the same, 2026-11-11) */
+#ifndef FM1B_FX_POOL
+#define FM1B_FX_POOL 0                                         /* 1: the pool also covers the SDK's idle effect units and Bluetooth audio buffer, 64 KB more (app/fm1b_bank.c) */
+#endif
+#define SOUND_CACHE_ENTRIES (((unsigned)FM1B_CACHE_KB + (FM1B_FX_POOL ? 64U : 0U)) * 7U / 8U + 4U)  /* 84 KB: 73 (+4 entries that stand for reserved bytes, sound_cache_reserve) (with 160 and with 84 the song in fm1-emu gave the same, 2026-11-11) */
 #else
 #define SOUND_CACHE_ENTRIES 160U
 #endif
 #endif
+#define SOUND_CACHE_RESERVED 0xffffffffU                      /* the `sound` of an entry that stands for reserved bytes */
 #define SOUND_CACHE_QUEUE 32U                                 /* sounds waiting to be decoded */
 
 enum sound_cache_result {
@@ -39,10 +43,12 @@ struct sound_cache_entry {
     uint16_t pins;
     uint8_t state;                                            /* 0 unused, 1 being decoded, 2 ready */
     uint8_t hold_groups;                                      /* the last groups, which the loop crossfade changes, are not ready before the sound is done */
+    uint16_t drop_groups;                                     /* once decoded: the groups at the start that nothing reads after a voice is past the loop's start (a multiple of 4); 0 none */
+    uint8_t dropped;                                          /* 1: those groups are given back (sound_cache_drop_head): the entry is no longer a whole sound and is not a hit */
 };
 
 struct sound_cache_stats {
-    uint32_t hits, misses, evictions, no_room, decoded_mp3_frames;
+    uint32_t hits, misses, evictions, no_room, decoded_mp3_frames, heads_dropped;
 };
 
 struct sound_cache {
@@ -58,12 +64,18 @@ struct sound_cache {
 };
 
 void sound_cache_init(struct sound_cache *cache, const struct sound_source *source, uint8_t *pool, uint32_t pool_bytes);
+/* Bytes of the pool that something else owns (the SDK's idle effect states, which the pool is laid over): an entry that is never a sound and never goes, so no sound is
+ * placed there. After sound_cache_init; 0 if there is no entry left. */
+int sound_cache_reserve(struct sound_cache *cache, uint32_t offset, uint32_t bytes);
 
 /* A note needs `sound`. Returns an entry number and pins it (hit, or a new decode started or queued), SOUND_CACHE_DIRECT with the address in *direct, or
  * SOUND_CACHE_NO_ROOM. */
 int sound_cache_request(struct sound_cache *cache, uint32_t sound, const uint8_t **direct);
 
 void sound_cache_unpin(struct sound_cache *cache, int entry);
+/* A sound with a loop: its first `drop_groups` groups are never read again once every voice that plays it is `drop_groups + 1` groups in (the voice keeps reading its own base pointer:
+ * nothing moves). They go back to the pool: the entry now starts after them and is no longer found by sound_cache_request. The caller checks the voices (fm1b.c, packed_drop_heads). */
+void sound_cache_drop_head(struct sound_cache *cache, int entry);
 const uint8_t *sound_cache_data(const struct sound_cache *cache, int entry);
 uint32_t sound_cache_groups_ready(const struct sound_cache *cache, int entry);
 int sound_cache_ready(const struct sound_cache *cache, int entry);

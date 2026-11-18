@@ -677,7 +677,11 @@ int groove_factory_load(unsigned index)
 }
 /* BLE MIDI follows the radio master switch. Ignore the old separate MIDI-off
  * preference without changing the stored settings layout or writing at boot. */
+#if FM1B_FX_POOL      /* -FxPool: the Bluetooth audio buffer belongs to the live cache, so A2DP is off whatever was saved; BLE MIDI is not touched */
+unsigned groove_settings_radio_flags(void) { return ((GROOVE_RADIO_ALL ^ settings.radio_off) | GROOVE_RADIO_MIDI) & ~(unsigned)GROOVE_RADIO_AUDIO; }
+#else
 unsigned groove_settings_radio_flags(void) { return (GROOVE_RADIO_ALL ^ settings.radio_off) | GROOVE_RADIO_MIDI; }
+#endif
 unsigned groove_settings_role_value(void) { return settings.role; }
 int groove_settings_radio(unsigned flags, unsigned role)
 {

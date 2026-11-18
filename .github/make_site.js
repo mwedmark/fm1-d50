@@ -1,12 +1,16 @@
 // Makes the GitHub Pages site: the fm1-emu emulator (MIT, https://github.com/joakimeriksson/fm1-emu) fetched from its own site,
 // this repo's firmware package registered in its catalog as "sf2", and the sine test bank as a flash overlay.
-//   node .github/make_site.js <outdir> <firmware.fwsc> [version] [build-identity.json] [live-cache.fwsc live-cache-identity.json]
+//   node .github/make_site.js <outdir> <firmware.fwsc> [version] [build-identity.json] [live-cache.fwsc live-cache-identity.json] [--emu-fwsc=<package>]
+// --emu-fwsc: the package the emulator and the MIDI player run (the workflow's lighter build: one core, linear interpolation), served as
+// sf2player_emu.fwsc; without it they run <firmware.fwsc>. The install page and the sf2player.fwsc link always give <firmware.fwsc>.
 // The same steps as start_emu.ps1 (RUNNING.md section 4), for a Pages site instead of a local server. With the build's
 // build-identity.json the site also gets install.html, which installs that firmware and the first bank on an FM-1 (make_install.js);
 // with the live-cache build's package and identity too, the install page offers that build as well (for MP3 banks). Since 2026-11-11 the
 // workflow builds one firmware, with the live cache (its identity says live_cache), and passes no second package.
 const fs = require('fs'), path = require('path'), { execFileSync } = require('child_process');
-const [out, fwsc, version = String(Date.now()), identity, liveFwsc, liveIdentity] = process.argv.slice(2);
+const args = process.argv.slice(2), emuArg = args.find(a => a.startsWith('--emu-fwsc=')), emuFwsc = emuArg && emuArg.slice('--emu-fwsc='.length);
+const [out, fwsc, version = String(Date.now()), identity, liveFwsc, liveIdentity] = args.filter(a => !a.startsWith('--'));
+if (emuFwsc && !fs.existsSync(emuFwsc)) throw new Error(`--emu-fwsc: no ${emuFwsc}`);
 if (!out || !fwsc) throw new Error('usage: node .github/make_site.js <outdir> <firmware.fwsc> [version]');
 const root = path.join(__dirname, '..');
 const SITE = 'https://joakimeriksson.github.io/fm1-emu/';
@@ -53,9 +57,11 @@ async function get(url) {
   const cat = JSON.parse(fs.readFileSync(catPath, 'utf8'));
   cat.firmwares = (cat.firmwares || []).filter(e => e.id !== 'sf2');
   cat.firmwares.unshift({ id: 'sf2', name: 'sf2player', version: version.slice(0, 7), author: 'mwedmark', license: 'GPL-3.0',
-    about: 'SoundFont player for the FM-1', repo: 'https://github.com/mwedmark/fm1-sf2', package: `sf2player.fwsc?v=${version}` });
+    about: 'SoundFont player for the FM-1' + (emuFwsc ? ' (the emulator build: one core, linear interpolation)' : ''), repo: 'https://github.com/mwedmark/fm1-sf2',
+    package: `${emuFwsc ? 'sf2player_emu' : 'sf2player'}.fwsc?v=${version}` });
   fs.writeFileSync(catPath, JSON.stringify(cat, null, 2));
   fs.copyFileSync(fwsc, path.join(out, 'sf2player.fwsc'));
+  if (emuFwsc) fs.copyFileSync(emuFwsc, path.join(out, 'sf2player_emu.fwsc'));
 
   // Flash overlay as make_flash_overlay.js writes it: records of a little-endian u32 flash offset and 4096 bytes.
   const overlay = bank => {
@@ -169,7 +175,7 @@ The sine test bank has seven programs (plain, vibrato, tremolo, delayed vibrato,
 <li><a href="player.html"><b>MIDI player</b></a>: the emulator as a MIDI output (JZZ.js): play the MIDI files of the repo or one of your own.
 Its <b>Copy link</b> gives a link to a bank and song that plays at the first click, e.g. <a href="player.html?song=astley&amp;play=1">player.html?song=astley&amp;play=1</a>.</li>
 ${install ? `<li><a href="install.html"><b>Install on your FM-1</b></a>: this firmware and the default bank over USB (Chrome or Edge). It also replaces M-VAVE's original firmware and other firmware such as Felucca, after asking.</li>\n` : ''}<li><a href="converter.html"><b>Bank converter</b></a>: an SF2 file to an FM1B bank (SEA5, SEA6, BFP8, PCM, or MP3 at 64, 128 or 256 kbit/s for the live-cache firmware), tried in the simulator before you download it or send it to an FM-1.</li>
-<li><a href="sf2player.fwsc">sf2player.fwsc</a>, the firmware package of this build.</li>
+<li><a href="sf2player.fwsc">sf2player.fwsc</a>, the firmware package of this build.${emuFwsc ? ' The emulator runs a lighter build of it (<a href="sf2player_emu.fwsc">sf2player_emu.fwsc</a>: one core and linear interpolation instead of two cores and four-point), which a computer emulates with about 40 % less work.' : ''}</li>
 </ul>
 <p>Press HOME for the channel page. EDIT arms the channel under the cursor and GLO steps its MIDI channel.</p>
 ${beer}<p><small>The emulator is MIT licensed, see <a href="LICENSE-fm1-emu.txt">its licence</a>; JZZ.js and its SMF player are MIT too (<a href="LICENSE-jzz.txt">licence</a>).</small></p>

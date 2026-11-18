@@ -78,6 +78,17 @@ jobs:
           Copy-Item fm1_open/build/dx7/build-identity.json out/build-identity.json   # the install page's manifest needs the build id
           Copy-Item build.log out/build.log
 
+      - name: Build the emulator's firmware
+        shell: powershell
+        run: |
+          # The site's emulator and MIDI player run a lighter build of the same firmware: one core and linear interpolation, 40 voices.
+          # Emulating both cores and the four-point loop costs a computer about 40 % more (fm1-emu, Astley song); the FM-1 gets the default build.
+          # Built after the package is collected: it writes the same build folder.
+          $tc = Join-Path $env:GITHUB_WORKSPACE 'jl-toolchain\pi32'
+          ./build_fw.ps1 -Name sf2player_emu -Toolchain $tc -Bank banks/default.fm1b -DualCore off -Linear 2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE\build_emu.log"
+          if (!$?) { throw 'The emulator build failed.' }
+          Copy-Item fm1_open/build/dx7/generated/FM1_OFFICIAL_OPEN.fwsc out/sf2player_emu.fwsc
+
       - uses: actions/upload-artifact@v4
         with:
           name: firmware
@@ -139,7 +150,7 @@ jobs:
       - name: JZZ.js (pinned in .github/site/package-lock.json)
         run: npm ci --ignore-scripts --prefix .github/site
       - name: Make the site
-        run: node .github/make_site.js site fw/sf2player.fwsc "${GITHUB_SHA}" fw/build-identity.json
+        run: node .github/make_site.js site fw/sf2player.fwsc "${GITHUB_SHA}" fw/build-identity.json --emu-fwsc=fw/sf2player_emu.fwsc
       - uses: actions/upload-artifact@v4
         with:
           name: emulator-site

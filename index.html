@@ -57,6 +57,14 @@
   .picklist .num { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 4.5em; }
   .picklist h4 { grid-column: 1 / -1; margin: 6px 0 2px; font-size: 13px; color: var(--muted); }
   #pickSum { margin: 8px 0 12px; }
+  .rules { display: grid; gap: 6px; margin-bottom: 8px; }
+  .rule { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) minmax(0, 1.4fr) auto; gap: 6px; align-items: center; font-size: 14px; }
+  .rule select, .rule input, #packSounds select { width: 100%; min-width: 0; font: inherit; font-size: 14px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+  .rule .keysBox { display: flex; gap: 4px; min-width: 0; }
+  .rule button { padding: 4px 10px; }
+  @media (max-width: 520px) { .rule { grid-template-columns: 1fr auto; } .rule .keysBox, .rule .act { grid-column: 1 / 2; } }
+  #packSounds td { vertical-align: top; }
+  #packSounds tr.mine td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .keys { display: flex; flex-wrap: wrap; gap: 3px; margin: 8px 0; }
   .keys button { min-width: 38px; padding: 14px 4px 6px; font-size: 11px; background: var(--panel); color: var(--ink); border-radius: 4px; }
   .keys button.black { background: var(--ink); color: var(--bg); padding-top: 6px; }
@@ -96,6 +104,7 @@
           <option value="sea6">SEA6 (6.7 bit/sample; simulator and download only)</option>
           <option value="bfp8" selected>BFP8 (8 bit with a scale per 32 samples, 8.25 bit/sample, easy to decode)</option>
           <option value="pcm">Raw PCM (simulator and download only)</option>
+          <option value="lossless">Lossless, fewer bits where needed, for the live-cache firmware of 2026-11-17 or later (no MP3, no cache: every sound plays from flash)</option>
           <option value="mp3_64">MP3 64 kbit/s, packed for the live-cache firmware (BFP8 at 44,100 Hz underneath)</option>
           <option value="mp3_128">MP3 128 kbit/s, packed for the live-cache firmware</option>
           <option value="mp3_256">MP3 256 kbit/s, packed for the live-cache firmware</option>
@@ -126,6 +135,22 @@
           <option value="16">16 bit</option>
         </select></label>
     </div>
+    <div id="mp3Pick" hidden>
+      <label class="f"><span>Which sounds may be MP3</span>
+        <select id="mp3Mode">
+          <option value="all" selected>Any: MP3 where it sounds right, BFP8 where it does not (fits the most)</option>
+          <option value="oneshot">Only sounds without a loop (drums, plucks): looped sounds stay lossless, so the cache holds only short sounds</option>
+          <option value="chosen">Only what the rules below allow (with no such rule none: every sound lossless, fewer bits or a lower rate where the flash needs it, no cache)</option>
+        </select></label>
+      <div id="rules" class="rules" aria-label="Rules for single instruments and drum sounds"></div>
+      <div class="pickbar">
+        <button type="button" data-rule="hats">+ Hi-hats and cymbals may be MP3</button>
+        <button type="button" data-rule="drums">+ All drums may be MP3</button>
+        <button type="button" data-rule="keep">+ Keep an instrument untouched</button>
+        <button type="button" data-rule="blank">+ Rule</button>
+      </div>
+      <p class="meta" id="rulesInfo"></p>
+    </div>
     <div class="actions"><button id="go" class="primary">Convert</button></div>
   </section>
 
@@ -134,10 +159,21 @@
     <div class="actions">
       <button id="dlSf2">Download .sf2</button>
       <button id="dlBin">Download .bin</button>
+      <button id="dlFlash" title="The firmware (the install page's) and this bank in one fm1-emu save file: in the emulator click Import... and pick it">Download for the emulator (firmware + bank)</button>
       <button id="sendFm1" title="Writes the bank to the FM-1's flash over MIDI (SF2 player firmware, Chrome/Edge with Web MIDI)">Send to FM-1</button>
       <select id="midiOut" aria-label="MIDI output to the FM-1" hidden></select>
     </div>
     <p class="meta" id="sendStatus" hidden></p>
+    <div id="packView" hidden>
+      <p class="meta" id="packHelp"></p>
+      <div class="pickbar"><input id="packFilter" type="search" placeholder="Filter by instrument, drum sound or what it became" aria-label="Filter the sounds"></div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th class="n">#</th><th>Played by</th><th class="n">Length</th><th>Became</th><th>Choice</th></tr></thead>
+          <tbody id="packSounds"></tbody>
+        </table>
+      </div>
+    </div>
     <div class="tablewrap">
       <table>
         <thead><tr><th>Sound</th><th class="n">Notes</th><th class="n">Root</th><th>Loop</th><th class="n">Bytes</th></tr></thead>
@@ -311,6 +347,7 @@ function allSampleZones(sf) {
 
 // ---- Choosing what fits ----------------------------------------------------
 
+const MP3_BUDGET_KB = 400;   // the MP3 sounds decoded: at most this much (the firmware's cache pool is about 137 KB); the largest are then played at half the rate (pack_bank.js, --budget-kb)
 const MP3_FILL = 1.9;     // an MP3 bank holds about this many times its flash in BFP8 sounds
 // About how many bytes the sounds of the presets `list` take at `rate` and `perSample` bytes a sample (shared sounds counted once; loops and tables left out).
 function estimateSoundBytes(sf, list, rate, perSample) {
@@ -1050,6 +1087,7 @@ function writeSf2(bank, name) {
     });
     sel.value = -2;
     $('pick').hidden = true;
+    rules = []; soundChoice.clear(); soundSig = ''; drawRules(); $('mp3Pick').hidden = !packing(); syncPackUi();
     $('opts').hidden = false;
   }
 
@@ -1086,29 +1124,30 @@ function writeSf2(bank, name) {
   // About how many bytes the ticked instruments' sounds take in the codec chosen (the sounds they share counted once; loops,
   // which are unrolled to a whole number of frames, and the tables are left out), to see what fits before converting.
   function soundBytes(list) {
-    return estimateSoundBytes(sf, list, mp3Kbit() ? 44100 : rateFor(list), bytesPerSample());
+    return estimateSoundBytes(sf, list, packing() ? 44100 : rateFor(list), bytesPerSample());
   }
   // Bytes one sample takes in the codec chosen (the MP3 packing is judged by its BFP8 bank underneath).
   function bytesPerSample() {
     const codec = $('codec').value;
-    return mp3Kbit() || codec === 'bfp8' ? 33 / 32 : codec === 'sea' ? 228 / 320 : codec === 'sea6' ? 268 / 320 : +$('bits').value / 8;
+    return packing() || codec === 'bfp8' ? 33 / 32 : codec === 'sea' ? 228 / 320 : codec === 'sea6' ? 268 / 320 : +$('bits').value / 8;
   }
   // The rate the sounds of `list` are estimated at: the box's in Manual; in Auto the highest at which they about fill the flash (the conversion then
   // measures the real bank and lowers it until the file fits).
   const RATE_MIN = 4000, RATE_MAX = 44118, AUTO_FILL = 0.97;
   const manualRate = () => Math.round(+$('rateHz').value) || 0;
-  const isAuto = () => $('rateMode').value === 'auto' && !mp3Kbit();
+  const isAuto = () => $('rateMode').value === 'auto' && !packing();
   function autoGuess(list) {
     const perHz = estimateSoundBytes(sf, list, 1, bytesPerSample());
     return perHz > 0 ? Math.max(RATE_MIN, Math.min(RATE_MAX, Math.floor(FM1_SAMPLE_BANK * AUTO_FILL / perHz))) : RATE_MAX;
   }
   const rateFor = list => isAuto() ? autoGuess(list) : manualRate();
   function pickSum() {
-    const list = chosen(), kbit = mp3Kbit(), bytes = soundBytes(list);
+    const list = chosen(), kbit = mp3Kbit(), lossless = isLossless(), bytes = soundBytes(list);
     const melodic = list.filter(i => slotOf(sf.presets[i]) < 128).length;
     $('pickSum').innerHTML = list.length + ' of ' + pickBoxes().length + ' ticked (' + melodic + ' melodic, ' + (list.length - melodic) + ' drum kits): sounds about ' +
-      fmtBytes(bytes) + (kbit ? ' as BFP8 (the MP3 packing makes that about half at 64 kbit/s)' : '') + ', against the device\'s ' + fmtBytes(FM1_SAMPLE_BANK) +
-      (bytes > FM1_SAMPLE_BANK * (kbit ? MP3_FILL : 1) ? ' <span class="warn">(too much' + (kbit ? ' before packing' : '') + ')</span>' : '') + '. Tables and loops add a little.' +
+      fmtBytes(bytes) + (kbit ? ' as BFP8 (the MP3 packing makes that about half at 64 kbit/s)' : lossless ? ' as BFP8 at 44,100 Hz (the packing gives sounds fewer bits or a lower rate until they fit)' : '') + ', against the device\'s ' + fmtBytes(FM1_SAMPLE_BANK) +
+      (lossless ? (bytes > FM1_SAMPLE_BANK * 2 ? ' <span class="warn">(more than twice the flash: much of it will be at 5 bits, half or a quarter of the rate)</span>' : '')
+        : bytes > FM1_SAMPLE_BANK * (kbit ? MP3_FILL : 1) ? ' <span class="warn">(too much' + (kbit ? ' before packing' : '') + ')</span>' : '') + '. Tables and loops add a little.' +
       (isAuto() ? ' Auto: about ' + rateFor(list) + ' Hz.' : '');
   }
   // "Fill from MIDI files": tick what the files play (midiUsage and pickForMidi, in the core script) and nothing else. Whether it fits the flash is
@@ -1134,6 +1173,7 @@ function writeSf2(bank, name) {
   $('preset').addEventListener('change', () => { $('pick').hidden = $('preset').value !== 'pick'; if (!$('pick').hidden) pickSum(); });
   $('pickList').addEventListener('change', pickSum);
   for (const id of ['codec', 'rate', 'rateMode', 'rateHz', 'bits']) $(id).addEventListener('change', () => { if (sf && !$('pick').hidden) pickSum(); });
+  $('codec').addEventListener('change', () => { $('mp3Pick').hidden = !packing(); syncPackUi(); });
   $('opts').querySelector('.pickbar').addEventListener('click', e => {
     if (e.target.id === 'pickFill') { $('pickMidi').click(); return; }
     const how = e.target.dataset && e.target.dataset.pick; if (!how) return;
@@ -1149,17 +1189,139 @@ function writeSf2(bank, name) {
 
   // MP3: the codec menu's kbit/s, else 0. The bank is made as BFP8 at 32 kHz and then packed by pack_bank.js (the live-cache firmware's format).
   const mp3Kbit = () => +($('codec').value.match(/^mp3_(\d+)$/) || [0, 0])[1];
-  // The file of the bank: the packed one for MP3, else as written.
+  // "Lossless, fewer bits where needed": the same packing with no MP3 (pack_bank.js --mp3 none --min-bits 5): every sound plays in place from flash, no cache
+  const isLossless = () => $('codec').value === 'lossless';
+  const packing = () => !!mp3Kbit() || isLossless();
+  const packTag = () => mp3Kbit() ? 'mp3_' + mp3Kbit() : isLossless() ? 'lossless' : '';
+  // The file of the bank: the packed one for MP3 and lossless, else as written.
   const bankBytes = () => bank.packed ? bank.packed.bytes : writeFm1(bank, bank.info);
-  const bankFileName = (kbit = bank.packed && bank.packed.kbit) => baseName + (kbit ? '_fm1_mp3_' + kbit + '.fm1b' : '_fm1.bin');
-  const bankOptions = (rate = manualRate()) => mp3Kbit() ? { rate: 44100, bits: 8, sea: false, seaBits: 5, bfp: true } :
+  const bankFileName = (tag = bank.packed && bank.packed.tag) => baseName + (tag ? '_fm1_' + tag + '.fm1b' : '_fm1.bin');
+  const bankOptions = (rate = manualRate()) => packing() ? { rate: 44100, bits: 8, sea: false, seaBits: 5, bfp: true } :
     { rate, bits: +$('bits').value, sea: $('codec').value.startsWith('sea'), seaBits: $('codec').value === 'sea6' ? 6 : 5, bfp: $('codec').value === 'bfp8' };
+  // ---- MP3: which sounds may be MP3 (pack_bank.js --mp3 oneshot, --mp3-only, --keep). A rule names an instrument, a drum kit or every kit, maybe with keys, and says
+  // "may be MP3" or "keep untouched" (lossless, 8 bits, full rate, never left out). After a conversion each sound in the result's list can have a choice of its own
+  // (s<N> in pack_bank.js); those hold while the bank has the same sounds (the same instruments ticked).
+  const GM_DRUMS = { 35: 'Kick 2', 36: 'Kick', 37: 'Side stick', 38: 'Snare', 39: 'Clap', 40: 'Snare 2', 41: 'Low floor tom', 42: 'Closed hi-hat', 43: 'High floor tom', 44: 'Pedal hi-hat',
+    45: 'Low tom', 46: 'Open hi-hat', 47: 'Low-mid tom', 48: 'High-mid tom', 49: 'Crash', 50: 'High tom', 51: 'Ride', 52: 'China', 53: 'Ride bell', 54: 'Tambourine', 55: 'Splash',
+    56: 'Cowbell', 57: 'Crash 2', 58: 'Vibraslap', 59: 'Ride 2', 60: 'High bongo', 61: 'Low bongo', 62: 'Mute high conga', 63: 'Open high conga', 64: 'Low conga', 65: 'High timbale',
+    66: 'Low timbale', 67: 'High agogo', 68: 'Low agogo', 69: 'Cabasa', 70: 'Maracas', 71: 'Short whistle', 72: 'Long whistle', 73: 'Short guiro', 74: 'Long guiro', 75: 'Claves',
+    76: 'High wood block', 77: 'Low wood block', 78: 'Mute cuica', 79: 'Open cuica', 80: 'Mute triangle', 81: 'Open triangle' };
+  const DRUM_GROUPS = [['', 'All keys'], ['42,44,46,49,51,52,53,55,57,59', 'Hi-hats and cymbals'], ['42,44,46', 'Hi-hats'], ['49,51,52,53,55,57,59', 'Cymbals'],
+    ['37,38,39,40', 'Snares and claps'], ['35,36', 'Kicks'], ['41,43,45,47,48,50', 'Toms'], ['54,56,58,60-81', 'Percussion']];
+  const ACTS = [['mp3', 'may be MP3'], ['keep', 'keep untouched']];
+  let rules = [], soundChoice = new Map(), soundSig = '';
+  const ruleTargets = () => [['drums', 'Every drum kit'], ...sf.presets.filter(p => slotOf(p) >= 128).sort((a, b) => a.preset - b.preset).map(p => ['d' + p.preset, 'Kit ' + String(p.preset).padStart(3, '0') + ' ' + p.name]),
+    ...sf.presets.filter(p => slotOf(p) >= 0 && slotOf(p) < 128).sort((a, b) => a.preset - b.preset).map(p => ['p' + p.preset, String(p.preset).padStart(3, '0') + ' ' + p.name])];
+  const opt = (v, t, on) => { const o = document.createElement('option'); o.value = v; o.textContent = t; o.selected = on; return o; };
+  function drawRules() {
+    const box = $('rules'); box.textContent = '';
+    const targets = sf ? ruleTargets() : [];
+    rules.forEach((r, i) => {
+      const row = document.createElement('div'); row.className = 'rule';
+      const t = document.createElement('select'); t.setAttribute('aria-label', 'Instrument or drum kit');
+      for (const [v, n] of targets) t.appendChild(opt(v, n, v === r.target));
+      t.onchange = () => { r.target = t.value; drawRules(); };
+      const kb = document.createElement('div'); kb.className = 'keysBox';
+      const k = document.createElement('input'); k.value = r.keys; k.placeholder = 'all keys, or e.g. 42,44 or 60-72'; k.setAttribute('aria-label', 'Keys (MIDI note numbers)');
+      k.oninput = () => { r.keys = k.value; rulesInfo(); };
+      kb.appendChild(k);
+      if (r.target === 'drums' || r.target[0] === 'd') {
+        const g = document.createElement('select'); g.setAttribute('aria-label', 'Drum sounds'); g.style.width = 'auto';
+        const match = DRUM_GROUPS.find(([v]) => v === r.keys.replace(/\s+/g, ''));
+        g.appendChild(opt('*', match ? match[1] : 'Keys typed', false)).hidden = true; g.value = '*';
+        for (const [v, n] of DRUM_GROUPS) g.appendChild(opt(v, n, false));
+        g.onchange = () => { r.keys = g.value; drawRules(); };
+        kb.appendChild(g);
+      }
+      const a = document.createElement('select'); a.className = 'act'; a.setAttribute('aria-label', 'What the sounds may be');
+      for (const [v, n] of ACTS) if (v !== 'mp3' || !isLossless() || r.act === 'mp3') a.appendChild(opt(v, n, v === r.act));
+      a.onchange = () => { r.act = a.value; rulesInfo(); };
+      const x = document.createElement('button'); x.type = 'button'; x.textContent = '×'; x.title = 'Remove the rule'; x.onclick = () => { rules.splice(i, 1); drawRules(); };
+      row.append(t, kb, a, x); box.appendChild(row);
+    });
+    rulesInfo();
+  }
+  // the selectors of pack_bank.js for one kind of rule, with the sounds' own choices
+  const selector = act => [...rules.filter(r => r.act === act).map(r => r.target + (r.keys.replace(/\s+/g, '') ? ':' + r.keys.replace(/\s+/g, '') : '')),
+    ...[...soundChoice].filter(([, a]) => a === act).map(([n]) => 's' + n)].join(',');
+  function packChoice() {
+    const mode = $('mp3Mode').value, o = {}, mp3 = selector('mp3'), keep = selector('keep');
+    for (const r of rules) if (r.keys.replace(/\s+/g, '') && !/^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(r.keys.replace(/\s+/g, ''))) throw new Error('"' + r.keys + '" is not a list of keys: write MIDI note numbers and ranges, e.g. 42,44,46 or 60-72.');
+    if (isLossless()) return { mp3: 'none', 'min-bits': 5, ...(keep ? { keep } : {}) };   // no MP3 whatever the rules say
+    if (mode === 'oneshot') o.mp3 = 'oneshot';
+    if (mode !== 'all' && mp3) o['mp3-only'] = mp3;
+    if (mode === 'chosen' && !mp3) o.mp3 = 'none';
+    if (keep) o.keep = keep;
+    if (mode !== 'all' || keep) o['min-bits'] = 5;
+    return o;
+  }
+  // Lossless: no MP3 choice to make, only what to keep untouched
+  function syncPackUi() {
+    const l = isLossless();
+    $('mp3Mode').closest('label').hidden = l;
+    for (const b of $('mp3Pick').querySelectorAll('[data-rule=hats],[data-rule=drums]')) b.hidden = l;
+    if (sf) drawRules();
+    if (bank && bank.packed) drawPackView();
+  }
+  function rulesInfo() {
+    if (isLossless()) {
+      const ignored = rules.filter(r => r.act === 'mp3').length + [...soundChoice.values()].filter(a => a === 'mp3').length;
+      $('rulesInfo').innerHTML = 'Every sound lossless. What does not fit loses mantissa bits (down to 5) or plays at half or a quarter of the rate, the least audible first; ' +
+        'what you keep untouched never does (it costs the others more).' + (ignored ? ' <span class="warn">' + ignored + ' "may be MP3" choices do not count here.</span>' : '');
+      return;
+    }
+    const mode = $('mp3Mode').value, nMp3 = rules.filter(r => r.act === 'mp3').length + [...soundChoice.values()].filter(a => a === 'mp3').length;
+    const own = soundChoice.size ? ' ' + soundChoice.size + ' sound' + (soundChoice.size === 1 ? ' has its' : 's have their') + ' own choice in the list of the result.' : '';
+    $('rulesInfo').innerHTML = (mode === 'all' && nMp3 ? '<span class="warn">With "Any" every sound may be MP3 already: the "may be MP3" rules count with the other two choices.</span> ' : '') +
+      (mode === 'chosen' && !nMp3 ? 'No sound may be MP3: every sound lossless. ' : '') +
+      (mode !== 'all' || rules.some(r => r.act === 'keep') ? 'What does not fit loses mantissa bits (down to 5) or plays at half the rate, the least audible first; sounds kept untouched never do. ' : '') + own;
+  }
+  $('mp3Mode').addEventListener('change', () => { rulesInfo(); if (bank && bank.packed) drawPackView(); });
+  $('mp3Pick').querySelector('.pickbar').addEventListener('click', e => {
+    const k = e.target.dataset && e.target.dataset.rule; if (!k || !sf) return;
+    const melodic = ruleTargets().find(([v]) => v[0] === 'p');
+    if (k === 'hats') { rules.push({ target: 'drums', keys: DRUM_GROUPS[1][0], act: 'mp3' }); if ($('mp3Mode').value === 'all') $('mp3Mode').value = 'chosen'; }
+    else if (k === 'drums') { rules.push({ target: 'drums', keys: '', act: 'mp3' }); if ($('mp3Mode').value === 'all') $('mp3Mode').value = 'chosen'; }
+    else if (k === 'keep') rules.push({ target: melodic ? melodic[0] : 'drums', keys: '', act: 'keep' });
+    else rules.push({ target: 'drums', keys: '', act: isLossless() ? 'keep' : 'mp3' });
+    drawRules();
+  });
+  // the result's list: each sound, who plays it, what it became, and a choice of its own
+  const playedBy = (l, all) => (all ? l.presets : l.presets.slice(0, 3)).map(p => {
+    const kit = p.progs.some(g => g[0] === 'd');
+    if (kit && p.keys.length <= 3) return p.keys.map(k => (GM_DRUMS[k] || 'key ' + k) + ' (' + k + ')').join(', ') + ' · ' + p.name;
+    return (p.progs.join('/') ? p.progs.map(g => g[0] === 'd' ? 'kit ' + g.slice(1) : g.slice(1)).join('/') + ' ' : '') + p.name + (p.keys.length ? ', keys ' + keyRange(p.keys) : '');
+  }).join('; ') + (!all && l.presets.length > 3 ? ' and ' + (l.presets.length - 3) + ' more' : '');
+  const keyRange = ks => { const r = []; for (const k of ks) { const l = r[r.length - 1]; if (l && k === l[1] + 1) l[1] = k; else r.push([k, k]); } return r.map(([a, b]) => a === b ? a : a + '–' + b).join(', '); };
+  function drawPackView() {
+    const p = bank && bank.packed; $('packView').hidden = !p; if (!p) return;
+    const mode = $('mp3Mode').value, tb = $('packSounds'); tb.textContent = '';
+    $('packHelp').textContent = 'Every sound of the packed bank and what it became: mp3, or lossless with its mantissa bits (bfp8 is the bank as it was; bfp5 to bfp7 have fewer bits), /2 or /4 for half or a quarter of the rate. ' +
+      'Change a sound\'s choice and press Convert again.';
+    for (const l of p.list) {
+      const tr = document.createElement('tr'); tr.dataset.find = (playedBy(l, true) + ' ' + l.became).toLowerCase(); tr.title = playedBy(l, true);
+      const c = document.createElement('select'); c.setAttribute('aria-label', 'Choice for sound ' + l.no);
+      c.appendChild(opt('', 'auto', !soundChoice.has(l.no)));
+      if ((mode !== 'all' && !isLossless()) || soundChoice.get(l.no) === 'mp3') c.appendChild(opt('mp3', 'may be MP3', soundChoice.get(l.no) === 'mp3'));
+      c.appendChild(opt('keep', 'keep untouched', soundChoice.get(l.no) === 'keep'));
+      c.onchange = () => { if (c.value) soundChoice.set(l.no, c.value); else soundChoice.delete(l.no); tr.classList.toggle('mine', !!c.value); rulesInfo(); };
+      if (soundChoice.has(l.no)) tr.className = 'mine';
+      const cells = [l.no, playedBy(l), l.seconds.toFixed(2) + ' s' + (l.loop ? ', loop' : ''), l.became];
+      cells.forEach((v, i) => { const td = document.createElement('td'); td.textContent = v; if (i === 0 || i === 2) td.className = 'n'; tr.appendChild(td); });
+      const td = document.createElement('td'); td.appendChild(c); tr.appendChild(td);
+      tb.appendChild(tr);
+    }
+    filterPack();
+  }
+  const filterPack = () => { const q = $('packFilter').value.trim().toLowerCase(); for (const tr of $('packSounds').children) tr.hidden = !!q && !tr.dataset.find.includes(q); };
+  $('packFilter').addEventListener('input', filterPack);
+
   let converting = false;
   async function convert() {
     if (converting) return;
     showErr('');
-    const kbit = mp3Kbit();
-    if (kbit && (typeof lamejs === 'undefined' || typeof MP3_DECODER === 'undefined' || typeof FM1_PACK === 'undefined')) { showErr('MP3 needs third_party/lamejs/lame.min.js, mp3_decoder_wasm.js and pack_bank.js next to this page.'); return; }
+    const kbit = mp3Kbit(), tag = packTag();             // lossless packing measures the sounds through MP3 too (it then chooses no MP3): the same libraries
+    if (tag && (typeof lamejs === 'undefined' || typeof MP3_DECODER === 'undefined' || typeof FM1_PACK === 'undefined')) { showErr('MP3 needs third_party/lamejs/lame.min.js, mp3_decoder_wasm.js and pack_bank.js next to this page.'); return; }
     const picking = $('preset').value === 'pick', list = picking ? chosen() : null;
     if (picking && !list.length) { $('result').hidden = true; showErr('Tick at least one instrument.'); return; }
     try {
@@ -1177,7 +1339,7 @@ function writeSf2(bank, name) {
         $('rateHz').value = bank.rate;
       } else {
         const rate = manualRate();
-        if (!mp3Kbit() && !(rate >= RATE_MIN && rate <= RATE_MAX)) { showErr('The sample rate must be between ' + RATE_MIN + ' and ' + RATE_MAX + ' Hz.'); return; }
+        if (!packing() && !(rate >= RATE_MIN && rate <= RATE_MAX)) { showErr('The sample rate must be between ' + RATE_MIN + ' and ' + RATE_MAX + ' Hz.'); return; }
         bank = buildBank(sf, sel, bankOptions(rate));
       }
     } catch (e) { showErr('The conversion failed: ' + e.message); return; }
@@ -1186,25 +1348,31 @@ function writeSf2(bank, name) {
       const kept = new Set(bank.presets.map(slotOf));
       bank.emptySlots = [...new Set(sf.presets.map(slotOf).filter(s => s >= 0 && !kept.has(s)))];
     }
-    bank.info = bankInfo(bankFileName(kbit));                // one name and time a conversion: the file sent and the one saved are the same
+    bank.info = bankInfo(bankFileName(tag));                 // one name and time a conversion: the file sent and the one saved are the same
     const bin = writeFm1(bank, bank.info);
     let play = bin;
-    if (kbit) {
-      converting = true; $('go').disabled = true; $('go').textContent = 'Packing as MP3 ...';
+    if (tag) {
+      converting = true; $('go').disabled = true; $('go').textContent = kbit ? 'Packing as MP3 ...' : 'Packing ...';
       await new Promise(r => setTimeout(r, 30));             // let the button show it: the packing takes a few seconds
-      try { bank.packed = FM1_PACK.pack(bin, { kbit, fill: 1, encode: lameEncode, decode: MP3_DECODER.decode }); }
-      catch (e) { bank = null; $('result').hidden = true; showErr('The MP3 packing failed: ' + e.message); return; }
+      // the sounds' own choices are for the sounds they were made on: the bank's distinct zone samples (the packer numbers them by offset)
+      const bdv = new DataView(bin.buffer, bin.byteOffset), zt = bdv.getUint32(32, true), sig = [...new Set(Array.from({ length: bdv.getUint16(14, true) }, (_, i) => bdv.getUint32(zt + i * 24, true) + '/' + bdv.getUint32(zt + i * 24 + 4, true)))].join();
+      let dropped = 0;
+      if (sig !== soundSig) { dropped = soundChoice.size; soundChoice.clear(); soundSig = sig; }
+      try { bank.packed = FM1_PACK.pack(bin, { kbit: kbit || 64, fill: 1, 'budget-kb': MP3_BUDGET_KB, ...packChoice(), encode: lameEncode, decode: MP3_DECODER.decode }); bank.packed.tag = tag; }
+      catch (e) { bank = null; $('result').hidden = true; $('packView').hidden = true; showErr('The packing failed: ' + e.message.replace(/^--(mp3-only|keep) /, '') + (/no sound is picked/.test(e.message) ? ' (a rule names an instrument or keys with no sound in this bank)' : '')); return; }
       finally { converting = false; $('go').disabled = false; $('go').textContent = 'Convert'; }
+      if (dropped) { rulesInfo(); $('rulesInfo').insertAdjacentHTML('beforeend', ' <span class="warn">The instruments changed, so the ' + dropped + ' choices of single sounds were dropped.</span>'); }
       // the simulator plays plain banks: the BFP8 bank with each MP3 sound as the firmware decodes it
       play = bin.slice();
       for (const h of bank.packed.heard) play.set(packBfp8(h.pcm), h.off);
     }
     const p = bank.packed, file = p ? p.bytes : bin;
-    $('summary').innerHTML = (bank.presets.length ? bank.presets.length + ' presets, ' : '') + (bank.zonesWritten ?? bank.zones.length) + ' zones, ' + (bank.soundsWritten ?? bank.samples.length) + ' unique sounds, ' + bank.rate + ' Hz, ' + (p ? 'MP3 ' + p.kbit + ' kbit/s' : bank.sea ? 'SEA' + bank.seaBits : bank.bfp ? 'BFP8' : bank.bits + ' bit') +
-      (p ? ' (' + (p.sounds - p.lossless) + ' sounds as MP3, mean ' + p.meanSnr.toFixed(1) + ' dB against the BFP8; ' + p.lossless + ' kept as BFP8; the BFP8 bank would be ' + fmtBytes(p.unpackedBytes) + ')' : '') +
+    $('summary').innerHTML = (bank.presets.length ? bank.presets.length + ' presets, ' : '') + (bank.zonesWritten ?? bank.zones.length) + ' zones, ' + (bank.soundsWritten ?? bank.samples.length) + ' unique sounds, ' + bank.rate + ' Hz, ' + (p ? (p.tag === 'lossless' ? 'lossless, packed' : 'MP3 ' + p.kbit + ' kbit/s') : bank.sea ? 'SEA' + bank.seaBits : bank.bfp ? 'BFP8' : bank.bits + ' bit') +
+      (p ? ' (' + (p.tag === 'lossless' ? '' : (p.sounds - p.lossless) + ' sounds as MP3, mean ' + p.meanSnr.toFixed(1) + ' dB against the BFP8; ') + p.lossless + ' kept lossless' + (p.narrowed ? ' (' + p.narrowed + ' of them with fewer than 8 mantissa bits)' : '') + (p.halved ? '; ' + p.halved + ' halvings of the rate (their treble is cut) so that the flash or the cache of the firmware can hold them' : '') + (p.dropped ? '; ' + p.dropped + ' sounds left out (their zones play a neighbour\'s sound)' : '') + '; the BFP8 bank would be ' + fmtBytes(p.unpackedBytes) + ')' : '') +
       '. <strong>' + (p ? '.fm1b ' : '.bin ') + fmtBytes(file.length) + '</strong>' +
       (file.length > FM1_SAMPLE_BANK ? ' <span class="warn">(more than the device\'s sample bank of ' + fmtBytes(FM1_SAMPLE_BANK) + ')</span>' : ' (fits in the device\'s sample bank of ' + fmtBytes(FM1_SAMPLE_BANK) + ')') +
-      (p ? '. <strong>It plays only on the live-cache firmware</strong> (<a href="install.html?firmware=live">the install page</a> installs it); the simulator below plays the MP3 sounds as that firmware decodes them' : '') +
+      (p ? '. <strong>It plays only on the live-cache firmware</strong> (<a href="install.html?firmware=live">the install page</a> installs it)' +
+        (p.narrowed ? ', <strong>of 2026-11-17 or later</strong>: its sounds with fewer than 8 bits (codec 4) are refused by older firmware, which then plays nothing from the bank' : '') + '; the simulator below plays the sounds as that firmware decodes them (MP3, fewer bits, half rate)' : '') +
       (bank.emptySlots && bank.emptySlots.length ? '. ' + (bank.emptySlots.length === 1 ? 'The instrument not ticked is silent at its program number' : 'The ' + bank.emptySlots.length + ' instruments not ticked are silent at their program numbers') : '') +
       (bank.dropped ? ' <span class="warn">(' + bank.dropped + ' presets outside bank 0/128 are not in the .bin)</span>' : '');
     const tb = $('zones'); tb.textContent = '';
@@ -1215,6 +1383,7 @@ function writeSf2(bank, name) {
       tb.appendChild(tr);
     }
     $('result').hidden = false;
+    drawPackView();
     Play.load(play);
   }
   // pcm (Int16Array, 32 kHz mono) to one constant-bit-rate MP3 stream: lamejs codes without the bit reservoir and writes no tag
@@ -1339,15 +1508,46 @@ function writeSf2(bank, name) {
   $('go').addEventListener('click', convert);
   const syncCodec = () => {                                  // SEA is always coded from 16 bit; MP3 is packed from BFP8 at 44.1 kHz
     $('bits').disabled = $('codec').value !== 'pcm';
-    $('rateMode').disabled = $('rate').disabled = !!mp3Kbit();     // an MP3 bank is made at 44,100 Hz whatever the menu says: show the nearest
-    $('rateHz').disabled = !!mp3Kbit() || isAuto();
-    if (mp3Kbit()) { $('rate').value = '44118'; $('rateHz').value = '44118'; }
+    $('rateMode').disabled = $('rate').disabled = packing();     // an MP3 bank is made at 44,100 Hz whatever the menu says: show the nearest
+    $('rateHz').disabled = packing() || isAuto();
+    if (packing()) { $('rate').value = '44118'; $('rateHz').value = '44118'; }
   };
   $('codec').addEventListener('change', syncCodec);
   $('rateMode').addEventListener('change', syncCodec);
   $('rate').addEventListener('change', () => { $('rateHz').value = $('rate').value; $('rateMode').value = 'manual'; syncCodec(); });
   syncCodec();
   $('dlBin').addEventListener('click', () => bank && download(bankBytes(), bankFileName(), 'application/octet-stream'));
+  // The firmware and the bank in one file for the fm1-emu emulator: its save format (emu/persistence.js exportSave, "Import..." on its page), JSON with the
+  // whole update package (.fwsc, base64), its SHA-256 and the changed flash sectors, here the bank's from the start of the user partition (0x7C000), the
+  // last one padded with 0xFF. The firmware is the install page's (dist/install/manifest.json): its live-cache build for a packed bank. (Firmware
+  // sectors laid over another firmware's flash do not work: the emulator boots the package it was given and goes silent.)
+  function bankSectors(b, start = 0x7C000) {
+    const S = 4096, out = [];
+    for (let at = 0; at < b.length; at += S) { const d = new Uint8Array(S).fill(0xff); d.set(b.subarray(at, Math.min(b.length, at + S))); out.push({ at: start + at, data: d }); }
+    return out;
+  }
+  const base64 = b => { let s = ''; for (let i = 0; i < b.length; i += 8192) s += String.fromCharCode(...b.subarray(i, i + 8192)); return btoa(s); };
+  async function emulatorSave(b) {
+    const r = await fetch('dist/install/manifest.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('dist/install/manifest.json is missing (run node make_install.js)');
+    const m = await r.json(), fw = bank.packed && !m.main_live ? m.live && m.live.firmware : m.firmware;
+    if (!fw) throw new Error('the install page has no live-cache firmware for a packed bank');
+    const p = await fetch(fw.url);
+    if (!p.ok) throw new Error(fw.url + ': HTTP ' + p.status);
+    const pkg = new Uint8Array(await p.arrayBuffer());
+    const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', pkg))].map(x => x.toString(16).padStart(2, '0')).join('');
+    const name = (bank.packed && !m.main_live ? m.live.name : m.name || 'sf2player').replace(/\.fwsc$/i, '') + ' + ' + bankFileName().replace(/\.(fm1b|bin)$/, '');
+    return JSON.stringify({ format: 'fm1-emulator-save', version: 1, hash, name: name.slice(0, 256), package: base64(pkg),
+      sectors: bankSectors(b).map(s => ({ at: s.at, data: base64(s.data) })) });
+  }
+  $('dlFlash').addEventListener('click', async () => {
+    if (!bank) return;
+    const b = $('dlFlash'), was = b.textContent;
+    b.disabled = true; b.textContent = 'Building ...';
+    try { download(await emulatorSave(bankBytes()), bankFileName().replace(/\.(fm1b|bin)$/, '') + '.fm1save', 'application/json'); }
+    catch (e) { alert('The emulator file could not be made: ' + e.message); }
+    finally { b.disabled = false; b.textContent = was; }
+  });
   // ---- Send the bank to the FM-1 (the SF2 player firmware receives it as SysEx and writes it to flash) ----
   const send = { access: null, busy: false };
   function sendMsg(text, bad) { const el = $('sendStatus'); el.hidden = !text; el.textContent = text || ''; el.className = bad ? 'meta warn' : 'meta'; }

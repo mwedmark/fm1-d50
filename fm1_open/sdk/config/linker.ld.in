@@ -313,6 +313,7 @@ SECTIONS
         *(.ble_att_bss)
         *(.ble_gatt_bss)
         *(.btstack_pool)
+        @FX_POOL@
         *(.bss .bss.*)
         *(COMMON)
         *(.mem_heap)
