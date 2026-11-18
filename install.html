@@ -514,6 +514,20 @@
       const bytes = new Uint8Array(await b.arrayBuffer());
       if (bytes.length !== manifest.bank.bytes || crc32(bytes) !== manifest.bank.crc32) throw new Error('The bank in dist/install does not match the manifest. Run node make_install.js again.');
       showBank(bytes, manifest.bank.source.split('/').pop());
+      // ?bank=gm_lossless: another bank of this site instead (the MIDI player's names; <name>.fm1b at the site's root, banks/<name>.fm1b in the repo)
+      const want = new URLSearchParams(location.search).get('bank');
+      if (want) {
+        if (!/^[\w-]+$/.test(want)) message('?bank= takes a bank name of this site (letters, digits, - and _); the default bank is used.', 'bad');
+        else {
+          let got = null;
+          for (const url of [want + '.fm1b', 'banks/' + want + '.fm1b']) {
+            const r = await fetch(url, { cache: 'no-store' }).catch(() => null);
+            if (r && r.ok) { got = new Uint8Array(await r.arrayBuffer()); break; }
+          }
+          if (!got) message('This site has no bank "' + want + '"; the default bank is used.', 'bad');
+          else try { showBank(got, want + '.fm1b'); } catch (e) { message(e.message + ' The default bank is used.', 'bad'); }
+        }
+      }
       $('install').disabled = false;
     } catch (e) {
       message(explain(e), 'bad');
