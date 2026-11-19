@@ -313,10 +313,14 @@ public:
     }
 
     bool finished() const { return !held_ && seg_ >= 5; }
-    // Past chip zero the ramp keeps its rate down to -90 dB, then silence.
+    // Past chip zero the ramp keeps its rate down to the floor, then silence. fm1-d50: -80 dB, not -90 (D5_TAIL_FLOOR): the last
+    // 10 dB of every tail are under the 16-bit output's noise and held voices the CPU needs for new notes.
+#ifndef D5_TAIL_FLOOR
+#define D5_TAIL_FLOOR 1.0e-4f
+#endif
     void coast_step() {
         level_ *= factor_;
-        if (level_ <= 3.2e-5f) {
+        if (level_ <= D5_TAIL_FLOOR) {
             level_ = 0.0f;
             coast_ = false;
             if (!held_ && seg_ == 4) seg_ = 5;
