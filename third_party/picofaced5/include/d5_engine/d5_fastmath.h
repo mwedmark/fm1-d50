@@ -46,11 +46,11 @@ inline constexpr int kExpSize = 1 << kExpBits;          // 256 points per octave
 namespace detail {
 
 struct SinTable {
-    float v[kSinSize + 1];
+    float v[kSinSize + 2];   // fm1-d50: one more than the pair needs, so no index has to be clamped
     constexpr SinTable() : v{} {
         // constexpr, so the table is built at compile time and lands in flash
         // rather than costing RAM and a startup pass.
-        for (int i = 0; i <= kSinSize; ++i) {
+        for (int i = 0; i <= kSinSize + 1; ++i) {
             const double t = 6.283185307179586476925286766559 * i / kSinSize;
             // Taylor about the nearest quadrant keeps the constexpr evaluation
             // short and stays well inside float precision.
@@ -68,9 +68,9 @@ struct SinTable {
 };
 
 struct Exp2Table {
-    float v[kExpSize + 1];
+    float v[kExpSize + 2];
     constexpr Exp2Table() : v{} {
-        for (int i = 0; i <= kExpSize; ++i) {
+        for (int i = 0; i <= kExpSize + 1; ++i) {
             const double x = static_cast<double>(i) / kExpSize;
             const double t = x * 0.69314718055994530942;   // x * ln 2
             double term = 1.0, sum = 1.0;
@@ -100,13 +100,11 @@ inline float fast_sin(float turns) {
     const float f = turns - static_cast<float>(static_cast<int>(turns)) +
                     (turns < 0.0f ? 1.0f : 0.0f);
     const float x = f * kSinSize;
-    // A tiny negative argument makes f round to exactly 1.0, and then i
-    // indexes one past the last interpolation pair. The table has one spare
-    // entry so i+1 is always readable, but i itself has to stay inside it.
-    int i = static_cast<int>(x);
-    float frac = x - static_cast<float>(i);
-    if (i >= kSinSize) { i = kSinSize - 1; frac = 1.0f; }
-    if (i < 0) { i = 0; frac = 0.0f; }
+    // A tiny negative argument makes f round to exactly 1.0: then i is
+    // kSinSize, frac 0, and the table's second spare entry keeps i+1 inside
+    // it. f is never negative, so i never is.
+    const int i = static_cast<int>(x);
+    const float frac = x - static_cast<float>(i);
     const float a = detail::kSin.v[i];
     return a + (detail::kSin.v[i + 1] - a) * frac;
 }
@@ -120,10 +118,8 @@ inline float fast_exp2(float x) {
     const int n = static_cast<int>(x) - (x < 0.0f ? 1 : 0);   // floor
     const float f = x - static_cast<float>(n);
     const float y = f * kExpSize;
-    int i = static_cast<int>(y);
-    float frac = y - static_cast<float>(i);
-    if (i >= kExpSize) { i = kExpSize - 1; frac = 1.0f; }   // f rounded to 1.0
-    if (i < 0) { i = 0; frac = 0.0f; }
+    const int i = static_cast<int>(y);          // fm1-d50: f rounded to 1.0 gives kExpSize, frac 0; the spare entry covers i+1
+    const float frac = y - static_cast<float>(i);
     const float a = detail::kExp2.v[i];
     const float m = a + (detail::kExp2.v[i + 1] - a) * frac;
     // scale by 2^n through the exponent field rather than a second table

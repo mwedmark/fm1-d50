@@ -361,6 +361,12 @@ public:
     }
 
     float D5_HOT_TAG(d5_env_next, next)() {
+        if (remaining_ > 1) {            // fm1-d50: stays in the segment; level() then is the plain clamp
+            if (seg_log_) level_ *= factor_;
+            else level_ += step_;
+            --remaining_;
+            return level_ < 0.0f ? 0.0f : level_;
+        }
         if (remaining_ > 0) {
             if (seg_log_) level_ *= factor_;
             else level_ += step_;
