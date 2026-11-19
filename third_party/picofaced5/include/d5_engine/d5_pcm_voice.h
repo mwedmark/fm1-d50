@@ -91,11 +91,13 @@ public:
         const uint32_t length = s_.length;
         const bool looped = s_.looped;
         const float rate = rate_, gain = gain_;
+        uint32_t index = index_;
+        float frac = frac_;
+        bool active = active_;
         for (int k = 0; k < m; ++k) {
             pitch += dpitch;
             amp_m += damp;
-            if (!active_) { out[k] = 0.0f; continue; }
-            const uint32_t i = index_;
+            if (!active) { out[k] = 0.0f; continue; }
             // The partner for interpolation is the next word, and at the end of a
             // loop that word is the first one again -- not the one past the
             // sample. Wrapping the position instead of the partner drops the last
@@ -103,45 +105,37 @@ public:
             // 128-word cycle is 250 corrupted words a second. It cost up to 2.4%
             // of the signal on VIOLlp, and exactly nothing on Noise, whose last
             // word happens to equal its first.
-            const uint32_t j = (i + 1 < length) ? i + 1 : (looped ? 0u : i);
-            const float a = data[i] * (1.0f / 32768.0f);
+            const uint32_t j = (index + 1 < length) ? index + 1 : (looped ? 0u : index);
+            const float a = data[index] * (1.0f / 32768.0f);
             const float b = data[j] * (1.0f / 32768.0f);
-            const float sample = a + (b - a) * frac_;
+            const float sample = a + (b - a) * frac;
 
-            advance(rate * pitch);
+            // Position is an exact word index plus a float fraction, not a double (the Cortex-M33 has no double unit): the integer
+            // part cannot lose bits to the mantissa however long the note is held. The whole-word step is f/250 words, past the
+            // length of a 128-word cycle only for a square pitch above 32 kHz; one conditional subtract wraps, the modulo is the
+            // guard for the absurd case.
+            frac += rate * pitch;
+            const uint32_t whole = static_cast<uint32_t>(frac);
+            if (whole) {
+                frac -= static_cast<float>(whole);
+                index += whole;
+                if (index >= length) {
+                    if (!looped) active = false;
+                    else {
+                        index -= length;
+                        if (index >= length) index %= length;   // paranoia
+                    }
+                }
+            }
             const float amp = env_.next();
-            if (env_.finished()) active_ = false;
+            if (env_.finished()) active = false;
             out[k] = sample * amp * gain * amp_m;
         }
+        index_ = index; frac_ = frac; active_ = active;
         pitch_io = pitch; amp_io = amp_m;
     }
 
 private:
-    // Position is an exact word index plus a float fraction, not a double.
-    // The Cortex-M33 has no double unit, so every step of the old version --
-    // the add, the floor, the compare, the truncation -- was a soft-float
-    // call, and there were sixteen voices asking for them 32000 times a
-    // second. This is also *more* precise: the integer part cannot lose bits
-    // to the mantissa however long the note is held.
-    //
-    // The whole-word step is f/250 words: past the length of a 128-word
-    // cycle only for a square pitch above 32 kHz, which no key and coarse
-    // combination in the bank produces. One conditional subtract wraps;
-    // the modulo below is the guard for the absurd case.
-    void advance(float step) {
-        frac_ += step;
-        const uint32_t whole = static_cast<uint32_t>(frac_);
-        if (whole) {
-            frac_ -= static_cast<float>(whole);
-            index_ += whole;
-            if (index_ >= s_.length) {
-                if (!s_.looped) { active_ = false; return; }
-                index_ -= s_.length;
-                if (index_ >= s_.length) index_ %= s_.length;   // paranoia
-            }
-        }
-    }
-
     PcmSampleRef s_{};
     TvaEnv env_{};
     uint32_t index_ = 0;

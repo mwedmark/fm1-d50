@@ -462,7 +462,7 @@ public:
 class ReverbAllpass {
 public:
     void bind(ReverbSample* buf, int size) { line_.bind(buf, size); line_.clear(); }
-    float process(float in) {
+    float D5_HOT(process)(float in) {
         const float out = line_.next();
         line_.put(in - 0.5f * out);
         return out + 0.5f * line_.cur();
@@ -481,7 +481,7 @@ public:
         filt_ = filter;
         fb_ = feedback;
     }
-    void process(float in) {
+    void D5_HOT(process)(float in) {
         const float last = line_.cur();
         const float filter_in = in + fb_ * line_.next();
         line_.put(filt_ * last - filter_in);
@@ -502,7 +502,7 @@ public:
         filt_ = filter;
         amp_ = amp;
     }
-    void process(float in) {
+    void D5_HOT(process)(float in) {
         const float last = line_.cur();
         line_.next();
         line_.put(amp_ * (filt_ * last + in));

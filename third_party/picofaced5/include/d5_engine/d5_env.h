@@ -330,7 +330,7 @@ public:
     // Advance n samples at once -- the control-rate path. Segment changes
     // land on block edges; the shortest documented segment (4 ms) still
     // spans eight blocks, so nothing audible is lost.
-    float next_n(int32_t n) {
+    float D5_HOT_TAG(d5_env_next_n, next_n)(int32_t n) {
         while (n > 0) {
             if (remaining_ > 0) {
                 const int32_t k = remaining_ < n ? remaining_ : n;

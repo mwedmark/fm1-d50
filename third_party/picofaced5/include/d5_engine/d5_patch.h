@@ -188,7 +188,7 @@ public:
     // on one core at a time); finish_sample is the rest of next_stereo for one sample of the voices' sum. In that order they do what
     // next_stereo does sample by sample; only the sum's rounding differs, as the voices are added in another order.
     static constexpr int kMaxBlock = 128;
-    void begin_block(int n) {
+    void D5_HOT(begin_block)(int n) {
         for (int t = 0; t < n; ++t) {
             lfo_[0].next();
             lfo_[1].next();
@@ -554,7 +554,7 @@ private:
             else upper_.render_voice(voices[k], upper, n);
         }
     }
-    void render_part(float* l, float* r, int n, const Split* split) {
+    void D5_HOT(render_part)(float* l, float* r, int n, const Split* split) {
         upper_.begin_block(n);
         lower_.begin_block(n);
         uint8_t all[24], mine[24], theirs[24];

@@ -20,6 +20,14 @@
 // the linker rejects mixing a template's comdat with a plain function there.
 // Functions that share a name across classes take a unique tag instead.
 #  define D5_HOT_TAG(tag, f) __attribute__((section(".time_critical." #tag))) f
+#elif defined(__GCC_PI32V2__)
+// fm1-d50: the FM-1's JieLi toolchain (sdk/Build.ps1 defines __GCC_PI32V2__) has no pico.h, so until now none of this was in RAM: the engine ran
+// from flash through the XIP cache that the 512 KB sample blob also uses. The SDK's own audio code lives in .volatile_ram_code (app/synth/engine.h's
+// FM1_DSP_CODE); every use gets a section of its own, so that the comdats of inline members never share one.
+#  define D5_HOT_SEC2(n, name) __attribute__((section(".volatile_ram_code.d5_" #name "_" #n))) name
+#  define D5_HOT_SEC1(n, name) D5_HOT_SEC2(n, name)
+#  define D5_HOT(f) D5_HOT_SEC1(__COUNTER__, f)
+#  define D5_HOT_TAG(tag, f) D5_HOT_SEC1(__COUNTER__, f)
 #else
 #  define D5_HOT(f) f
 #  define D5_HOT_TAG(tag, f) f

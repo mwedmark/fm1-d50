@@ -372,7 +372,7 @@ public:
     // samples. Pitch and amplitude ramp linearly across the block so nothing
     // steps; cutoff and pulse width hold, and the synth partial recomputes
     // its own block-rate half from them at the same moment.
-    void update_block() {
+    void D5_HOT_TAG(d5_voice_update_block, update_block)() {
         mod_count_ = kModPeriod;
         const Structure& st = structure();
         // The LFOs advance per sample (in the tone for shared instances, or

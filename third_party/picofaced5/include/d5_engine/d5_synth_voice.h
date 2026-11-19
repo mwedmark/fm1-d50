@@ -222,7 +222,7 @@ public:
     // edge halves every 16 units, below it the whole wave attenuates by
     // -0.75 dB per unit and the resonance is silent. All constants the
     // per-sample code needs are refreshed here.
-    void block_mod(const Modulation& mod) {
+    void D5_HOT_TAG(d5_synth_block_mod, block_mod)(const Modulation& mod) {
         if (!active_) return;
         const float env = tvf_.next_n(kModPeriod);
         // mod.cutoff arrives on the old 0..1 scale from the LFO routes;

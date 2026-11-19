@@ -15,6 +15,7 @@
 #include <cstdint>
 
 #include "d5_engine/d5_fastmath.h"
+#include "d5_engine/d5_hot.h"
 
 namespace d5 {
 
@@ -119,7 +120,7 @@ public:
 
     // The block-rate step: value from the current phase, then advance by n.
     // Returns the gated value; raw() and gate() expose the parts.
-    float next_n(int32_t n) {
+    float D5_HOT_TAG(d5_lfo_next_n, next_n)(int32_t n) {
         float v;
         // Shapes as the VST plays them, measured on all three routes at
         // rate 80 (pitch, TVA and TVF, hundreds of periods): the triangle
@@ -282,7 +283,7 @@ public:
     }
 
     // Pitch factor, advanced n samples at once (control rate).
-    float next_n(int32_t n) {
+    float D5_HOT_TAG(d5_penv_next_n, next_n)(int32_t n) {
         while (n > 0) {
             if (pre_ > 0) {
                 const int32_t k = pre_ < n ? pre_ : n;
