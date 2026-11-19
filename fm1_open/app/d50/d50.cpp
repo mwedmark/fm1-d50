@@ -5,6 +5,7 @@
 extern "C" {
 #include "fm1_device.h"
 #include "d50_inflate.h"
+#include "fm1b.h"                                        /* FM1B_SPLIT (build_fw.ps1 -DualCore) and the other core's hand-over */
 #include <string.h>
 /* The engine library's two effect units, which sdk/Build.ps1 places between these two symbols for a D-50 build. Weak: without them, no reverb. */
 extern uint8_t fm1_fx_pool_begin[] __attribute__((weak));
@@ -18,6 +19,47 @@ extern uint8_t fm1_fx_pool_end[] __attribute__((weak));
 inline void *operator new(decltype(sizeof 0), void *where) noexcept { return where; }
 
 namespace {
+
+constexpr unsigned kBlock = static_cast<unsigned>(d5::Tone<16>::kMaxBlock);
+
+// The other core (build_fw.ps1 -DualCore: FM1B_SPLIT, app/cpu1_split.c, the SDK's own hand-over to its CPU1). begin hands CPU1 the job
+// or says no (CPU1 not up, or the SDK holding it for a flash write: the job then runs here). wait gives CPU1 up to 20 ms; if it is not done
+// by then the split is switched off for good, so that a stuck CPU1 costs one block and not every block.
+volatile bool split_on = true;
+volatile unsigned split_blocks, split_lost;
+#if FM1B_SPLIT
+#define T4 (*(volatile uint32_t *)0x10804U)      /* TIMER4, 24 MHz, free running (board/device.c) */
+d5::Patch::Split split;
+bool split_begin(void (*job)(void *), void *arg)
+{
+    if (!split_on || fm1b_split_held() || !fm1b_split_begin(job, arg)) return false;   // not while the flash is written
+    ++split_blocks;
+    return true;
+}
+// CPU0 also mixes, runs the effects and resamples, so an even share of the voices leaves CPU1 idle part of the block. The share follows
+// what CPU0 waited: over 40 us, CPU1 had too much and gets a sixteenth less; under 5 us, CPU1 was done first and gets a sixteenth more.
+void split_wait()
+{
+    const uint32_t t0 = T4;
+    for (int k = 0; k < 4; ++k)
+        if (fm1b_split_wait()) {
+            const uint32_t waited_us = (T4 - t0) / 24U;
+            if (waited_us > 40U && split.share16 > 4) --split.share16;
+            else if (waited_us < 5U && split.share16 < 13) ++split.share16;
+            return;
+        }
+    split_on = false;
+    ++split_lost;
+}
+#else
+d5::Patch::Split split;
+#endif
+
+// The CPU guard (sf2out_load, after each block): over 85 % of the block on CPU0 it retires the oldest released voice (a 20 ms fade,
+// PicoFaceD5's shed_voice); with none to retire and over 92 %, a lower cap on each tone's voices (new notes past it find no slot). Under 60 %
+// for a quarter of a second the cap comes back up a voice at a time. After a step it waits 8 blocks for the fade to show.
+unsigned guard_hold, guard_calm;
+int guard_cap = 16;
 
 enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kQueue = 64 };
 
@@ -135,6 +177,12 @@ extern "C" int d50_bind_flash(void)
     if (!bank_patches) return 0;                 // samples without a bank: nothing to play (the image has no room for built-in presets)
     if (program_now >= d50_programs()) program_now = 0;
     patch = new (patch_memory) d5::Patch();
+#if FM1B_SPLIT
+    split.begin = &split_begin;
+    split.wait = &split_wait;
+#endif
+    guard_cap = 16;
+    guard_hold = guard_calm = 0;
     attach_reverb();                             // before configure, which binds the reverb's lines
     build_program(program_now);
     patch->configure(specs[spec_serial & 1U], static_cast<float>(D50_RATE));
@@ -145,6 +193,15 @@ extern "C" int d50_bind_flash(void)
 }
 
 extern "C" unsigned d50_ready(void) { return ready; }
+extern "C" void d50_unbind(void) { ready = 0; }
+extern "C" uint32_t d50_flash_bytes(void)
+{
+    if (!ready) return 0;
+    const uint8_t *header = fm1_flash_map(0, D50_HEADER_BYTES);
+    if (!header) return 0;
+    const uint32_t deflated = u32(header + 12);
+    return D50_HEADER_BYTES + D50_PCM_BYTES + (header[4] >= 2U && deflated ? 4U + deflated : 0U);
+}
 extern "C" void d50_note(unsigned note, unsigned velocity) { push(kEvNote << 24 | (note & 127U) << 8 | (velocity & 127U)); }
 extern "C" void d50_bend(unsigned value) { push(kEvBend << 24 | (value & 16383U)); }
 extern "C" void d50_panic(void) { push(kEvPanic << 24); }
@@ -157,6 +214,31 @@ extern "C" const char *d50_program_name(unsigned program)
 }
 extern "C" unsigned d50_voices_sounding(void) { return sounding; }
 extern "C" unsigned d50_reverb(void) { return reverb_attached; }
+extern "C" unsigned d50_voice_limit(void) { return static_cast<unsigned>(guard_cap); }
+extern "C" unsigned d50_split_share(void) { return static_cast<unsigned>(split.share16); }
+
+extern "C" void d50_guard(unsigned percent)
+{
+    if (!ready) return;
+    if (guard_hold) { --guard_hold; return; }
+    if (percent > 85U) {
+        guard_calm = 0;
+        if (patch->shed_voice()) { guard_hold = 8; return; }
+        if (percent > 92U && guard_cap > 4) { patch->cap_voices(--guard_cap); guard_hold = 8; }
+    } else if (percent < 60U && guard_cap < 16) {
+        if (++guard_calm >= 86U) { patch->cap_voices(++guard_cap); guard_calm = 0; }
+    } else {
+        guard_calm = 0;
+    }
+}
+extern "C" unsigned d50_cores(void)
+{
+#if FM1B_SPLIT
+    return split_on && fm1b_split_up() ? 2U : 1U;
+#else
+    return 1U;
+#endif
+}
 
 extern "C" void d50_program(unsigned program)
 {
@@ -187,11 +269,16 @@ extern "C" void d50_render(int32_t *out, unsigned n)
         case kEvPanic: patch->silence(); break;
         }
     }
-    for (unsigned i = 0; i < n; ++i) {
-        float l, r;
-        patch->next_stereo(l, r);
-        out[2 * i] = sat24(out[2 * i] + to_q23(l));
-        out[2 * i + 1] = sat24(out[2 * i + 1] + to_q23(r));
+    // A block at a time, every second sounding voice on the SDK's CPU1 (Patch::render_block; FM1B_SPLIT, app/cpu1_split.c)
+    static float left[kBlock], right[kBlock];
+    for (unsigned s = 0; s < n;) {
+        const unsigned m = n - s > kBlock ? kBlock : n - s;
+        patch->render_block(left, right, static_cast<int>(m), &split);
+        for (unsigned i = 0; i < m; ++i) {
+            out[2 * (s + i)] = sat24(out[2 * (s + i)] + to_q23(left[i]));
+            out[2 * (s + i) + 1] = sat24(out[2 * (s + i) + 1] + to_q23(right[i]));
+        }
+        s += m;
     }
     sounding = static_cast<unsigned>(patch->voices_sounding());
 }

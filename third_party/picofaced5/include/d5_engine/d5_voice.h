@@ -205,6 +205,13 @@ struct VoiceSpec {
     LfoRoute tva_lfo[2]{};          // panel "TVA Mod LFO Select / Depth"
 };
 
+// fm1-d50: a tone's three LFOs at one sample (what Voice::update_block reads), so a voice can render a block at a time with the LFOs
+// the tone stepped for that block beforehand (Tone::begin_block / render_voice), on either core.
+struct LfoSnap {
+    float value[3];
+    float gate0, raw0;
+};
+
 class Voice {
 public:
     void note_on(const VoiceSpec& spec, int note, float velocity,
@@ -316,6 +323,9 @@ public:
     }
 
     // Hands the voice the tone's three shared LFO instances (see note_on).
+    // fm1-d50: the tone's LFOs per sample for the next block; nullptr: read the LFOs themselves again
+    void set_snap(const LfoSnap* snap) { snap_ = snap; snap_t_ = 0; snap_now_ = nullptr; }
+
     void bind_lfos(const Lfo shared[3]) {
         lfo_[0] = &shared[0];
         lfo_[1] = &shared[1];
@@ -367,8 +377,8 @@ public:
         // The LFOs advance per sample (in the tone for shared instances, or
         // at the top of next() for the standalone fallback); the block only
         // reads the current gated values.
-        const float l[3] = {lfo_[0]->value(), lfo_[1]->value(),
-                            lfo_[2]->value()};
+        const float l[3] = {lfo_value(0), lfo_value(1),
+                            lfo_value(2)};
         const float pitch_env = penv_.next_n(kModPeriod);
 
         // Wheel bend plus AT bend, clamped once per voice the way the chip
@@ -401,10 +411,10 @@ public:
             // with the fade, the lever speaks at once -- the ROM multiplies
             // only the c[22] term by the fade ramp (IC25 0x177B-0x17A3),
             // the controller terms bypass it.
-            const float depth = pr.depth * lfo_[0]->gate()
+            const float depth = pr.depth * lfo_gate0()
                 + spec_.lever_gate[i] * spec_.lever_amount * wheel_
                 + spec_.at_gate[i] * spec_.at_amount * at_;
-            const float cents = 600.0f * depth * lfo_[0]->raw();
+            const float cents = 600.0f * depth * lfo_raw0();
             float factor = cents != 0.0f
                                ? fast_exp2(cents * (1.0f / 1200.0f)) : 1.0f;
             if (spec_.penv_mode[i] == PEnvMode::kPositive) {
@@ -479,6 +489,7 @@ public:
             local_lfo_[1].next();
             local_lfo_[2].next();
         }
+        if (snap_) snap_now_ = &snap_[snap_t_++];   // fm1-d50: this sample's LFOs, for update_block
         if (mod_count_ == 0) update_block();
         --mod_count_;
         mod_[0].pitch += dpitch_[0];
@@ -601,6 +612,12 @@ private:
     // The LFOs the voice listens to: the tone's shared three when bound,
     // its own copies otherwise (unit tests on Voice alone; see note_on).
     const Lfo* lfo_[3] = {nullptr, nullptr, nullptr};
+    const LfoSnap* snap_ = nullptr;     // fm1-d50: set_snap
+    const LfoSnap* snap_now_ = nullptr;
+    int snap_t_ = 0;
+    float lfo_value(int k) const { return snap_now_ ? snap_now_->value[k] : lfo_[k]->value(); }
+    float lfo_gate0() const { return snap_now_ ? snap_now_->gate0 : lfo_[0]->gate(); }
+    float lfo_raw0() const { return snap_now_ ? snap_now_->raw0 : lfo_[0]->raw(); }
     Lfo local_lfo_[3]{};
     bool lfo_local_ = false;
     PitchEnv penv_{};

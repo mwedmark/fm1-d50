@@ -1981,6 +1981,7 @@ enum { SPLIT_FRAMES = 128 };                                  /* a block's frame
 volatile uint8_t fm1b_split_share = 50;
 static volatile uint8_t split_holds;
 void fm1b_split_hold(int on) { if (on) ++split_holds; else if (split_holds) --split_holds; }
+int fm1b_split_held(void) { return split_holds != 0; }   /* fm1-d50: the D-50's split asks too (app/d50/d50.cpp) */
 static struct {
     uint8_t list[FM1B_VOICES];
     unsigned count, frames, buses;

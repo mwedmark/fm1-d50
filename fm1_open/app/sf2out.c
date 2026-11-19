@@ -141,8 +141,10 @@ FM1_DSP_CODE void sf2out_load(uint32_t used, uint32_t block)
     if (p > load_peak)
         load_peak = p;
 #if FM1_D50
-    if (d50_ready())                                     /* the guard steers the FM1B player's voices; the D-50 has its own pool */
+    if (d50_ready()) {                                   /* the D-50 has a guard of its own (app/d50/d50.cpp) */
+        d50_guard(p);
         return;
+    }
 #endif
     if (guard_hold) {
         --guard_hold;

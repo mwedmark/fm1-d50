@@ -27,6 +27,10 @@ extern "C" {
 /* Look for the sample data in the user flash and start the engine on it: 1 if it is there (the engine then plays), else 0. */
 int d50_bind_flash(void);
 unsigned d50_ready(void);
+/* Stop playing (the upload is about to erase the flash): d50_bind_flash starts again. */
+void d50_unbind(void);
+/* The installed data's length in the flash (header, samples, bank), for the install page's check; 0 when none plays. */
+uint32_t d50_flash_bytes(void);
 /* velocity 0 is a note off */
 void d50_note(unsigned note, unsigned velocity);
 /* 0..d50_programs()-1, wraps */
@@ -42,6 +46,11 @@ void d50_panic(void);
 void d50_render(int32_t *out, unsigned n);
 unsigned d50_voices_sounding(void);
 unsigned d50_reverb(void);                               /* 1: the reverb has its lines (the SDK's idle effect memory), 0: dry */
+unsigned d50_cores(void);
+unsigned d50_voice_limit(void);                          /* the CPU guard's cap on each tone's voices, 4..16 */
+unsigned d50_split_share(void);                          /* CPU1's share of the sounding voices, in sixteenths */
+/* The CPU guard: the audio interrupt's share of the block just done, in % (sf2out_load). Audio interrupt. */
+void d50_guard(unsigned percent);                                /* 2: half the sounding voices render on the SDK's CPU1 (build_fw.ps1 -DualCore) */
 
 #ifdef __cplusplus
 }

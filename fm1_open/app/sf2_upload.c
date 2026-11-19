@@ -7,6 +7,9 @@
 #include "fm1b_config.h"
 #include "fm1_device.h"
 #include "sf2_upload.h"
+#if FM1_D50
+#include "d50/d50.h"
+#endif
 #include "song.h"
 /* test_upload.js builds this file on a computer without song.c */
 #if FM1_MIDIPLAY && !defined(FM1_HOST_TEST)
@@ -102,6 +105,9 @@ static void upload_stop_playing(void)
 #endif
     uint32_t flags = fm1_device_irq_save();
     (void)fm1b_bind(NULL, 0, NULL);
+#if FM1_D50
+    d50_unbind();                                                /* the D-50 plays its samples from the flash about to be erased */
+#endif
     fm1_device_irq_restore(flags);
 }
 
@@ -162,7 +168,12 @@ void sf2_upload_poll(void)
         uint32_t own = 0;
         if (h)
             memcpy(&own, h + 40, 4);
+#if FM1_D50_ONLY
+        own = d50_flash_bytes();                                 /* the D-50's data: its own length from its header */
+        status = d50_ready() && own == size && size <= FM1B_FLASH_BYTES && crc32_flash(size) == read35(m + 11) ? 0 : 4;
+#else
         status = fm1b_ready() && own == size && size <= FM1B_FLASH_BYTES && crc32_flash(size) == read35(m + 11) ? 0 : 4;   /* mid-upload: CRC differs */
+#endif
     } else if (cmd == 3 && n == 12) {
         status = upload_active ? 0 : 5;
         if (!status) {

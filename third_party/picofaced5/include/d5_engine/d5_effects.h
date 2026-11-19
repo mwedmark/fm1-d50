@@ -644,6 +644,15 @@ public:
 #ifdef D5_REVERB_EXTERNAL_POOL
         if (!seg_[0]) { l = xl; r = xr; return; }   // fm1-d50: no pool attached, dry only
 #endif
+        // fm1-d50: no send for half a second and the wet part under -100 dB: the room has rung out, and only the dry part passes (with the
+        // balance's dry factor) until a send comes. The FM-1's CPU spent a tenth of its time on the reverb of silence.
+        if (send == 0.0f && idle_ >= kIdleSamples) {
+            const float bi = clamp01(spec_.balance);
+            const float dry_only = bi > 0.5f ? 2.0f * (1.0f - bi) : 1.0f;
+            l = xl * dry_only;
+            r = xr * dry_only;
+            return;
+        }
         if (mode_ < 3) {
             const BossMode& m = *boss_;
             entr_.process(x);
@@ -733,6 +742,8 @@ public:
         const float wet = b < 0.5f ? 2.0f * b : 1.0f;
         l = xl * dry + wl * wet * wet_ * g;
         r = xr * dry + pol_r_ * wr * wet * wet_ * g;
+        if (send == 0.0f && (wl < 0.0f ? -wl : wl) + (wr < 0.0f ? -wr : wr) < 1e-5f) { if (idle_ < kIdleSamples) ++idle_; }
+        else idle_ = 0;
     }
 
 private:
@@ -783,6 +794,8 @@ private:
     float tap_fb_ = 0.0f;
     float echo_ = 1.0f;
     float pol_r_ = 1.0f;
+    static constexpr int kIdleSamples = 16000;   // fm1-d50: see process
+    int idle_ = 0;
 };
 #endif  // D5_NO_REVERB
 

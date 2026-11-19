@@ -793,10 +793,26 @@ static void screen_update(void)
         line_show(1, 34, line, 2, WHITE);
         d = put_text(line, "D-50  VOICES ");
         d = put_number(d, (int32_t)d50_voices_sounding(), 0);
-        d = put_text(d, "  BANK 64");
         d = put_text(d, d50_reverb() ? "  REVERB" : "  DRY");
+        d = put_text(d, d50_cores() == 2U ? "  2 CORES" : "  1 CORE");
         *d = 0;
         line_show(2, 64, line, 1, YELLOW);
+        {   /* "CPU 45% MAX 72%  OVR 0  LIMIT 16  CPU1 8": the audio interrupt's share of a block on CPU0, the blocks it overran since start, the guard's
+             * voice limit, CPU1's share of the voices in sixteenths */
+            struct fm1_audio_stats a;
+            fm1_audio_stats_read(&a);
+            d = put_cpu(line);
+            d = put_text(d, "  OVR ");
+            d = put_number(d, (int32_t)a.overruns, 0);
+            d = put_text(d, "  LIMIT ");
+            d = put_number(d, (int32_t)d50_voice_limit(), 0);
+            if (d50_cores() == 2U) {                     /* CPU1's share of the voices, in sixteenths */
+                d = put_text(d, "  CPU1 ");
+                d = put_number(d, (int32_t)d50_split_share(), 0);
+            }
+            *d = 0;
+            line_show(3, 78, line, 1, a.overruns ? ORANGE : GREY);
+        }
         upload_line();
         return;
     }
