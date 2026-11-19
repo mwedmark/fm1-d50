@@ -42,6 +42,7 @@ public:
     void configure(const ToneSpec& spec, float sample_rate) {
         spec_ = spec;
         sr_ = sample_rate;
+        update_lfo_mask();
         eq_.configure(spec.eq, sample_rate);
         chorus_.configure(spec.chorus, sample_rate);
         // The tone's three LFOs are single shared instances -- the D-50's
@@ -60,6 +61,7 @@ public:
     // click on every one of them.
     void reconfigure(const ToneSpec& spec) {
         spec_ = spec;
+        update_lfo_mask();
         eq_.retune(spec.eq, sr_);
         chorus_.set_type(spec.chorus.type);
         chorus_.set_rate(spec.chorus.rate);
@@ -171,9 +173,7 @@ public:
         // The shared LFOs walk every sample, silent or not -- the tick
         // engine's loop at 0x1508 runs unconditionally, which is why a
         // sync-off LFO never waits for a key.
-        lfo_[0].next();
-        lfo_[1].next();
-        lfo_[2].next();
+        step_lfos();
         float sum = 0.0f;
         for (int i = 0; i < kVoices; ++i) {
             if (!active_[i]) continue;
@@ -188,11 +188,29 @@ public:
     // on one core at a time); finish_sample is the rest of next_stereo for one sample of the voices' sum. In that order they do what
     // next_stereo does sample by sample; only the sum's rounding differs, as the voices are added in another order.
     static constexpr int kMaxBlock = 128;
+    // fm1-d50: an LFO that no route of this tone listens to (depth 0 everywhere, no lever or aftertouch vibrato) cannot be heard, and
+    // stepping it per sample was a share of every block. It stays at its start state, which reads as 0. The pitch route always rides LFO 1.
+    void update_lfo_mask() {
+        const VoiceSpec& v = spec_.voice;
+        auto idx = [](const LfoRoute& r) { return r.lfo < 0 || r.lfo > 2 ? 0 : r.lfo; };
+        uint8_t m = 0;
+        for (int i = 0; i < 2; ++i) {
+            if (v.pitch_lfo[i].depth != 0.0f) m |= 1;
+            if (v.pw_lfo[i].depth != 0.0f) m |= static_cast<uint8_t>(1u << idx(v.pw_lfo[i]));
+            if (v.tvf_lfo[i].depth != 0.0f) m |= static_cast<uint8_t>(1u << idx(v.tvf_lfo[i]));
+            if (v.tva_lfo[i].depth != 0.0f) m |= static_cast<uint8_t>(1u << idx(v.tva_lfo[i]));
+        }
+        if (v.lever_amount != 0.0f || v.at_amount != 0.0f) m |= 1;
+        lfo_mask_ = m;
+    }
+    void D5_HOT(step_lfos)() {
+        if (lfo_mask_ & 1) lfo_[0].next();
+        if (lfo_mask_ & 2) lfo_[1].next();
+        if (lfo_mask_ & 4) lfo_[2].next();
+    }
     void D5_HOT(begin_block)(int n) {
         for (int t = 0; t < n; ++t) {
-            lfo_[0].next();
-            lfo_[1].next();
-            lfo_[2].next();
+            step_lfos();
             LfoSnap& s = snap_[t];
             s.value[0] = lfo_[0].value();
             s.value[1] = lfo_[1].value();
@@ -341,6 +359,7 @@ private:
     bool active_[kVoices] = {};
     LfoSnap snap_[kMaxBlock]{};      // fm1-d50: begin_block
     int quiet_ = 0;                  // fm1-d50: finish_sample
+    uint8_t lfo_mask_ = 7;           // fm1-d50: update_lfo_mask
 };
 
 enum class KeyMode : uint8_t { kWhole = 0, kDual = 1, kSplit = 2 };
