@@ -6,7 +6,7 @@
 #   .\start_emu.ps1 -Bank dist\gm_32k_bfp8.fm1b   another bank (make_bank.js builds them): the same firmware plays every format
 #   .\start_emu.ps1 -Lan                 reachable from other computers on the network too (they need a Chrome flag, RUNNING.md section 4)
 #   .\start_emu.ps1 -Update              first fetch the emulator's newest files from its site (the old ones go to emu\previous\)
-param([int]$Port = 8781, [string]$Script = 'mt.script', [switch]$Tap, [switch]$NoBrowser, [string]$Bank = 'dist\gm_32k.fm1b', [switch]$Update, [switch]$Lan)
+param([int]$Port = 8781, [string]$Script = 'mt.script', [switch]$Tap, [switch]$NoBrowser, [string]$Bank = 'banks\default.fm1b', [switch]$Update, [switch]$Lan)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $emu = Join-Path $root 'emu'
@@ -58,7 +58,7 @@ $package = Join-Path $emu 'sf2player.fwsc'
 if (Test-Path $build) { Copy-Item $build $package -Force }
 elseif (!(Test-Path $package)) { throw "No firmware: build it first (RUNNING.md section 1)." }
 $bank = if ([IO.Path]::IsPathRooted($Bank)) { $Bank } else { Join-Path $root $Bank }
-$flashName = if ($Bank -eq 'dist\gm_32k.fm1b') { 'gm.flash' } else { [IO.Path]::GetFileNameWithoutExtension($bank) + '.flash' }
+$flashName = [IO.Path]::GetFileNameWithoutExtension($bank) + '.flash'   # banks\default.fm1b (the lossless bank, as on the site) -> default.flash
 $flash = Join-Path $emu $flashName
 $stale = !(Test-Path $flash)
 if (!$stale -and (Test-Path $bank)) { $stale = (Get-Item $bank).LastWriteTime -gt (Get-Item $flash).LastWriteTime }

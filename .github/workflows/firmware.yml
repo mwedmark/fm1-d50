@@ -197,9 +197,13 @@ jobs:
           cp LICENSE fm1_open/THIRD_PARTY.md fw/
           cp banks/default.fm1b fw/gm_44k_lossless.fm1b
           cat > notes.md <<'NOTES'
-          **What's new:** up to 40 notes can sound at once (32 before), so dense chords, pads and full-band songs drop fewer notes. Tested on an FM-1; nothing to change on your side, and existing banks keep working.
+          **What's new:**
+          - **Lossless banks.** The firmware plays sounds stored with fewer bits (4 to 7 instead of 8) straight from flash, so a whole General MIDI bank fits without MP3. The starter bank is now such a bank: every sound of the SoundFont at full rate, no MP3, no cache. Heard on an FM-1: it sounds good. Older firmware refuses these banks, so install this firmware with them.
+          - **The converter** makes lossless banks by default ("Lossless, fewer bits where needed"); MP3 is still a choice, and you can pick by hand which sounds may be MP3 or must stay untouched. A stereo sample pair plays as the mean of both channels.
+          - **Channel 10:** a program change chooses the percussion kit.
+          - **Reverb:** a somewhat longer tail (about 1.8 s, 1.4 s before) at a lower default level (14, 30 before), tuned on an FM-1.
 
-          Firmware package for the M-VAVE FM-1 (install it with https://mwedmark.github.io/fm1-sf2/install.html): the SF2 player at 44.1 kHz, with both CPU cores sharing the voices, four-point interpolation and the live cache. It plays MP3-packed banks made at 44.1 kHz (the converter page makes them) and BFP8 banks of any rate. Tested on an FM-1.
+          Firmware package for the M-VAVE FM-1 (install it with https://mwedmark.github.io/fm1-sf2/install.html): the SF2 player at 44.1 kHz, with both CPU cores sharing the voices, four-point interpolation and the live cache. It plays lossless banks (BFP8, some sounds with fewer bits) and MP3-packed banks made at 44.1 kHz (the converter page makes both), and BFP8 banks of any rate. Existing banks keep working.
 
           `gm_44k_lossless.fm1b`: a General MIDI bank (44.1 kHz, 521 KB, no MP3: every sound BFP8, some with fewer bits; it needs this firmware or later) to get started with; install.html puts it on the FM-1 with the firmware. Its sounds come from a General MIDI SoundFont whose header names E-mu Systems (1993) as the copyright holder; it is included for convenience, and you can replace it with a bank of your own made with the converter. Banks made for the 32 kHz firmware of v0.5.x (MP3 at 32 kHz) do not play on this one: convert them again.
 

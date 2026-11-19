@@ -637,7 +637,7 @@ cd D:\git\fm1-sf2
 ```
 
 `start_emu.ps1` keeps the emulator's site files in `emu\` (git ignores it), copies the newest `FM1_OFFICIAL_OPEN.fwsc` and `test_emu\*` into it,
-makes `gm.flash` from `dist\gm_32k.fm1b` when needed, points the `sf2` entry of `firmwares.json` at its port, starts `test_emu\cors_server.py`
+makes `default.flash` from `banks\default.fm1b` (the lossless bank, as on the site; `-Bank` another) when needed, points the `sf2` entry of `firmwares.json` at its port, starts `test_emu\cors_server.py`
 hidden if nothing listens on the port, and opens the URL. The first run copies the emulator's files from the old scratchpad folder below;
 if that is gone it stops and lists the files to download from the site. Stop the server by its port, so that other Python servers survive:
 `Get-NetTCPConnection -State Listen -LocalPort 8781 | ForEach-Object { Stop-Process -Id $_.OwningProcess }`.
@@ -658,7 +658,7 @@ run from a **local copy served with CORS headers**. That copy already exists, in
 C:\Users\Magnus\AppData\Local\Temp\claude\D--git-pico8-hws\df678bca-34d6-48e4-84f5-0df8efb5cf71\scratchpad\
     cors_server.py        the server: python cors_server.py <port> <folder>   (binds 127.0.0.1, adds CORS headers)
     emu\                  the emulator's files: index.html main.js worklet.js persistence.js fwsc.js tryout.js style.css
-                          firmwares.json fm1_web.wasm, plus ours: sf2player.fwsc, gm.flash, *.script
+                          firmwares.json fm1_web.wasm, plus ours: sf2player.fwsc, default.flash, *.script
 ```
 
 **It is in Temp and can disappear.** If it is gone, download those site files again into a new folder, copy `cors_server.py` (14 lines, below),
