@@ -129,12 +129,15 @@ public:
         const float boost = (spec.low_gain_db > 0.0f ? spec.low_gain_db : 0.0f)
                           + (spec.high_gain_db > 0.0f ? spec.high_gain_db : 0.0f);
         makeup_ = std::pow(10.0f, -0.5f * boost / 20.0f);
+        // fm1-d50: both bands at 0 dB are exact identities (b == a), so the two biquads are skipped
+        flat_ = spec.low_gain_db == 0.0f && spec.high_gain_db == 0.0f;
     }
 
-    float D5_HOT(process)(float x) { return makeup_ * high_.process(low_.process(x)); }
+    float D5_HOT(process)(float x) { return flat_ ? x : makeup_ * high_.process(low_.process(x)); }
 
 private:
     float makeup_ = 1.0f;
+    bool flat_ = false;
     static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
     Biquad low_{};
     Biquad high_{};
@@ -250,8 +253,7 @@ public:
                 wl += read((ms + swing * fast_sin(ph)) * 0.001f * sr_);
                 wr += read((ms + swing * fast_sin(ph + 0.3f)) * 0.001f * sr_);
             }
-            wl /= static_cast<float>(t.voices);
-            wr /= static_cast<float>(t.voices);
+            if (t.voices == 2) { wl *= 0.5f; wr *= 0.5f; }   // fm1-d50: voices is 1 or 2 here; no divide
         }
         if (t.tremolo) {
             // Counter-phased amplitude modulation at twice the LFO rate
@@ -284,14 +286,14 @@ private:
         if (delay_samples < 1.0f) delay_samples = 1.0f;
         if (delay_samples > kMaxDelay - 2) delay_samples = kMaxDelay - 2;
         float pos = static_cast<float>(write_) - delay_samples;
-        while (pos < 0.0f) pos += kMaxDelay;
+        if (pos < 0.0f) pos += kMaxDelay;      // fm1-d50: delay <= kMaxDelay-2, so once is enough
         // A hair below zero rounds UP to exactly kMaxDelay in float32 (the
         // ulp at 1536 is ~1.2e-4, wider than the negative numbers that
         // land here), and pos == kMaxDelay would index one slot past the
         // ring -- a single garbage sample, audible as a pop. Wrap it back.
         if (pos >= kMaxDelay) pos -= kMaxDelay;
         const int i0 = static_cast<int>(pos);
-        const int i1 = (i0 + 1) % kMaxDelay;
+        const int i1 = i0 + 1 >= kMaxDelay ? 0 : i0 + 1;
         const float f = pos - static_cast<float>(i0);
         return buf_[i0] + (buf_[i1] - buf_[i0]) * f;
     }
@@ -566,6 +568,12 @@ public:
             }
             boss_ = &m;
             sr_scale_ = scale;
+            // fm1-d50: the tap positions, which process() computed from floats every sample
+            tap_entr_ = static_cast<int>(m.comb_sizes[0] * scale) - 1;
+            for (int k = 0; k < 3; ++k) {
+                tap_ol_[k] = static_cast<int>(m.out_l[k] * scale) - 1;
+                tap_or_[k] = static_cast<int>(m.out_r[k] * scale) - 1;
+            }
         } else {
             // at(1) is the word just written: a 0 ms tap is the direct copy
             tap_l_ = static_cast<int>(t.tap_l_ms * 0.001f * sr) + 1;
@@ -656,12 +664,12 @@ public:
         if (mode_ < 3) {
             const BossMode& m = *boss_;
             entr_.process(x);
-            float link = entr_.out_at(static_cast<int>(m.comb_sizes[0] * sr_scale_) - 1);
+            float link = entr_.out_at(tap_entr_);
             link = ap_[0].process(link);
             link = ap_[1].process(link);
             const float early_r = link;
             link = ap_[2].process(link);
-            const float out_l1 = comb_[0].out_at(static_cast<int>(m.out_l[0] * sr_scale_) - 1);
+            const float out_l1 = comb_[0].out_at(tap_ol_[0]);
             for (int c = 0; c < 3; ++c) comb_[c].process(link);
             // Early part plus tail. Roland's D-50 VST puts most of the wet
             // energy into the first tens of milliseconds and keeps the
@@ -672,12 +680,12 @@ public:
             // -- normalized to the same steady level it rang 15-20 dB too
             // loud after every note. The early signal is the diffused
             // input: after three allpasses on the left, two on the right.
-            wl = kTailMix * (1.5f * (out_l1 + comb_[1].out_at(static_cast<int>(m.out_l[1] * sr_scale_)))
-                             + comb_[2].out_at(static_cast<int>(m.out_l[2] * sr_scale_)))
+            wl = kTailMix * (1.5f * (out_l1 + comb_[1].out_at(tap_ol_[1] + 1))
+                             + comb_[2].out_at(tap_ol_[2] + 1))
                + kEarlyMix * link;
-            wr = kTailMix * (1.5f * (comb_[0].out_at(static_cast<int>(m.out_r[0] * sr_scale_))
-                                     + comb_[1].out_at(static_cast<int>(m.out_r[1] * sr_scale_)))
-                             + comb_[2].out_at(static_cast<int>(m.out_r[2] * sr_scale_)))
+            wr = kTailMix * (1.5f * (comb_[0].out_at(tap_or_[0] + 1)
+                                     + comb_[1].out_at(tap_or_[1] + 1))
+                             + comb_[2].out_at(tap_or_[2] + 1))
                + kEarlyMix * early_r;
             // A type with an inverted right side sends the same wet to both
             // outputs (the VST's Large Room: L/R correlation -0.95); the
@@ -790,6 +798,7 @@ private:
     ReverbComb comb_[3];
     const BossMode* boss_ = &boss_mode(1);
     ReverbLine tap_line_;
+    int tap_entr_ = 0, tap_ol_[3] = {0, 0, 0}, tap_or_[3] = {0, 0, 0};
     int tap_l_ = 0, tap_r_ = 0;
     float tap_fb_ = 0.0f;
     float echo_ = 1.0f;

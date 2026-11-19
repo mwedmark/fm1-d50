@@ -315,104 +315,136 @@ public:
         }
     }
 
-    float D5_HOT_TAG(d5_synth_next, next)(const Modulation& mod = Modulation{}) {
-        if (!active_) {
-            dc_out_ = 0.0f;
-            return 0.0f;
-        }
+    float next(const Modulation& mod = Modulation{}) {
+        float pitch = mod.pitch, amp = mod.amp, out, dc;
+        run(1, pitch, 0.0f, amp, 0.0f, &out, &dc);
+        return out;
+    }
 
-        // The chip's square: a rising cosine edge, a high shelf, a falling
-        // edge, a low shelf -- with playback starting in the centre of the
-        // first edge (munt shifts relWavePos by half the cosine). All
-        // lengths are fractions of the fundamental period here; the chip
-        // divides by waveLen in samples, which cancels out.
-        // The reciprocal is a block constant; dividing by it per sample
-        // per partial cost three VDIVs a sample on the M33, which at
-        // sixteen voices is a fifth of the render.
+    // fm1-d50: m samples at once (m <= kModPeriod: the block-rate constants stand still for them). pitch and amp are the voice's ramped
+    // modulation: each sample first adds dpitch / damp, as Voice::next does, and the values are handed back for the next chunk. Every
+    // sample's output goes to out and its DC (see dc()) to dcs. The per-sample arithmetic is next()'s; what changed is that the state
+    // lives in locals for the whole chunk.
+    void D5_HOT_TAG(d5_synth_run, run)(int m, float& pitch_io, float dpitch, float& amp_io, float damp,
+                                       float* __restrict out, float* __restrict dcs) {
+        float pitch = pitch_io, amp_m = amp_io;
+        if (!active_) {
+            for (int k = 0; k < m; ++k) { pitch += dpitch; amp_m += damp; out[k] = 0.0f; dcs[k] = 0.0f; }
+            dc_out_ = 0.0f;
+            pitch_io = pitch; amp_io = amp_m;
+            return;
+        }
         const float e = edge_frac_;
         const float inv_e = inv_edge_;
-        float rel = phase_ + 0.5f * e;
-        if (rel > 1.0f) rel -= 1.0f;
+        const float h_frac = h_frac_;
+        const float atten = atten_;
+        const float inc = inc_;
+        const float half_e = 0.5f * e;
+        const float e_h = e + h_frac;
+        const float two_e_h = 2.0f * e + h_frac;
+        const float res_amp_eff = res_amp_eff_;
+        const bool res_on = res_on_;
+        const bool saw = spec_.waveform == Waveform::kSawtooth;
+        const float gain = gain_, pw_gain = pw_gain_;
+        const float dc_k = (spec_.waveform == Waveform::kSquare) ? dc_shape_ * atten : 0.0f;
+        const float res_decay_f = res_decay_f_;
+        float phase = phase_;
+        int res_half = res_half_;
+        float res_sin = res_sin_, res_cos = res_cos_;
+        bool active = true;
+        float dc_last = 0.0f;
+        for (int k = 0; k < m; ++k) {
+            pitch += dpitch;
+            amp_m += damp;
+            if (!active) { out[k] = 0.0f; dcs[k] = 0.0f; dc_last = 0.0f; continue; }
 
-        float out;
-        if (rel < e) {
-            out = -fast_cos(0.5f * rel * inv_e);
-        } else if (rel < e + h_frac_) {
-            out = 1.0f;
-        } else if (rel < 2.0f * e + h_frac_) {
-            out = fast_cos(0.5f * (rel - (e + h_frac_)) * inv_e);
-        } else {
-            out = -1.0f;
-        }
-        out *= atten_;                     // sub-middle cutoff closes by fading
+            // The chip's square: a rising cosine edge, a high shelf, a falling
+            // edge, a low shelf -- with playback starting in the centre of the
+            // first edge (munt shifts relWavePos by half the cosine). All
+            // lengths are fractions of the fundamental period here; the chip
+            // divides by waveLen in samples, which cancels out.
+            float rel = phase + half_e;
+            if (rel > 1.0f) rel -= 1.0f;
 
-        if (res_on_) {
-            // The resonance sine: period two edges, restarted each half of
-            // the pulse, decaying exponentially per edge-length travelled,
-            // the negative half slightly faster; a squared-sine window
-            // before each edge centre keeps the restarts click-free
-            // (munt LA32FloatWaveGenerator.cpp:202-253).
-            float rr = phase_;
-            float sgn = 1.0f;
-            float df = res_decay_f_;
-            const float half = e + h_frac_;
-            int hi = 0;
-            if (rr >= half) { sgn = -1.0f; rr -= half; df += 0.25f; hi = 1; }
-            const float over = rr * inv_e;
-            // A decaying sine is a damped rotation, and both of its
-            // arguments advance by a fixed step per sample within one half
-            // of the pulse. So instead of a sine table and an exponential
-            // every sample, the pair (sin, cos) -- already carrying the
-            // decay -- is rotated forward with four multiplies, and the
-            // tables are touched only where the run starts: at each half
-            // boundary and after a block changes the cutoff. The restart
-            // is frequent enough that the rotation's own drift never
-            // accumulates (a few hundred steps at most, well under a part
-            // in ten thousand).
-            if (hi != res_half_) {
-                res_half_ = hi;
-                const float d0 = fast_exp2(-0.125f * df * over);
-                res_sin_ = fast_sin(0.5f * over) * d0;
-                res_cos_ = fast_cos(0.5f * over) * d0;
+            float o;
+            if (rel < e) {
+                o = -fast_cos(0.5f * rel * inv_e);
+            } else if (rel < e_h) {
+                o = 1.0f;
+            } else if (rel < two_e_h) {
+                o = fast_cos(0.5f * (rel - e_h) * inv_e);
             } else {
-                const float a = hi ? res_a_neg_ : res_a_pos_;
-                const float b = hi ? res_b_neg_ : res_b_pos_;
-                const float s = res_sin_ * a + res_cos_ * b;
-                res_cos_ = res_cos_ * a - res_sin_ * b;
-                res_sin_ = s;
+                o = -1.0f;
             }
-            float res = sgn * res_sin_;
-            // sync window around the nearest edge centre
-            float r2 = phase_;
-            if (r2 >= 1.0f - 0.5f * e) r2 -= 1.0f;
-            else if (r2 >= half - 0.5f * e && r2 >= 0.5f * e) r2 -= half;
-            if (r2 < 0.5f * e) {
-                const float w = fast_sin(0.5f * r2 * inv_e);
-                res *= (r2 < 0.0f) ? w * w : (w < 0.0f ? -w : w);
+            o *= atten;                     // sub-middle cutoff closes by fading
+
+            if (res_on) {
+                // The resonance sine: period two edges, restarted each half of
+                // the pulse, decaying exponentially per edge-length travelled,
+                // the negative half slightly faster; a squared-sine window
+                // before each edge centre keeps the restarts click-free
+                // (munt LA32FloatWaveGenerator.cpp:202-253). A decaying sine
+                // is a damped rotation, so (sin, cos) is rotated forward with
+                // four multiplies and the tables are touched only where a run
+                // starts: at each half boundary and after a block changes the
+                // cutoff.
+                float rr = phase;
+                float sgn = 1.0f;
+                float df = res_decay_f;
+                int hi = 0;
+                if (rr >= e_h) { sgn = -1.0f; rr -= e_h; df += 0.25f; hi = 1; }
+                const float over = rr * inv_e;
+                if (hi != res_half) {
+                    res_half = hi;
+                    const float d0 = fast_exp2(-0.125f * df * over);
+                    res_sin = fast_sin(0.5f * over) * d0;
+                    res_cos = fast_cos(0.5f * over) * d0;
+                } else {
+                    const float ra = hi ? res_a_neg_ : res_a_pos_;
+                    const float rb = hi ? res_b_neg_ : res_b_pos_;
+                    const float sn = res_sin * ra + res_cos * rb;
+                    res_cos = res_cos * ra - res_sin * rb;
+                    res_sin = sn;
+                }
+                float res = sgn * res_sin;
+                // sync window around the nearest edge centre
+                float r2 = phase;
+                if (r2 >= 1.0f - half_e) r2 -= 1.0f;
+                else if (r2 >= e_h - half_e && r2 >= half_e) r2 -= e_h;
+                if (r2 < half_e) {
+                    const float w = fast_sin(0.5f * r2 * inv_e);
+                    res *= (r2 < 0.0f) ? w * w : (w < 0.0f ? -w : w);
+                }
+                o += res * res_amp_eff;
             }
-            out += res * res_amp_eff_;
+
+            if (saw) {
+                // the chip's sawtooth: the finished square (resonance included)
+                // ring-modulated by a phase-locked cosine of the fundamental,
+                // on the UNSHIFTED phase (munt cpp:256-259)
+                o *= fast_cos(phase);
+            }
+
+            phase += inc * pitch;
+            if (phase >= 1.0f) phase -= 1.0f;
+
+            const float tva = tva_.next();
+            if (tva_.finished()) active = false;
+            // The partial's output DC with every scaling applied, for the
+            // voice's mix point: the chip's ring modulation reads the raw
+            // partial -- DC included -- but the D-50's line out is AC-coupled
+            // and never passes it. A saw keeps its shape mean on the cosine
+            // carrier (mean zero), so only the square reports one.
+            const float scale = tva * gain * amp_m * 0.5f * pw_gain;
+            dc_last = dc_k * scale;
+            dcs[k] = dc_last;
+            out[k] = o * scale;
         }
-
-        if (spec_.waveform == Waveform::kSawtooth) {
-            // the chip's sawtooth: the finished square (resonance included)
-            // ring-modulated by a phase-locked cosine of the fundamental,
-            // on the UNSHIFTED phase (munt cpp:256-259)
-            out *= fast_cos(phase_);
-        }
-
-        phase_ += inc_ * mod.pitch;
-        if (phase_ >= 1.0f) phase_ -= 1.0f;
-
-        const float amp = tva_.next();
-        if (tva_.finished()) active_ = false;
-        // The partial's output DC with every scaling applied, for the
-        // voice's mix point: the chip's ring modulation reads the raw
-        // partial -- DC included -- but the D-50's line out is AC-coupled
-        // and never passes it. A saw keeps its shape mean on the cosine
-        // carrier (mean zero), so only the square reports one.
-        const float scale = amp * gain_ * mod.amp * 0.5f * pw_gain_;
-        dc_out_ = spec_.waveform == Waveform::kSquare ? dc_shape_ * atten_ * scale : 0.0f;
-        return out * scale;
+        phase_ = phase;
+        res_half_ = res_half; res_sin_ = res_sin; res_cos_ = res_cos;
+        active_ = active;
+        dc_out_ = dc_last;
+        pitch_io = pitch; amp_io = amp_m;
     }
 
     // DC of this partial's contribution next() just returned (see above).

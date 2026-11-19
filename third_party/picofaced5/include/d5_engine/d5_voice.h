@@ -220,6 +220,7 @@ public:
         sr_ = sample_rate;
         const Structure& st = structure();
         const PartialType types[2] = {st.p1, st.p2};
+        prepare_mix(st);
         // The LFOs belong to the TONE: the 97.66-Hz tick walks one phase word
         // per LFO per tone (IC25 0x1508-0x160D) and every voice reads the
         // shared words from the CD40 merge area -- notes in a chord vibrate
@@ -481,7 +482,6 @@ public:
     }
 
     float D5_HOT_TAG(d5_voice_next, next)() {
-        const Structure& st = structure();
         // Standalone voices advance their private LFOs themselves; a bound
         // voice's LFOs are stepped by the tone above it.
         if (lfo_local_) {
@@ -497,66 +497,43 @@ public:
         mod_[1].pitch += dpitch_[1];
         mod_[1].amp += damp_[1];
 
-        float a = (st.p1 == PartialType::kPcm) ? pcm_[0].next(mod_[0])
-                                               : synth_[0].next(mod_[0]);
-        float b = (st.p2 == PartialType::kPcm) ? pcm_[1].next(mod_[1])
-                                               : synth_[1].next(mod_[1]);
-        // The asymmetric pulses carry a DC as large as the duty imbalance.
-        // Inside the chip that DC is real -- the pair's ring mod multiplies
-        // the raw partials -- but the D-50's line out is AC-coupled and
-        // never passes it. So the direct partials are stripped here at the
-        // mix point, and from the ring product only the pure dc*dc term
-        // comes out: the leakage terms (dc_a * b) are a level-modulated
-        // copy of the other partial, which the coupling keeps.
-        const float a_raw = a;                    // ring reads pre-mute values:
-        const float b_raw = b;                    // the mute buttons gate the
-        float dca = (st.p1 == PartialType::kPcm) ? 0.0f : synth_[0].dc();
-        float dcb = (st.p2 == PartialType::kPcm) ? 0.0f : synth_[1].dc();
-        const float dca_raw = dca, dcb_raw = dcb; // direct terms only
-        if (!(spec_.partials_on & 0x1)) { a = 0.0f; dca = 0.0f; }
-        if (!(spec_.partials_on & 0x2)) { b = 0.0f; dcb = 0.0f; }
+        float a, b, da = 0.0f, db = 0.0f;
+        if (p1_pcm_) pcm_[0].run(1, mod_[0].pitch, 0.0f, mod_[0].amp, 0.0f, &a);
+        else synth_[0].run(1, mod_[0].pitch, 0.0f, mod_[0].amp, 0.0f, &a, &da);
+        if (p2_pcm_) pcm_[1].run(1, mod_[1].pitch, 0.0f, mod_[1].amp, 0.0f, &b);
+        else synth_[1].run(1, mod_[1].pitch, 0.0f, mod_[1].amp, 0.0f, &b, &db);
+        return mix(a, b, da, db);
+    }
 
-        // The chip multiplies in the log domain, which is an ordinary product
-        // once decoded: sum and difference frequencies, and silence whenever
-        // either side is silent. Muting partial 1 keeps the product -- the
-        // bank forces this reading: Glockenspiel (bank 4) mutes partial 1 of
-        // a ring structure, a dead preset if the mute reached the product,
-        // whereas gating only the direct path is exactly the classic trick
-        // of hiding the carrier and keeping the metallic product. Muting
-        // partial 2 kills it (Roland's VST: P1 alone has no sidebands).
-        // The product is formed from DC-free partials: the VST's product of
-        // a narrow pulse with a sawtooth is 3 dB QUIETER than a square's,
-        // where the DC leak term (dc * saw, a copy of the other partial)
-        // made ours 3 dB louder. And its level sits above the plain
-        // product of our 0.5-scaled partials: +3.3 dB with two synth
-        // partials, +2.5 with one, +0.2 for PCM x PCM, on every pitch pair,
-        // velocity and envelope level tried (the ratio to P1's direct
-        // output is what was measured, so it tracks both TVAs).
-        float second;
-        if (st.ring) {
-            const int ns = (st.p1 == PartialType::kSynth) + (st.p2 == PartialType::kSynth);
-            const float rg = ns == 2 ? 1.46f : (ns == 1 ? 1.33f : 1.0f);
-            second = (spec_.partials_on & 0x2)
-                         ? rg * (a_raw - dca_raw) * (b_raw - dcb_raw) : 0.0f;
-        } else {
-            second = b - dcb;
+    // fm1-d50: n samples added to acc, as n calls of next() would (the LFOs from snap, the tone's per-sample copies; null: from the LFOs
+    // themselves). Within one control period the partials render a chunk at a time. Returns whether the voice still sounds.
+    bool D5_HOT_TAG(d5_voice_render, render)(const LfoSnap* snap, float* __restrict acc, int n) {
+        if (lfo_local_) {                               // unbound voice (unit tests): its own LFOs step per sample
+            for (int t = 0; t < n; ++t) {
+                acc[t] += next();
+                if (!active()) return false;
+            }
+            return true;
         }
-
-        // The firmware's balance curve (EPROM bank code 0xB450): the
-        // quieter side falls linearly to zero, the louder side RISES from
-        // the 80/80 center to 100 at full tilt -- a +2 dB emphasis the
-        // linear crossfade lacked. Normalized to 1.0 at center.
-        // Direction PROVEN: balance 0 puts the full factor on the slot
-        // that c46's bit 0 mutes, and that bit is partial 1 in the MIDI
-        // chart -- low values favor partial 1.
-        const float bal = spec_.balance < 0.0f ? 0.0f
-                        : (spec_.balance > 1.0f ? 1.0f : spec_.balance);
-        const float mn = bal < 0.5f ? bal : 1.0f - bal;
-        const float fmin = mn * 2.0f;
-        const float fmax = 1.0f + (0.5f - mn) * 0.5f;
-        const float w1 = bal < 0.5f ? fmax : fmin;
-        const float w2 = bal < 0.5f ? fmin : fmax;
-        return (a - dca) * w1 + second * w2;
+        int t = 0;
+        float oa[kModPeriod], ob[kModPeriod], da[kModPeriod], db[kModPeriod];
+        while (t < n) {
+            if (mod_count_ == 0) {
+                snap_now_ = snap ? &snap[t] : nullptr;
+                update_block();
+            }
+            const int m = mod_count_ < n - t ? mod_count_ : n - t;
+            if (p1_pcm_) pcm_[0].run(m, mod_[0].pitch, dpitch_[0], mod_[0].amp, damp_[0], oa);
+            else synth_[0].run(m, mod_[0].pitch, dpitch_[0], mod_[0].amp, damp_[0], oa, da);
+            if (p2_pcm_) pcm_[1].run(m, mod_[1].pitch, dpitch_[1], mod_[1].amp, damp_[1], ob);
+            else synth_[1].run(m, mod_[1].pitch, dpitch_[1], mod_[1].amp, damp_[1], ob, db);
+            for (int k = 0; k < m; ++k) acc[t + k] += mix(oa[k], ob[k], p1_pcm_ ? 0.0f : da[k], p2_pcm_ ? 0.0f : db[k]);
+            mod_count_ -= m;
+            t += m;
+            if (!active()) { snap_now_ = nullptr; return false; }
+        }
+        snap_now_ = nullptr;
+        return true;
     }
 
     // Pitch bend reaches notes that are already sounding, so it cannot go
@@ -592,6 +569,71 @@ public:
     }
 
 private:
+    float mix(float a, float b, float dca, float dcb) const {
+        // The asymmetric pulses carry a DC as large as the duty imbalance.
+        // Inside the chip that DC is real -- the pair's ring mod multiplies
+        // the raw partials -- but the D-50's line out is AC-coupled and
+        // never passes it. So the direct partials are stripped here at the
+        // mix point, and from the ring product only the pure dc*dc term
+        // comes out: the leakage terms (dc_a * b) are a level-modulated
+        // copy of the other partial, which the coupling keeps.
+        const float a_raw = a;                    // ring reads pre-mute values:
+        const float b_raw = b;                    // the mute buttons gate the
+        const float dca_raw = dca, dcb_raw = dcb; // direct terms only
+        if (!(spec_.partials_on & 0x1)) { a = 0.0f; dca = 0.0f; }
+        if (!(spec_.partials_on & 0x2)) { b = 0.0f; dcb = 0.0f; }
+
+        // The chip multiplies in the log domain, which is an ordinary product
+        // once decoded: sum and difference frequencies, and silence whenever
+        // either side is silent. Muting partial 1 keeps the product -- the
+        // bank forces this reading: Glockenspiel (bank 4) mutes partial 1 of
+        // a ring structure, a dead preset if the mute reached the product,
+        // whereas gating only the direct path is exactly the classic trick
+        // of hiding the carrier and keeping the metallic product. Muting
+        // partial 2 kills it (Roland's VST: P1 alone has no sidebands).
+        // The product is formed from DC-free partials: the VST's product of
+        // a narrow pulse with a sawtooth is 3 dB QUIETER than a square's,
+        // where the DC leak term (dc * saw, a copy of the other partial)
+        // made ours 3 dB louder. And its level sits above the plain
+        // product of our 0.5-scaled partials: +3.3 dB with two synth
+        // partials, +2.5 with one, +0.2 for PCM x PCM, on every pitch pair,
+        // velocity and envelope level tried (the ratio to P1's direct
+        // output is what was measured, so it tracks both TVAs).
+        float second;
+        if (ring_) {
+            second = (spec_.partials_on & 0x2)
+                         ? ring_gain_ * (a_raw - dca_raw) * (b_raw - dcb_raw) : 0.0f;
+        } else {
+            second = b - dcb;
+        }
+        return (a - dca) * w1_ + second * w2_;
+    }
+
+    // fm1-d50: what next() would work out again every sample from the spec, which does not change while the note sounds.
+    void prepare_mix(const Structure& st) {
+        p1_pcm_ = st.p1 == PartialType::kPcm;
+        p2_pcm_ = st.p2 == PartialType::kPcm;
+        ring_ = st.ring;
+        const int ns = (st.p1 == PartialType::kSynth) + (st.p2 == PartialType::kSynth);
+        ring_gain_ = ns == 2 ? 1.46f : (ns == 1 ? 1.33f : 1.0f);
+        // The firmware's balance curve (EPROM bank code 0xB450): the
+        // quieter side falls linearly to zero, the louder side RISES from
+        // the 80/80 center to 100 at full tilt -- a +2 dB emphasis the
+        // linear crossfade lacked. Normalized to 1.0 at center.
+        // Direction PROVEN: balance 0 puts the full factor on the slot
+        // that c46's bit 0 mutes, and that bit is partial 1 in the MIDI
+        // chart -- low values favor partial 1.
+        const float bal = spec_.balance < 0.0f ? 0.0f
+                        : (spec_.balance > 1.0f ? 1.0f : spec_.balance);
+        const float mn = bal < 0.5f ? bal : 1.0f - bal;
+        const float fmin = mn * 2.0f;
+        const float fmax = 1.0f + (0.5f - mn) * 0.5f;
+        w1_ = bal < 0.5f ? fmax : fmin;
+        w2_ = bal < 0.5f ? fmin : fmax;
+    }
+    bool p1_pcm_ = false, p2_pcm_ = false, ring_ = false;
+    float ring_gain_ = 1.0f, w1_ = 1.0f, w2_ = 1.0f;
+
     static float lfo_value(const float l[3], const LfoRoute& r) {
         const int i = (r.lfo < 0 || r.lfo > 2) ? 0 : r.lfo;
         return l[i];

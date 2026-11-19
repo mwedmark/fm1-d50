@@ -78,26 +78,42 @@ public:
     void quick_release() { env_.quick_release(sr_); }
     bool active() const { return active_; }
 
-    float D5_HOT_TAG(d5_pcm_next, next)(const Modulation& mod = Modulation{}) {
-        if (!active_) return 0.0f;
+    float next(const Modulation& mod = Modulation{}) {
+        float pitch = mod.pitch, amp = mod.amp, out;
+        run(1, pitch, 0.0f, amp, 0.0f, &out);
+        return out;
+    }
 
-        const uint32_t i = index_;
-        // The partner for interpolation is the next word, and at the end of a
-        // loop that word is the first one again -- not the one past the
-        // sample. Wrapping the position instead of the partner drops the last
-        // word of every revolution and plays the first one twice, which on a
-        // 128-word cycle is 250 corrupted words a second. It cost up to 2.4%
-        // of the signal on VIOLlp, and exactly nothing on Noise, whose last
-        // word happens to equal its first.
-        const uint32_t j = (i + 1 < s_.length) ? i + 1 : (s_.looped ? 0u : i);
-        const float a = s_.data[s_.start + i] * (1.0f / 32768.0f);
-        const float b = s_.data[s_.start + j] * (1.0f / 32768.0f);
-        const float sample = a + (b - a) * frac_;
+    // fm1-d50: m samples at once, as SynthPartial::run: the voice's ramped pitch and amp advance by dpitch / damp before each sample.
+    void D5_HOT_TAG(d5_pcm_run, run)(int m, float& pitch_io, float dpitch, float& amp_io, float damp, float* __restrict out) {
+        float pitch = pitch_io, amp_m = amp_io;
+        const int16_t* const data = s_.data + s_.start;
+        const uint32_t length = s_.length;
+        const bool looped = s_.looped;
+        const float rate = rate_, gain = gain_;
+        for (int k = 0; k < m; ++k) {
+            pitch += dpitch;
+            amp_m += damp;
+            if (!active_) { out[k] = 0.0f; continue; }
+            const uint32_t i = index_;
+            // The partner for interpolation is the next word, and at the end of a
+            // loop that word is the first one again -- not the one past the
+            // sample. Wrapping the position instead of the partner drops the last
+            // word of every revolution and plays the first one twice, which on a
+            // 128-word cycle is 250 corrupted words a second. It cost up to 2.4%
+            // of the signal on VIOLlp, and exactly nothing on Noise, whose last
+            // word happens to equal its first.
+            const uint32_t j = (i + 1 < length) ? i + 1 : (looped ? 0u : i);
+            const float a = data[i] * (1.0f / 32768.0f);
+            const float b = data[j] * (1.0f / 32768.0f);
+            const float sample = a + (b - a) * frac_;
 
-        advance(rate_ * mod.pitch);
-        const float amp = env_.next();
-        if (env_.finished()) active_ = false;
-        return sample * amp * gain_ * mod.amp;
+            advance(rate * pitch);
+            const float amp = env_.next();
+            if (env_.finished()) active_ = false;
+            out[k] = sample * amp * gain * amp_m;
+        }
+        pitch_io = pitch; amp_io = amp_m;
     }
 
 private:

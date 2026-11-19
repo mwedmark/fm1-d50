@@ -209,13 +209,8 @@ public:
         return n;
     }
     void D5_HOT(render_voice)(int i, float* acc, int n) {
-        Voice& v = voices_[i];
-        v.set_snap(snap_);
-        for (int t = 0; t < n && active_[i]; ++t) {
-            acc[t] += v.next();
-            if (!v.active()) active_[i] = false;
-        }
-        v.set_snap(nullptr);
+        if (!active_[i]) return;
+        if (!voices_[i].render(snap_, acc, n)) active_[i] = false;
     }
     // fm1-d50: a tone that has had no voice for a quarter of a second and whose EQ and chorus have rung out (under -100 dB) costs
     // nothing until a voice sounds again: the FM-1's CPU spent a third of its time on silence. The chorus's sweep then stands still.
