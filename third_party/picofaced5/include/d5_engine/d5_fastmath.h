@@ -134,6 +134,21 @@ inline float fast_exp2(float x) {
     return out;
 }
 
+// log2(x) for x > 0 and normal (fm1-d50: a libm pow() per block per square partial cost the FM-1 a fifth of a core). The exponent comes
+// from the float's bits, the mantissa (folded into 0.7..1.41) through the atanh series: within 1e-7 of the true value.
+inline float fast_log2(float x) {
+    uint32_t bits;
+    std::memcpy(&bits, &x, sizeof bits);
+    int e = static_cast<int>((bits >> 23) & 0xFF) - 127;
+    bits = (bits & 0x007FFFFFu) | 0x3F800000u;
+    float m;
+    std::memcpy(&m, &bits, sizeof m);
+    if (m > 1.41421356f) { m *= 0.5f; ++e; }
+    const float t = (m - 1.0f) / (m + 1.0f);
+    const float t2 = t * t;
+    return static_cast<float>(e) + t * (2.88539008f + t2 * (0.96179669f + t2 * (0.57707802f + t2 * 0.41219858f)));
+}
+
 // e^-x for x >= 0, which is every use here (decays, never growth).
 inline float fast_exp_neg(float x) {
     return x <= 0.0f ? 1.0f : fast_exp2(-x * 1.44269504088896340736f);

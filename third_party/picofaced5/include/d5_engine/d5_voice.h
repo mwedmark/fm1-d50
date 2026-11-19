@@ -455,7 +455,7 @@ public:
             // The VST's tremolo (select byte 1, our negative route) starts fully
             // ducked on a synced LFO, where the vibrato starts at its highest
             // pitch; with the route sign folded into tva_l that is (1 - l)/2.
-            float tgt_amp = fast_exp2(-kTvaLfoDb * tva_d * 0.5f * (1.0f - tva_l) * (1.0f / 6.0206f));
+            float tgt_amp = tva_d != 0.0f ? fast_exp2(-kTvaLfoDb * tva_d * 0.5f * (1.0f - tva_l) * (1.0f / 6.0206f)) : 1.0f;   // fm1-d50: exp2(-0) is 1
             // TVA aftertouch, measured on Roland's D-50 VST: the attenuation
             // is 2 * u^2 chip units (0.755 dB * u^2, u = range - 7), a
             // positive range resting fully attenuated and lifted linearly

@@ -309,7 +309,7 @@ public:
         if (spec_.waveform == Waveform::kSquare) {
             // the pulse the chip actually plays: never narrower than its edge pair
             const float d = pulse_frac_ > edge_frac_ ? pulse_frac_ : edge_frac_;
-            pw_gain_ = std::pow(0.25f / (d * (1.0f - d)), 0.47f);
+            pw_gain_ = fast_exp2(0.47f * fast_log2(0.25f / (d * (1.0f - d))));   // fm1-d50: no libm pow per block
         } else {
             pw_gain_ = 1.0f;
         }

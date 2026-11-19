@@ -576,11 +576,14 @@ private:
         if (!handed) render_voices(theirs, nt, acc_[2], acc_[3], n);
         render_voices(mine, nm, acc_[0], acc_[1], n);
         if (handed) split->wait();
+        float uw, lw;
+        int om;
+        mix_weights(uw, lw, om);
         for (int t = 0; t < n; ++t) {
             float ul, ur, ll, lr;
             upper_.finish_sample(acc_[0][t] + acc_[2][t], ul, ur);
             lower_.finish_sample(acc_[1][t] + acc_[3][t], ll, lr);
-            mix(ul, ur, ll, lr, l[t], r[t]);
+            mix_with(uw, lw, om, ul, ur, ll, lr, l[t], r[t]);
         }
     }
     SplitJob job_{};
@@ -589,7 +592,7 @@ private:
 
 public:
     // The tones' outputs into the patch's two outputs (the rest of next_stereo, shared with render_block).
-    void D5_HOT(mix)(float ul, float ur, float ll, float lr, float& l, float& r) {
+    void mix_weights(float& uw_out, float& lw_out, int& om_out) const {
         // Tone balance per the firmware's mixer (bank code 0xB397): each
         // tone's factor is min(4*b, 255)/200 of its side, so the center
         // is 1.0 each and a full tilt reaches +2.1 dB on the loud side --
@@ -603,6 +606,8 @@ public:
             uw = 2.0f * b; if (uw > 1.275f) uw = 1.275f;
             lw = 2.0f * (1.0f - b); if (lw > 1.275f) lw = 1.275f;
         }
+        uw_out = uw;
+        lw_out = lw;
         // Output mode gains, measured on Roland's D-50 VST with one tone at
         // a time (Stereo Polysynth and Arco Strings, dry): mode 1 puts each
         // tone at HALF amplitude on both outputs, modes 2 to 4 put each tone
@@ -611,7 +616,15 @@ public:
         // mode: both outputs, mode-1 level, in every mode. The reverb send
         // is both tones at half in modes 1 and 2 (rows 80 80) and one tone
         // at full in modes 3 and 4.
-        const int om = spec_.key_mode == KeyMode::kWhole ? 0 : spec_.output_mode;
+        om_out = spec_.key_mode == KeyMode::kWhole ? 0 : spec_.output_mode;
+    }
+    void D5_HOT(mix)(float ul, float ur, float ll, float lr, float& l, float& r) {
+        float uw, lw;
+        int om;
+        mix_weights(uw, lw, om);
+        mix_with(uw, lw, om, ul, ur, ll, lr, l, r);
+    }
+    void D5_HOT(mix_with)(float uw, float lw, int om, float ul, float ur, float ll, float lr, float& l, float& r) {
         if (om == 0) {
             const float xl = 0.5f * (ul * uw + ll * lw);
             const float xr = 0.5f * (ur * uw + lr * lw);
