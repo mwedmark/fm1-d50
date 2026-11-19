@@ -11,6 +11,9 @@
 #include "fm1_device.h"
 #include "fm1b_dqt.inc"
 #include <string.h>
+#if FM1_D50
+#include "d50/d50.h"
+#endif
 #if __has_include("fm1b_bank_data.inc")
 #include "fm1b_bank_data.inc"
 #define HAVE_BUILT_IN 1
@@ -52,7 +55,15 @@ static int bind_at(uint32_t offset, uint32_t limit)
  * written must be the one that plays, never an older one. */
 int fm1b_bind_flash(void)
 {
+#if FM1_D50_ONLY
+    return d50_bind_flash();                              /* only the D-50's data: the FM1B bank code is left out of the image */
+#else
+#if FM1_D50
+    if (d50_bind_flash())                                 /* the D-50's sample data instead of a bank */
+        return 1;
+#endif
     return bind_at(FM1B_FLASH_OFFSET, FM1B_FLASH_BYTES);
+#endif
 }
 
 void fm1b_device_init(void)
@@ -74,6 +85,10 @@ void fm1b_device_init(void)
 /* Control task: the player binds the bank once it knows the FM-1 was not started in safe mode (sf2player.c). */
 void fm1b_device_bind(void)
 {
+#if FM1_D50_ONLY
+    (void)fm1b_bind_flash();
+    return;
+#endif
     if (fm1b_bind_flash() || bind_at(FM1B_LEGACY_OFFSET, FM1B_LEGACY_BYTES))   /* a bank installed by an earlier firmware lies after the 68 KiB of projects */
         return;
 #ifdef HAVE_BUILT_IN

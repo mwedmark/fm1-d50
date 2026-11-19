@@ -8,6 +8,7 @@
 #ifndef FM1B_H
 #define FM1B_H
 #include <stdint.h>
+#include "fm1b_config.h"                                 /* FM1_D50 sets FM1B_BFP8_ONLY */
 /* 1: banks of version 2 whose sounds are MP3 (the live cache) can be played; see the end of this file. Set with -DFM1B_PACKED=1, together with live_cache/ and third_party/mp3. */
 #ifndef FM1B_PACKED
 #define FM1B_PACKED 0

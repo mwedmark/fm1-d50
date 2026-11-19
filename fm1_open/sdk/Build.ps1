@@ -370,7 +370,7 @@ if ($LiveCache) {
     $include += @('live_cache','third_party/mp3')
 }
 $sources = @(Get-ChildItem -LiteralPath (Join-Path $root 'app') -Recurse -File |
-    Where-Object { $_.Extension -in @('.c','.S') -and !$_.FullName.StartsWith(([IO.Path]::GetFullPath((Join-Path $root 'app/synth'))+'\'),[StringComparison]::OrdinalIgnoreCase) } | Sort-Object FullName | ForEach-Object { $_.FullName.Substring($root.Length+1).Replace('\','/') })
+    Where-Object { $_.Extension -in @('.c','.S','.cpp') -and !$_.FullName.StartsWith(([IO.Path]::GetFullPath((Join-Path $root 'app/synth'))+'\'),[StringComparison]::OrdinalIgnoreCase) } | Sort-Object FullName | ForEach-Object { $_.FullName.Substring($root.Length+1).Replace('\','/') })
 if ($LiveCache) { $sources += @('live_cache/mp3_sound.c','live_cache/sound_cache.c') }
 $extra = @('groove_sequence_render','groove_sequence_clock','groove_sequence_position','groove_sequence_transport','fm1_sea_decode_groups','fm1_codec_sea_mono_s16_run') + @($synth.sram_required) + @(
     'synth_dx7_render','synth_dx7_midi','synth_dx7_key','fm1_dx7_panic','fm_exp2_fixed','bass303_bank_render','bass303_bank_key','bass303_bank_set','drum808_kit_render','drum808_kit_trigger','psg_render','psg_key','psg_midi','psg_panic','psg_set','psg_get','pluck_render','pluck_key','pluck_midi','pluck_panic','pluck_set','pluck_get','fm1_mix128','fm1_mix_mono_stereo128','fm1_bus_output128','fm1_master_mix128','fm1_master_gain','fm1_declick128','fm1_render_begin','fm1_render_end','synth_dx7_active','bass303_bank_active','drum808_kit_active','psg_active','pluck_active','sampledrum_active','synth_dx7_limit','psg_limit','pluck_limit','sampledrum_limit','bass303_advance_idle','fm1_send128','fm1_fx_render','fm1_fx_clear','fm1_fx_active','sampledrum_render','sampledrum_trigger','sampledrum_panic','psg_active_chips')
@@ -415,6 +415,13 @@ try {
         # Measured 2026-11-08 (app image, limit 453921): all LTO 460700; both native -Oz 454524; mp3_sound native -Oz 454428; that plus -fno-inline-functions 453788
         # (133 to spare); both native with it 453884. sound_cache.c stays LTO. The decoder's speed with the calls not inlined is not measured on the FM-1 yet.
         if ($source -eq 'live_cache/mp3_sound.c') { $options += @('-fno-lto', '-Oz', '-fno-inline-functions') }
+        # fm1-d50: the D-50 engine is C++ (third_party/picofaced5). The toolchain has no libc++, so app/d50/cxx has the few std headers it uses;
+        # native objects (the LTO plugin and C++'s weak inline functions are not tried together). The reverb's lines are 16-bit, in the SDK's effect units.
+        if ($source -eq 'app/d50/d50_math.c') { $options = @($options | Where-Object { $_ -ne '-flto' }) + @('-fno-builtin') }   # it defines libm's names
+        if ($source -like '*.cpp') {
+            $options = @($options | Where-Object { $_ -ne '-flto' -and $_ -ne '-O2' }) + @('-Os','-x','c++','-std=c++1z','-fno-exceptions','-fno-rtti','-fno-threadsafe-statics','-nostdinc++',
+                '-DD5_REVERB_INT16','-DD5_REVERB_EXTERNAL_POOL','-I' + (Join-Path $root 'app/d50/cxx'), '-I' + (Join-Path $root '../third_party/picofaced5/include'), '-I' + (Join-Path $root '../roms/gen'))
+        }
         $arguments = @($options) + @('-MMD','-MF',($output + '.d'),'-c',$inputFile,'-o',$output)
         Write-Host "Compile $source"
         Run (Join-Path $bin 'clang.exe') $arguments
@@ -449,7 +456,11 @@ try {
     $aclTx = ' + 1024'
     $aclRx = ' + 4096'
     $linker = [IO.File]::ReadAllText((Join-Path $sdk 'config/linker.ld.in')).Replace('@SBC_DECODER@',$sbcRoot).Replace('@ACL_TX_EXTRA@',$aclTx).Replace('@ACL_RX_EXTRA@',$aclRx)
-    $fxRules = if ($FxPool) { "        . = ALIGN(256);`n        fm1_fx_pool_begin = .;`n        *(.bss.fm1_effects)`n        fm1_fx_pool_split = .;`n        *(.bss.fm1_transport_bt_pcm)`n        *(.bss.fm1_cache_pool)`n        fm1_fx_pool_end = .;" } else { '' }
+    # fm1-d50: the D-50's reverb takes the engine library's two idle effect units (48 832 bytes; the firmware never calls the library's
+    # instrument, so they are never started) around their state words: the linker only marks where they are (app/d50/d50.cpp).
+    $fxRules = ''
+    if ($FxPool) { $fxRules = "        . = ALIGN(256);`n        fm1_fx_pool_begin = .;`n        *(.bss.fm1_effects)`n        fm1_fx_pool_split = .;`n        *(.bss.fm1_transport_bt_pcm)`n        *(.bss.fm1_cache_pool)`n        fm1_fx_pool_end = .;" }
+    elseif ($sources -contains 'app/d50/d50.cpp') { $fxRules = "        . = ALIGN(256);`n        fm1_fx_pool_begin = .;`n        *(.bss.fm1_effects)`n        fm1_fx_pool_end = .;" }
     $linker = $linker.Replace('@FX_POOL@',$fxRules)
     Write-Text (Join-Path $build 'generated/linker') $linker
     $link = @('--plugin',(Join-Path $bin 'LLVMgold.dll'),'-o','sdk.elf') + $objects + @(

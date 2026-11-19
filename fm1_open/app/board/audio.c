@@ -7,6 +7,12 @@
 #include "fm1b_config.h"
 #include "sf2out.h"
 #include <string.h>
+#if FM1_D50
+#include "d50/d50.h"
+#define PLAYER_READY() (fm1b_ready() || d50_ready())
+#else
+#define PLAYER_READY() fm1b_ready()
+#endif
 
 #define DMA_ALIGNED __attribute__((aligned(32)))
 static int32_t receive[2][FM1_BLOCK_WORDS] DMA_ALIGNED;
@@ -54,7 +60,7 @@ FM1_AUDIO_CODE __attribute__((interrupt(""))) void fm1_audio_irq(void)
 #endif
     /* The FM1B player sits beside the library's instrument: one channel of Q23, added to both. */
 #if FM1B_IN_FIRMWARE
-    if (fm1b_ready())
+    if (PLAYER_READY())
         sf2out_render(rendered);                          /* voices, effects, and the resampling to 44.1 kHz (sf2out.c) */
 #endif
     fm1_output_mix(rendered);
@@ -74,7 +80,7 @@ FM1_AUDIO_CODE __attribute__((interrupt(""))) void fm1_audio_irq(void)
     used = elapsed(start, FM1_AUDIO_TIMER_COUNT);
     if (used > statistics.peak_ticks) statistics.peak_ticks = used;
 #if FM1B_IN_FIRMWARE
-    if (fm1b_ready())
+    if (PLAYER_READY())
         sf2out_load(used, block_ticks);                   /* the CPU guard: fewer voices when the interrupt runs short */
 #endif
     ++statistics.blocks;

@@ -463,7 +463,13 @@
   window.addEventListener('beforeunload', e => { if (busy) { e.preventDefault(); e.returnValue = ''; } });
 
   function showBank(bytes, name) {
-    if (bytes.length < 76 || String.fromCharCode(...bytes.subarray(0, 4)) !== 'FM1B') throw new Error(name + ' is not an FM1B bank.');
+    // fm1-d50: the D-50's sample data (tools/d50_pack.js: "FMD5", version 1 samples only, 2 with a patch bank) is uploaded as a bank is
+    if (bytes.length >= 524304 && bytes.length <= 536576 && String.fromCharCode(...bytes.subarray(0, 4)) === 'FMD5' && (bytes[4] === 1 || bytes[4] === 2)) {
+      bank = bytes; bankName = name;
+      $('bankInfo').textContent = name + ': ' + kb(bytes.length) + ', the D-50\'s sample data (100 PCM waves, 32 kHz)' + (bytes[4] === 2 ? ' and a bank of 64 patches' : '');
+      return;
+    }
+    if (bytes.length < 76 || String.fromCharCode(...bytes.subarray(0, 4)) !== 'FM1B') throw new Error(name + ' is not an FM1B bank or D-50 sample data.');
     if (bytes.length > 536576) throw new Error(name + ' (' + kb(bytes.length) + ') is larger than the FM-1\'s sample flash (524 KB).');
     const dv = new DataView(bytes.buffer, bytes.byteOffset), flags = dv.getUint16(6, true), presets = dv.getUint16(12, true);
     const format = packedBank(bytes) ? packedFormat(bytes) : flags & 8 ? 'BFP8' : flags & 2 ? 'SEA' : flags & 4 ? '12-bit' : flags & 1 ? '16-bit' : '8-bit';

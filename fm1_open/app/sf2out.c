@@ -3,7 +3,11 @@
 #include "fm1b.h"
 #include "sf2fx.h"
 #include "engine.h"
+#include "fm1b_config.h"
 #include <stddef.h>
+#if FM1_D50
+#include "d50/d50.h"
+#endif
 
 /* The limiter: the dry mix gets LIMIT_MAKEUP (the zone levels left the mix about 6 dB under where it was) and its peaks are held
  * at LIMIT_CEILING, under full scale so the effects and the pan have room. The gain drops at once on a peak and comes back
@@ -72,11 +76,22 @@ FM1_DSP_CODE void sf2out_render(int32_t *out)
     uint8_t sends[2];
     int32_t *sides[2] = {cut_left, cut_right};
     for (unsigned i = 0; i < n; ++i) { melodic[i] = 0; stereo[2 * i] = stereo[2 * i + 1] = 0; }
-    unsigned buses = fm1b_render_sends(NULL, melodic, reverb_bus, chorus_bus, sides, n, sends);
-    limit(melodic, reverb_bus, chorus_bus, cut_left, cut_right, buses, n);
-    sf2fx_mix_sends(melodic, buses & 4U ? cut_left : NULL, buses & 8U ? cut_right : NULL,
-                    buses & 1U ? reverb_bus : melodic, buses & 1U ? 127U : sends[0],
-                    buses & 2U ? chorus_bus : melodic, buses & 2U ? 127U : sends[1], stereo, n);
+#if FM1_D50_ONLY
+    (void)sends; (void)sides;
+    d50_render(stereo, n);                               /* the D-50 renders its own stereo mix at 32 kHz (app/d50) */
+    if (0)
+#elif FM1_D50
+    if (d50_ready())
+        d50_render(stereo, n);
+    else
+#endif
+    {
+        unsigned buses = fm1b_render_sends(NULL, melodic, reverb_bus, chorus_bus, sides, n, sends);
+        limit(melodic, reverb_bus, chorus_bus, cut_left, cut_right, buses, n);
+        sf2fx_mix_sends(melodic, buses & 4U ? cut_left : NULL, buses & 8U ? cut_right : NULL,
+                        buses & 1U ? reverb_bus : melodic, buses & 1U ? 127U : sends[0],
+                        buses & 2U ? chorus_bus : melodic, buses & 2U ? 127U : sends[1], stereo, n);
+    }
     int16_t *l = left_in + RESAMPLE_HISTORY, *r = right_in + RESAMPLE_HISTORY;
     for (unsigned i = 0; i < n; ++i) {                   /* Q23 (saturated) to Q15 */
         l[i] = (int16_t)(stereo[2 * i] >> 8);
@@ -125,6 +140,10 @@ FM1_DSP_CODE void sf2out_load(uint32_t used, uint32_t block)
     load_average += ((int32_t)(p << 8) - (int32_t)load_average) >> 5;
     if (p > load_peak)
         load_peak = p;
+#if FM1_D50
+    if (d50_ready())                                     /* the guard steers the FM1B player's voices; the D-50 has its own pool */
+        return;
+#endif
     if (guard_hold) {
         --guard_hold;
         return;

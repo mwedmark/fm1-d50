@@ -16,6 +16,20 @@
 #define FM1_STATS_MIDI FM1B_PACKED                       /* the player's figures once a second as SysEx to USB (stats_midi_poll): on in the live-cache build */
 #endif
 #include "sf2_upload.h"
+#if FM1_D50
+#include "d50/d50.h"
+#if FM1_D50_ONLY
+#define D50_ON() 1                                       /* everything goes to the D-50: the FM1B player's paths are dead code, which the link drops */
+#else
+#define D50_ON() d50_ready()
+#endif
+#else
+#define D50_ON() 0
+#define d50_note(n, v) ((void)0)
+#define d50_program(p) ((void)0)
+#define d50_bend(v) ((void)0)
+#define d50_panic() ((void)0)
+#endif
 #include "sf2fx.h"
 #include "sf2out.h"
 #if FM1_CLOCK_SWITCH
@@ -42,6 +56,7 @@ static const void *const keep_linked[] __attribute__((used)) = {
 void sf2player_play(unsigned note, unsigned velocity)
 {
     uint32_t flags = fm1_device_irq_save();
+    if (D50_ON()) d50_note(note, velocity); else
     fm1b_note(NULL, note, velocity, 100);
     fm1_device_irq_restore(flags);
 }
@@ -49,6 +64,7 @@ void sf2player_play(unsigned note, unsigned velocity)
 void sf2player_drum(unsigned note, unsigned velocity)
 {
     uint32_t flags = fm1_device_irq_save();
+    if (D50_ON()) d50_note(note, velocity); else
     fm1b_drum_note(NULL, note, velocity, 100);
     fm1_device_irq_restore(flags);
 }
@@ -56,18 +72,21 @@ void sf2player_drum(unsigned note, unsigned velocity)
 void sf2player_channel_play(unsigned channel, unsigned note, unsigned velocity)
 {
     uint32_t flags = fm1_device_irq_save();
+    if (D50_ON()) d50_note(note, velocity); else              /* the D-50 plays every channel */
     fm1b_channel_note(channel, note, velocity, 100);
     fm1_device_irq_restore(flags);
 }
 void sf2player_channel_drum(unsigned channel, unsigned note, unsigned velocity)
 {
     uint32_t flags = fm1_device_irq_save();
+    if (D50_ON()) d50_note(note, velocity); else
     fm1b_channel_drum_note(channel, note, velocity, 100);
     fm1_device_irq_restore(flags);
 }
 void sf2player_channel_program(unsigned channel, unsigned program_bank, unsigned program)
 {
     uint32_t flags = fm1_device_irq_save();
+    if (D50_ON()) d50_program(program); else
     fm1b_channel_program(channel, program_bank, program);
     fm1_device_irq_restore(flags);
 }
@@ -89,6 +108,7 @@ static void sf2player_channel_solo(int channel) { fm1b_channel_solo(channel); }
 void sf2player_channel_bend(unsigned channel, unsigned value)
 {
     uint32_t flags = fm1_device_irq_save();
+    if (D50_ON()) d50_bend(value); else
     fm1b_channel_bend(channel, value);
     fm1_device_irq_restore(flags);
 }
@@ -751,6 +771,36 @@ static void screen_update(void)
         info_update();
         return;
     }
+#if FM1_D50
+    if (D50_ON()) {                                      /* the D-50's page: the patch as the D-50 numbers it (11..88), its name, the voices */
+        if (!d50_ready()) {
+            if (page) { page = PAGE_PROGRAM; page_clear(); }
+            line_show(0, 8, "NO D-50 DATA", 2, ORANGE);
+            line_show(1, 34, "INSTALL IT OVER USB", 1, WHITE);
+            upload_line();
+            return;
+        }
+        const unsigned p = d50_current_program();
+        const char *name = d50_program_name(p);
+        d = put_text(line, "PATCH ");
+        if (d50_bank_patches()) { *d++ = (char)('1' + p / 8U % 8U); *d++ = (char)('1' + p % 8U); }
+        else d = put_number(d, (int32_t)p + 1, 0);
+        *d = 0;
+        line_show(0, 8, line, 2, ORANGE);
+        d = line;
+        for (unsigned i = 0; i < D50_NAME_CHARS && name[i]; ++i) *d++ = name[i];
+        *d = 0;
+        line_show(1, 34, line, 2, WHITE);
+        d = put_text(line, "D-50  VOICES ");
+        d = put_number(d, (int32_t)d50_voices_sounding(), 0);
+        d = put_text(d, "  BANK 64");
+        d = put_text(d, d50_reverb() ? "  REVERB" : "  DRY");
+        *d = 0;
+        line_show(2, 64, line, 1, YELLOW);
+        upload_line();
+        return;
+    }
+#endif
     if (!st.ready) {
         if (page) { page = PAGE_PROGRAM; page_clear(); }
         line_show(0, 8, "NO BANK", 2, ORANGE);
@@ -1028,6 +1078,15 @@ void groove_screen_control(void)
      * cursor, KNOB2 (3) pan, KNOB3 (4) reverb and KNOB4 (5) chorus. On the program page SELECT picks the panel's program,
      * KNOB2 pans the whole mix and KNOB3/KNOB4 set the effects' master levels; on the channel page SELECT picks the selected
      * channel's program, ALGORITHM sets its volume (CC 7), KNOB2 its pan (CC 10) and KNOB3/KNOB4 its sends. */
+#if FM1_D50
+    if (controls.encoders[0] && !channels && D50_ON()) {   /* SELECT: the D-50 programs, wrapping */
+        const int count = (int)d50_programs();
+        int next = ((int)d50_current_program() + controls.encoders[0]) % count;
+        uint32_t flags = fm1_device_irq_save();
+        d50_program((unsigned)(next < 0 ? next + count : next));
+        fm1_device_irq_restore(flags);
+    } else
+#endif
     if (controls.encoders[0] && !channels) {
         int step = controls.encoders[0] > 0 ? 1 : -1;
         for (int clicks = controls.encoders[0] * step; clicks > 0; --clicks)
@@ -1210,7 +1269,7 @@ void groove_midi_init(void)
 
 /* ---- what the library calls and the player does not need ---------------------------------------------------- */
 void groove_midi_clock_reset(void) {}
-void groove_midi_panic(void) { fm1b_panic(); }
+void groove_midi_panic(void) { if (D50_ON()) d50_panic(); else fm1b_panic(); }
 void groove_midi_poll(void) {}
 FM1_DSP_CODE void groove_midi_clock(unsigned owner, unsigned tempo) { (void)owner; (void)tempo; }
 FM1_DSP_CODE void groove_midi_transport(unsigned owner, uint8_t status) { (void)owner; (void)status; }

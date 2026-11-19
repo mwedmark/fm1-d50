@@ -30,7 +30,8 @@ const bankPath = process.argv.slice(2).find(a => !a.startsWith('--')) || path.jo
 if (!product || !/^[0-9a-f]{64}$/.test(identity.build_id)) throw new Error('no product or build id: build the firmware first');
 if (!option('fwsc') && fs.statSync(identityPath).mtimeMs + 600000 < fs.statSync(fwscPath).mtimeMs)
   throw new Error('the package is newer than its build id: build the firmware again');
-if (bank.toString('latin1', 0, 4) !== 'FM1B') throw new Error(bankPath + ' is not an FM1B bank');
+// fm1-d50: the D-50's sample data (tools/d50_pack.js) goes the same way as a bank
+if (!['FM1B', 'FMD5'].includes(bank.toString('latin1', 0, 4))) throw new Error(bankPath + ' is not an FM1B bank or D-50 sample data');
 let crc = 0xffffffff;
 for (const b of bank) { crc ^= b; for (let k = 0; k < 8; k++) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1)); }
 const out = option('out') || path.join(root, 'dist/install');
