@@ -52,14 +52,19 @@ async function get(url) {
   if (allowed === tryCode) throw new Error('tryout.js changed upstream: the blob: patch no longer applies');
   fs.writeFileSync(tryPath, allowed);
 
-  // The catalog entry, with the version in the address.
+  // The catalog entry, with the version in the address. It is the emulator's default firmware too (upstream's is Felucca), and emulator.html
+  // opened without a query starts it with the default bank (lossless since 2026-11-18): a firmware with no bank in its flash plays nothing.
   const catPath = path.join(out, 'firmwares.json');
   const cat = JSON.parse(fs.readFileSync(catPath, 'utf8'));
   cat.firmwares = (cat.firmwares || []).filter(e => e.id !== 'sf2');
   cat.firmwares.unshift({ id: 'sf2', name: 'sf2player', version: version.slice(0, 7), author: 'mwedmark', license: 'GPL-3.0',
     about: 'SoundFont player for the FM-1' + (emuFwsc ? ' (the emulator build: one core, linear interpolation)' : ''), repo: 'https://github.com/mwedmark/fm1-sf2',
     package: `${emuFwsc ? 'sf2player_emu' : 'sf2player'}.fwsc?v=${version}` });
+  cat.default = 'sf2';
   fs.writeFileSync(catPath, JSON.stringify(cat, null, 2));
+  const emuPath = path.join(out, 'emulator.html'), emuPage = fs.readFileSync(emuPath, 'utf8');
+  if (!/<head>/i.test(emuPage)) throw new Error('emulator.html changed upstream: no <head> for the default-bank redirect');
+  fs.writeFileSync(emuPath, emuPage.replace(/<head>/i, '<head><script>if (!location.search) location.replace("?fw=sf2&flash=default.flash&mhz=240" + location.hash);</script>'));
   fs.copyFileSync(fwsc, path.join(out, 'sf2player.fwsc'));
   if (emuFwsc) fs.copyFileSync(emuFwsc, path.join(out, 'sf2player_emu.fwsc'));
 
