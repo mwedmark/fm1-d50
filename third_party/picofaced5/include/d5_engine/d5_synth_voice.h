@@ -191,6 +191,7 @@ public:
         static constexpr float kDecayFactors[8] = {31, 16, 12, 8, 5, 3, 2, 1};
         res_decay_f_ = kDecayFactors[static_cast<int>(res_) >> 2 > 7
                                          ? 7 : static_cast<int>(res_) >> 2];
+        mod_primed_ = false;
         edge_frac_ = 0.5f;              // neutral until the first block_mod
         inv_edge_ = 2.0f;
         atten_ = 1.0f;
@@ -237,6 +238,21 @@ public:
         if (cv > kCutoffCeiling) cv = kCutoffCeiling;       // the chip's clamp
         cv += mod.cutoff * 100.0f;
         if (cv > kCutoffMax) cv = kCutoffMax;
+        // fm1-d50: a held note with nothing moving (sustain, no LFO on pitch, cutoff or pulse width) asks for the same constants every
+        // block; then only the resonance's re-seed is repeated, as the full path does, and everything else stands.
+        {
+            float pwq = pw255_ + mod.pw * 255.0f;
+            if (pwq < 0.0f) pwq = 0.0f;
+            if (pwq > 255.0f) pwq = 255.0f;
+            if (mod_primed_ && cv == last_cv_ && pwq == last_pw_ && mod.pitch == last_pitch_) {
+                if (res_on_) res_half_ = -1;
+                return;
+            }
+            mod_primed_ = true;
+            last_cv_ = cv;
+            last_pw_ = pwq;
+            last_pitch_ = mod.pitch;
+        }
         edge_frac_ = 0.5f;
         inv_edge_ = 2.0f;
         atten_ = 1.0f;
@@ -502,6 +518,8 @@ private:
     float res_amp_ = 0.0f;
     float res_amp_eff_ = 0.0f;
     float res_decay_f_ = 8.0f;
+    bool mod_primed_ = false;      // fm1-d50: block_mod's memo
+    float last_cv_ = 0.0f, last_pw_ = 0.0f, last_pitch_ = 0.0f;
     float pw255_ = 128.0f;
     float gain_ = 1.0f;
     bool active_ = false;

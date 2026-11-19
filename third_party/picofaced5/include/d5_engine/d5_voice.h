@@ -357,14 +357,11 @@ public:
     }
 
     bool active() const {
-        const Structure& st = structure();
-        const bool a = (st.p1 == PartialType::kPcm) ? pcm_[0].active()
-                                                    : synth_[0].active();
-        const bool b = (st.p2 == PartialType::kPcm) ? pcm_[1].active()
-                                                    : synth_[1].active();
+        const bool a = p1_pcm_ ? pcm_[0].active() : synth_[0].active();   // fm1-d50: the structure's flags from prepare_mix
+        const bool b = p2_pcm_ ? pcm_[1].active() : synth_[1].active();
         // A ring structure has nothing left to say once partial 1 is gone:
         // its product is silent without it.
-        return st.ring ? a : (a || b);
+        return ring_ ? a : (a || b);
     }
 
     // Control rate: everything the LFOs and the pitch envelope feed changes
@@ -374,7 +371,6 @@ public:
     // its own block-rate half from them at the same moment.
     void D5_HOT_TAG(d5_voice_update_block, update_block)() {
         mod_count_ = kModPeriod;
-        const Structure& st = structure();
         // The LFOs advance per sample (in the tone for shared instances, or
         // at the top of next() for the standalone fallback); the block only
         // reads the current gated values.
@@ -448,7 +444,7 @@ public:
             // VST: LFO depth 100 on either route and an aftertouch range of
             // 14 leave it exactly where it is (pitch LFO and bias do act).
             // Like the TVF, the modulation block belongs to the synth path.
-            const bool pcm_partial = ((i == 0) ? st.p1 : st.p2) == PartialType::kPcm;
+            const bool pcm_partial = (i == 0) ? p1_pcm_ : p2_pcm_;
             const float tva_d = pcm_partial ? 0.0f : std::fabs(spec_.tva_lfo[i].depth);
             const float tva_l = spec_.tva_lfo[i].depth < 0.0f ? -lfo_value(l, spec_.tva_lfo[i])
                                                               : lfo_value(l, spec_.tva_lfo[i]);
@@ -467,7 +463,7 @@ public:
             // range: Roland's VST attenuates the product twice by P1's
             // range and not at all by P2's (P2's byte is dead there), in a
             // mix structure each partial follows its own byte.
-            const float g = pcm_partial ? 0.0f : spec_.tva_at[st.ring ? 0 : i];
+            const float g = pcm_partial ? 0.0f : spec_.tva_at[ring_ ? 0 : i];
             if (g != 0.0f) {
                 const float u2 = 49.0f * g * g;
                 const float w = g > 0.0f ? (1.0f - at_) : at_;
@@ -476,8 +472,7 @@ public:
             if (tgt_amp < 0.0f) tgt_amp = 0.0f;
             dpitch_[i] = (tgt_pitch - mod_[i].pitch) * (1.0f / kModPeriod);
             damp_[i] = (tgt_amp - mod_[i].amp) * (1.0f / kModPeriod);
-            const PartialType t = (i == 0) ? st.p1 : st.p2;
-            if (t == PartialType::kSynth) synth_[i].block_mod(mod_[i]);
+            if (!pcm_partial) synth_[i].block_mod(mod_[i]);
         }
     }
 
