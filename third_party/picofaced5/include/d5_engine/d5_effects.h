@@ -188,6 +188,8 @@ public:
         spec_ = spec;
         sr_ = sr;
         phase_ = 0.0f;
+        primed_ = false;
+        stride_ = tstride_ = 0;
         inc_ = rate_hz(spec.rate) / sr;
         for (int i = 0; i < kMaxDelay; ++i) buf_[i] = 0.0f;
         write_ = 0;
@@ -198,7 +200,7 @@ public:
     void set_balance(float b) { spec_.balance = clamp01(b); }
     // Type and depth are read per sample, the rate only sets the LFO step:
     // none of them needs the delay line cleared, so a knob turn is silent.
-    void set_type(int t) { spec_.type = t < 0 ? 0 : (t > 7 ? 7 : t); }
+    void set_type(int t) { spec_.type = t < 0 ? 0 : (t > 7 ? 7 : t); primed_ = false; }   // fm1-d50: re-primes the strided delays
     void set_depth(float d) { spec_.depth = clamp01(d); }
     void set_rate(float r) {
         spec_.rate = clamp01(r);
@@ -242,16 +244,33 @@ public:
             wl = x;
             wr = x;
         } else {
-            const float swing = d * kSwingMs;
+            // fm1-d50: the delays (two sines a voice) are worked out every kStride samples and interpolated in between: the
+            // sweep moves by about a tenth of a sample per sample at the fastest, so the line is within 1e-3 sample of the sine.
+            if (stride_ == 0) {
+                const float swing = d * kSwingMs;
+                const float ahead = phase_ + kStride * inc_;
+                for (int v = 0; v < t.voices; ++v) {
+                    const float ph = ahead + static_cast<float>(v) / t.voices;   // wraps on its own
+                    const float ms = t.base_ms + t.spread_ms * v;
+                    // The right side sweeps 0.3 of a turn behind the left, not
+                    // half: the VST's two pitch tracks correlate at -0.2 to -0.6
+                    // across depths and rates, a pure counter-sweep would sit
+                    // at -1 and coincide with the left twice per cycle.
+                    const float tl = (ms + swing * fast_sin(ph)) * 0.001f * sr_;
+                    const float tr = (ms + swing * fast_sin(ph + 0.3f)) * 0.001f * sr_;
+                    if (!primed_) { dl_[v] = tl; dr_[v] = tr; }
+                    sl_[v] = (tl - dl_[v]) * (1.0f / kStride);
+                    sr_step_[v] = (tr - dr_[v]) * (1.0f / kStride);
+                }
+                primed_ = true;
+                stride_ = kStride;
+            }
+            --stride_;
             for (int v = 0; v < t.voices; ++v) {
-                const float ph = phase_ + static_cast<float>(v) / t.voices;   // wraps on its own
-                const float ms = t.base_ms + t.spread_ms * v;
-                // The right side sweeps 0.3 of a turn behind the left, not
-                // half: the VST's two pitch tracks correlate at -0.2 to -0.6
-                // across depths and rates, a pure counter-sweep would sit
-                // at -1 and coincide with the left twice per cycle.
-                wl += read((ms + swing * fast_sin(ph)) * 0.001f * sr_);
-                wr += read((ms + swing * fast_sin(ph + 0.3f)) * 0.001f * sr_);
+                dl_[v] += sl_[v];
+                dr_[v] += sr_step_[v];
+                wl += read(dl_[v]);
+                wr += read(dr_[v]);
             }
             if (t.voices == 2) { wl *= 0.5f; wr *= 0.5f; }   // fm1-d50: voices is 1 or 2 here; no divide
         }
@@ -260,7 +279,9 @@ public:
             // (VST type 6: 2.65 Hz at panel rate 50 against 1.26 Hz of
             // pitch sweep on type 1), about 14 dB deep at panel depth 50.
             const float m = d * 1.6f > 1.0f ? 1.0f : d * 1.6f;
-            const float sq = fast_sin(2.0f * phase_);
+            if (tstride_ == 0) { sq_ = fast_sin(2.0f * phase_); tstride_ = kStride; }
+            --tstride_;
+            const float sq = sq_;
             wl *= 1.0f - m * 0.5f * (1.0f + sq);
             wr *= 1.0f - m * 0.5f * (1.0f - sq);
         }
@@ -298,6 +319,11 @@ private:
         return buf_[i0] + (buf_[i1] - buf_[i0]) * f;
     }
 
+    static constexpr int kStride = 4;
+    bool primed_ = false;
+    int stride_ = 0, tstride_ = 0;
+    float sq_ = 0.0f;
+    float dl_[2] = {0, 0}, dr_[2] = {0, 0}, sl_[2] = {0, 0}, sr_step_[2] = {0, 0};
     ChorusSpec spec_{};
     float sr_ = 32000.0f;
     float phase_ = 0.0f;
