@@ -11,6 +11,9 @@
 #include "fm1_device.h"
 #include "fm1b_dqt.inc"
 #include <string.h>
+#if FM1_D50
+#include "d50/d50.h"
+#endif
 #if __has_include("fm1b_bank_data.inc")
 #include "fm1b_bank_data.inc"
 #define HAVE_BUILT_IN 1
@@ -52,6 +55,10 @@ static int bind_at(uint32_t offset, uint32_t limit)
  * written must be the one that plays, never an older one. */
 int fm1b_bind_flash(void)
 {
+#if FM1_D50
+    if (d50_bind_flash())                                 /* the D-50's sample data instead of a bank */
+        return 1;
+#endif
     return bind_at(FM1B_FLASH_OFFSET, FM1B_FLASH_BYTES);
 }
 

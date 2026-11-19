@@ -1,0 +1,5 @@
+#pragma once
+extern "C" {
+#include <string.h>
+}
+namespace std { using ::memcpy; using ::memset; using ::memmove; using ::memcmp; using ::strlen; }

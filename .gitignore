@@ -1,5 +1,9 @@
 *.sf2
 *.bin
+# Roland's ROMs and dumps: never in the repository
+D50 files/
+roms/
+*.rom
 fm1_open/app/fm1b_bank_data.inc
 dist/
 test_upload/upload_test.wasm

@@ -1,0 +1,16 @@
+// Float overloads go to the single-precision functions (the pi32v2 FPU is single precision).
+#pragma once
+extern "C" {
+#include <math.h>
+}
+namespace std {
+inline float pow(float a, float b) { return ::powf(a, b); }
+inline float sin(float a) { return ::sinf(a); }
+inline float cos(float a) { return ::cosf(a); }
+inline float tan(float a) { return ::tanf(a); }
+inline float log10(float a) { return ::log10f(a); }
+inline float fabs(float a) { return ::fabsf(a); }
+inline float exp(float a) { return ::expf(a); }
+inline float sqrt(float a) { return ::sqrtf(a); }
+inline float floor(float a) { return ::floorf(a); }
+}
