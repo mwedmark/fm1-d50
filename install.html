@@ -463,10 +463,10 @@
   window.addEventListener('beforeunload', e => { if (busy) { e.preventDefault(); e.returnValue = ''; } });
 
   function showBank(bytes, name) {
-    // fm1-d50: the D-50's sample data (tools/d50_pack.js: "FMD5", version 1, 524 288 bytes of samples) is uploaded as a bank is
-    if (bytes.length === 524304 && String.fromCharCode(...bytes.subarray(0, 4)) === 'FMD5') {
+    // fm1-d50: the D-50's sample data (tools/d50_pack.js: "FMD5", version 1 samples only, 2 with a patch bank) is uploaded as a bank is
+    if (bytes.length >= 524304 && bytes.length <= 536576 && String.fromCharCode(...bytes.subarray(0, 4)) === 'FMD5' && (bytes[4] === 1 || bytes[4] === 2)) {
       bank = bytes; bankName = name;
-      $('bankInfo').textContent = name + ': ' + kb(bytes.length) + ', the D-50\'s sample data (100 PCM waves, 32 kHz)';
+      $('bankInfo').textContent = name + ': ' + kb(bytes.length) + ', the D-50\'s sample data (100 PCM waves, 32 kHz)' + (bytes[4] === 2 ? ' and a bank of 64 patches' : '');
       return;
     }
     if (bytes.length < 76 || String.fromCharCode(...bytes.subarray(0, 4)) !== 'FM1B') throw new Error(name + ' is not an FM1B bank or D-50 sample data.');

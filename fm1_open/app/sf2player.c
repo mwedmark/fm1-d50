@@ -18,7 +18,11 @@
 #include "sf2_upload.h"
 #if FM1_D50
 #include "d50/d50.h"
+#if FM1_D50_ONLY
+#define D50_ON() 1                                       /* everything goes to the D-50: the FM1B player's paths are dead code, which the link drops */
+#else
 #define D50_ON() d50_ready()
+#endif
 #else
 #define D50_ON() 0
 #define d50_note(n, v) ((void)0)
@@ -767,6 +771,35 @@ static void screen_update(void)
         info_update();
         return;
     }
+#if FM1_D50
+    if (D50_ON()) {                                      /* the D-50's page: the patch as the D-50 numbers it (11..88), its name, the voices */
+        if (!d50_ready()) {
+            if (page) { page = PAGE_PROGRAM; page_clear(); }
+            line_show(0, 8, "NO D-50 DATA", 2, ORANGE);
+            line_show(1, 34, "INSTALL IT OVER USB", 1, WHITE);
+            upload_line();
+            return;
+        }
+        const unsigned p = d50_current_program();
+        const char *name = d50_program_name(p);
+        d = put_text(line, "PATCH ");
+        if (d50_bank_patches()) { *d++ = (char)('1' + p / 8U % 8U); *d++ = (char)('1' + p % 8U); }
+        else d = put_number(d, (int32_t)p + 1, 0);
+        *d = 0;
+        line_show(0, 8, line, 2, ORANGE);
+        d = line;
+        for (unsigned i = 0; i < D50_NAME_CHARS && name[i]; ++i) *d++ = name[i];
+        *d = 0;
+        line_show(1, 34, line, 2, WHITE);
+        d = put_text(line, "D-50  VOICES ");
+        d = put_number(d, (int32_t)d50_voices_sounding(), 0);
+        d = put_text(d, "  BANK 64");
+        *d = 0;
+        line_show(2, 64, line, 1, YELLOW);
+        upload_line();
+        return;
+    }
+#endif
     if (!st.ready) {
         if (page) { page = PAGE_PROGRAM; page_clear(); }
         line_show(0, 8, "NO BANK", 2, ORANGE);
