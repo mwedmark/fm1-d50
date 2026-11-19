@@ -794,6 +794,7 @@ static void screen_update(void)
         d = put_text(line, "D-50  VOICES ");
         d = put_number(d, (int32_t)d50_voices_sounding(), 0);
         d = put_text(d, "  BANK 64");
+        d = put_text(d, d50_reverb() ? "  REVERB" : "  DRY");
         *d = 0;
         line_show(2, 64, line, 1, YELLOW);
         upload_line();

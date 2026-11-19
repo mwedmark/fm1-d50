@@ -41,6 +41,7 @@ void d50_panic(void);
 /* Add n frames at D50_RATE to out (interleaved stereo, Q23, saturated). Audio interrupt. */
 void d50_render(int32_t *out, unsigned n);
 unsigned d50_voices_sounding(void);
+unsigned d50_reverb(void);                               /* 1: the reverb has its lines (the SDK's idle effect memory), 0: dry */
 
 #ifdef __cplusplus
 }

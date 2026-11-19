@@ -530,6 +530,10 @@ public:
     // Panel controls that apply while the patch is playing. Anything that
     // would resize a delay line or restart a voice belongs in configure().
     void set_volume(float v) { spec_.volume = v; }
+#ifdef D5_REVERB_EXTERNAL_POOL
+    // fm1-d50: the reverb's delay lines in memory the caller owns (d5_effects.h Reverb::attach); call before configure
+    void attach_reverb(ReverbSample* seg0, int n0, ReverbSample* seg1, int n1) { reverb_.attach(seg0, n0, seg1, n1); }
+#endif
     // Kept in the spec as well, so a later type change (which rebuilds the
     // reverb) does not quietly restore the patch's original balance.
     void set_reverb_balance(float b) {

@@ -6,6 +6,9 @@ extern "C" {
 #include "fm1_device.h"
 #include "d50_inflate.h"
 #include <string.h>
+/* The engine library's two effect units, which sdk/Build.ps1 places between these two symbols for a D-50 build. Weak: without them, no reverb. */
+extern uint8_t fm1_fx_pool_begin[] __attribute__((weak));
+extern uint8_t fm1_fx_pool_end[] __attribute__((weak));
 }
 
 #include "d5_engine/d5_patch.h"
@@ -38,6 +41,28 @@ unsigned program_now;
 volatile unsigned sounding;
 
 uint32_t u32(const uint8_t *p) { return p[0] | static_cast<uint32_t>(p[1]) << 8 | static_cast<uint32_t>(p[2]) << 16 | static_cast<uint32_t>(p[3]) << 24; }
+
+// The reverb's delay lines (42 KB of 16-bit words) in the SDK's idle effect memory: two units of 24 416 bytes, each with a state word at 24 380
+// that the library writes (-1: idle) and that must stay as it is, and 20 bytes of the library's after them (fm1-sf2 RUNNING.md 1c). The firmware
+// never calls the library's instrument (FM1B_SKIP_ENGINE), so the units are never started. Segment 0: [0, 24 380), segment 1: [24 384, 48 796).
+enum : unsigned { kFxUnit = 24416, kFxState = 24380, kFxUnits = 2 };
+bool reverb_attached;
+
+void attach_reverb()
+{
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(fm1_fx_pool_begin), end = reinterpret_cast<uintptr_t>(fm1_fx_pool_end);
+    reverb_attached = begin && end > begin && end - begin >= kFxUnits * kFxUnit;
+    // Only where the state words are what the library leaves in idle units (-1): else the layout is not the one assumed, and the reverb stays dry
+    for (unsigned u = 0; reverb_attached && u < kFxUnits; ++u) {
+        uint32_t word;
+        memcpy(&word, fm1_fx_pool_begin + u * kFxUnit + kFxState, 4);
+        reverb_attached = word == 0xFFFFFFFFU;
+    }
+    if (!reverb_attached) return;
+    auto *seg0 = reinterpret_cast<d5::ReverbSample *>(fm1_fx_pool_begin);
+    auto *seg1 = reinterpret_cast<d5::ReverbSample *>(fm1_fx_pool_begin + kFxState + 4U);
+    patch->attach_reverb(seg0, static_cast<int>(kFxState / 2U), seg1, static_cast<int>((kFxUnit + kFxState - (kFxState + 4U)) / 2U));
+}
 
 void push(uint32_t event)
 {
@@ -110,6 +135,7 @@ extern "C" int d50_bind_flash(void)
     if (!bank_patches) return 0;                 // samples without a bank: nothing to play (the image has no room for built-in presets)
     if (program_now >= d50_programs()) program_now = 0;
     patch = new (patch_memory) d5::Patch();
+    attach_reverb();                             // before configure, which binds the reverb's lines
     build_program(program_now);
     patch->configure(specs[spec_serial & 1U], static_cast<float>(D50_RATE));
     spec_done = spec_serial;
@@ -130,6 +156,7 @@ extern "C" const char *d50_program_name(unsigned program)
     return ready && program == program_now ? names[spec_serial & 1U] : "";
 }
 extern "C" unsigned d50_voices_sounding(void) { return sounding; }
+extern "C" unsigned d50_reverb(void) { return reverb_attached; }
 
 extern "C" void d50_program(unsigned program)
 {

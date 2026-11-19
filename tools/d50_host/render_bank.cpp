@@ -56,6 +56,11 @@ int main(int argc, char **argv)
     float peak = 0;
     static d5::Patch patch;
     static d5::PatchSpec spec;
+#ifdef D5_REVERB_EXTERNAL_POOL
+    // the two segments the FM-1 gives the reverb: the SDK's effect units around their state words (fm1_open/app/d50/d50.cpp)
+    static d5::ReverbSample seg0[12190], seg1[12206];
+    patch.attach_reverb(seg0, 12190, seg1, 12206);
+#endif
     for (int k = 0; k < count; ++k) {
         const uint8_t *p = bank + list[k] * 448;
         spec = d5::patch_from_bytes(p, pcm);
@@ -89,6 +94,9 @@ int main(int argc, char **argv)
     std::fseek(w, 0, SEEK_SET);
     std::fwrite(header, 1, 44, w);
     std::fclose(w);
+#ifdef D5_REVERB_PROBE
+    std::printf("largest value in the reverb's lines: %.4f\n", d5::reverb_peak);
+#endif
     std::printf("%s: %.0f s, peak %.3f\n", argv[2], frames / static_cast<double>(kRate), peak);
     return 0;
 }

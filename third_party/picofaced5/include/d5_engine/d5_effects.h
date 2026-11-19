@@ -383,22 +383,49 @@ struct ReverbSpec {
     float balance = 0.3f;     // 0..1, panel "Reverb Balance"
 };
 
+// fm1-d50: D5_REVERB_INT16 stores the delay lines as 16-bit words instead of floats, which halves the pool to 42 KB: Q15 (+-1.0; the largest
+// value over the factory bank's 64 patches is 0.23), rounded to the nearest. Against the float lines the output differs by 42..53 dB under the
+// wet signal (tools/d50_host/build_bank.ps1, eight factory patches); Q13 truncated was 26..35 dB, rounded 30..41. D5_REVERB_EXTERNAL_POOL takes
+// the pool from the caller as two segments (Reverb::attach), for the FM-1's idle effect memory, which has the SDK's state words between them.
+#ifndef D5_REVERB_SCALE
+#define D5_REVERB_SCALE 32768.0f
+#endif
+#ifdef D5_REVERB_INT16
+using ReverbSample = int16_t;
+inline float reverb_load(ReverbSample s) { return static_cast<float>(s) * (1.0f / D5_REVERB_SCALE); }
+inline ReverbSample reverb_store(float v) {
+    const float x = v * D5_REVERB_SCALE + (v < 0.0f ? -0.5f : 0.5f);
+    return static_cast<ReverbSample>(x > 32767.0f ? 32767 : (x < -32767.0f ? -32767 : static_cast<int>(x)));
+}
+#else
+using ReverbSample = float;
+inline float reverb_load(ReverbSample s) { return s; }
+#ifdef D5_REVERB_PROBE
+inline float reverb_peak = 0.0f;                        // the largest value written, for choosing D5_REVERB_SCALE
+inline ReverbSample reverb_store(float v) { const float a = v < 0 ? -v : v; if (a > reverb_peak) reverb_peak = a; return v; }
+#else
+inline ReverbSample reverb_store(float v) { return v; }
+#endif
+#endif
+
 // Delay-line slices carved from one pool, so the tapped-delay types can use
 // the same memory as the comb banks (only one mode is ever live).
 class ReverbLine {
 public:
-    void bind(float* buf, int size) { buf_ = buf; size_ = size; i_ = 0; }
-    void clear() { for (int i = 0; i < size_; ++i) buf_[i] = 0.0f; i_ = 0; }
+    void bind(ReverbSample* buf, int size) { buf_ = buf; size_ = size; i_ = 0; }
+    void clear() { for (int i = 0; i < size_; ++i) buf_[i] = 0; i_ = 0; }
     float next() {
         if (++i_ >= size_) i_ = 0;
-        return buf_[i_];
+        return reverb_load(buf_[i_]);
     }
     float at(int pos) const {
         int j = i_ - pos;
         if (j < 0) j += size_;
-        return buf_[j];
+        return reverb_load(buf_[j]);
     }
-    float* buf_ = nullptr;
+    float cur() const { return reverb_load(buf_[i_]); }
+    void put(float v) { buf_[i_] = reverb_store(v); }
+    ReverbSample* buf_ = nullptr;
     int size_ = 0;
     int i_ = 0;
 };
@@ -406,11 +433,11 @@ public:
 // Boss allpass, both gains one half: store in - out/2, emit out + stored/2.
 class ReverbAllpass {
 public:
-    void bind(float* buf, int size) { line_.bind(buf, size); line_.clear(); }
+    void bind(ReverbSample* buf, int size) { line_.bind(buf, size); line_.clear(); }
     float process(float in) {
         const float out = line_.next();
-        line_.buf_[line_.i_] = in - 0.5f * out;
-        return out + 0.5f * line_.buf_[line_.i_];
+        line_.put(in - 0.5f * out);
+        return out + 0.5f * line_.cur();
     }
 private:
     ReverbLine line_;
@@ -420,16 +447,16 @@ private:
 // position, and the two channels read different ones.
 class ReverbComb {
 public:
-    void bind(float* buf, int size, float filter, float feedback) {
+    void bind(ReverbSample* buf, int size, float filter, float feedback) {
         line_.bind(buf, size);
         line_.clear();
         filt_ = filter;
         fb_ = feedback;
     }
     void process(float in) {
-        const float last = line_.buf_[line_.i_];
+        const float last = line_.cur();
         const float filter_in = in + fb_ * line_.next();
-        line_.buf_[line_.i_] = filt_ * last - filter_in;
+        line_.put(filt_ * last - filter_in);
     }
     float out_at(int pos) const { return line_.at(pos); }
 private:
@@ -441,16 +468,16 @@ private:
 // its combs).
 class ReverbEntrance {
 public:
-    void bind(float* buf, int size, float filter, float amp) {
+    void bind(ReverbSample* buf, int size, float filter, float amp) {
         line_.bind(buf, size);
         line_.clear();
         filt_ = filter;
         amp_ = amp;
     }
     void process(float in) {
-        const float last = line_.buf_[line_.i_];
+        const float last = line_.cur();
         line_.next();
-        line_.buf_[line_.i_] = amp_ * (filt_ * last + in);
+        line_.put(amp_ * (filt_ * last + in));
     }
     float out_at(int pos) const { return line_.at(pos); }
 private:
@@ -524,16 +551,16 @@ public:
             const float lpf = (spec.type == 16 ? 0x80 : m.lpf_amp) / 256.0f;
             const float scale = sr / 32000.0f;  // geometry is 32 kHz native
             for (int a = 0; a < 3; ++a) {
-                ap_[a].bind(pool_ + 1950 * a,
+                ap_[a].bind(slot(1950 * a, 1950),
                             static_cast<int>(m.all_sizes[a] * scale));
             }
-            entr_.bind(pool_ + 5850, static_cast<int>(m.comb_sizes[0] * scale),
+            entr_.bind(slot(5850, 1050), static_cast<int>(m.comb_sizes[0] * scale),
                        m.filter[0] / 256.0f, lpf);
             const float fb = t.fb_ov > 0.0f
                 ? t.fb_ov
                 : m.feedback[t.time < 0 ? 0 : (t.time > 7 ? 7 : t.time)] / 256.0f;
             for (int c = 0; c < 3; ++c) {
-                comb_[c].bind(pool_ + 6900 + 4600 * c,
+                comb_[c].bind(slot(6900 + 4600 * c, 4600),
                               static_cast<int>(m.comb_sizes[1 + c] * scale),
                               m.filter[1 + c] / 256.0f * filt_scale, fb);
             }
@@ -544,10 +571,32 @@ public:
             tap_l_ = static_cast<int>(t.tap_l_ms * 0.001f * sr) + 1;
             tap_r_ = static_cast<int>(t.tap_r_ms * 0.001f * sr) + 1;
             tap_fb_ = t.fb;
+#ifdef D5_REVERB_EXTERNAL_POOL
+            // fm1-d50: only as long as the farthest tap needs (10 817 words for 338 ms at 32 kHz), which fits the first segment
+            int need = (tap_l_ > tap_r_ ? tap_l_ : tap_r_) + 2;
+            if (need > seg_n_[0]) need = seg_n_[0];
+            if (tap_l_ >= need) tap_l_ = need - 1;
+            if (tap_r_ >= need) tap_r_ = need - 1;
+            tap_line_.bind(seg_[0], need);
+#else
             tap_line_.bind(pool_, 16200);
+#endif
             tap_line_.clear();
         }
     }
+
+#ifdef D5_REVERB_EXTERNAL_POOL
+    // The pool as two segments: the first takes the allpasses, the entrance and the first comb (11 500 words) or the tap line, the second the other
+    // two combs (9 200 words), at 32 kHz. Before attach, or with segments too small, the reverb passes the dry signal only.
+    void attach(ReverbSample* seg0, int n0, ReverbSample* seg1, int n1) {
+        const bool fits = seg0 && seg1 && n0 >= 11500 && n1 >= 9200;
+        seg_[0] = fits ? seg0 : nullptr;
+        seg_[1] = fits ? seg1 : nullptr;
+        seg_n_[0] = fits ? n0 : 0;
+        seg_n_[1] = fits ? n1 : 0;
+    }
+    bool attached() const { return seg_[0] != nullptr; }
+#endif
 
     void set_balance(float b) { spec_.balance = clamp01(b); }
 
@@ -558,7 +607,7 @@ public:
         const BossMode& m = *boss_;
         const float filt_scale = (spec_.type == 16 ? 0.85f : (spec_.type == 17 ? 1.25f : 1.0f)) * damp_scale;
         for (int c = 0; c < 3; ++c) {
-            comb_[c].bind(pool_ + 6900 + 4600 * c,
+            comb_[c].bind(slot(6900 + 4600 * c, 4600),
                           static_cast<int>(m.comb_sizes[1 + c] * sr_scale_),
                           m.filter[1 + c] / 256.0f * filt_scale, fb);
         }
@@ -592,6 +641,9 @@ public:
         // length by a few samples did nothing to the ripple (the modes move
         // 0.3 %); smoothing it would take tens of samples, audible chorusing.
         const float x = 0.316f * send;
+#ifdef D5_REVERB_EXTERNAL_POOL
+        if (!seg_[0]) { l = xl; r = xr; return; }   // fm1-d50: no pool attached, dry only
+#endif
         if (mode_ < 3) {
             const BossMode& m = *boss_;
             entr_.process(x);
@@ -713,7 +765,15 @@ private:
     int hold_ = 0;
     float gain_ = 0.0f;
 
-    float pool_[kPool] = {};
+#ifdef D5_REVERB_EXTERNAL_POOL
+    // fm1-d50: the pool's word offsets below 11 500 lie in the first segment, the rest (the second and third comb) in the second
+    ReverbSample* slot(int offset, int) const { return offset < 11500 ? seg_[0] + offset : seg_[1] + (offset - 11500); }
+    ReverbSample* seg_[2] = {nullptr, nullptr};
+    int seg_n_[2] = {0, 0};
+#else
+    ReverbSample* slot(int offset, int) { return pool_ + offset; }
+    ReverbSample pool_[kPool] = {};
+#endif
     ReverbAllpass ap_[3];
     ReverbEntrance entr_;
     ReverbComb comb_[3];

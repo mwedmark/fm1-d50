@@ -416,11 +416,11 @@ try {
         # (133 to spare); both native with it 453884. sound_cache.c stays LTO. The decoder's speed with the calls not inlined is not measured on the FM-1 yet.
         if ($source -eq 'live_cache/mp3_sound.c') { $options += @('-fno-lto', '-Oz', '-fno-inline-functions') }
         # fm1-d50: the D-50 engine is C++ (third_party/picofaced5). The toolchain has no libc++, so app/d50/cxx has the few std headers it uses;
-        # native objects (the LTO plugin and C++'s weak inline functions are not tried together). The reverb is left out until its pool has a place.
+        # native objects (the LTO plugin and C++'s weak inline functions are not tried together). The reverb's lines are 16-bit, in the SDK's effect units.
         if ($source -eq 'app/d50/d50_math.c') { $options = @($options | Where-Object { $_ -ne '-flto' }) + @('-fno-builtin') }   # it defines libm's names
         if ($source -like '*.cpp') {
             $options = @($options | Where-Object { $_ -ne '-flto' -and $_ -ne '-O2' }) + @('-Os','-x','c++','-std=c++1z','-fno-exceptions','-fno-rtti','-fno-threadsafe-statics','-nostdinc++',
-                '-DD5_NO_REVERB','-I' + (Join-Path $root 'app/d50/cxx'), '-I' + (Join-Path $root '../third_party/picofaced5/include'), '-I' + (Join-Path $root '../roms/gen'))
+                '-DD5_REVERB_INT16','-DD5_REVERB_EXTERNAL_POOL','-I' + (Join-Path $root 'app/d50/cxx'), '-I' + (Join-Path $root '../third_party/picofaced5/include'), '-I' + (Join-Path $root '../roms/gen'))
         }
         $arguments = @($options) + @('-MMD','-MF',($output + '.d'),'-c',$inputFile,'-o',$output)
         Write-Host "Compile $source"
@@ -456,7 +456,11 @@ try {
     $aclTx = ' + 1024'
     $aclRx = ' + 4096'
     $linker = [IO.File]::ReadAllText((Join-Path $sdk 'config/linker.ld.in')).Replace('@SBC_DECODER@',$sbcRoot).Replace('@ACL_TX_EXTRA@',$aclTx).Replace('@ACL_RX_EXTRA@',$aclRx)
-    $fxRules = if ($FxPool) { "        . = ALIGN(256);`n        fm1_fx_pool_begin = .;`n        *(.bss.fm1_effects)`n        fm1_fx_pool_split = .;`n        *(.bss.fm1_transport_bt_pcm)`n        *(.bss.fm1_cache_pool)`n        fm1_fx_pool_end = .;" } else { '' }
+    # fm1-d50: the D-50's reverb takes the engine library's two idle effect units (48 832 bytes; the firmware never calls the library's
+    # instrument, so they are never started) around their state words: the linker only marks where they are (app/d50/d50.cpp).
+    $fxRules = ''
+    if ($FxPool) { $fxRules = "        . = ALIGN(256);`n        fm1_fx_pool_begin = .;`n        *(.bss.fm1_effects)`n        fm1_fx_pool_split = .;`n        *(.bss.fm1_transport_bt_pcm)`n        *(.bss.fm1_cache_pool)`n        fm1_fx_pool_end = .;" }
+    elseif ($sources -contains 'app/d50/d50.cpp') { $fxRules = "        . = ALIGN(256);`n        fm1_fx_pool_begin = .;`n        *(.bss.fm1_effects)`n        fm1_fx_pool_end = .;" }
     $linker = $linker.Replace('@FX_POOL@',$fxRules)
     Write-Text (Join-Path $build 'generated/linker') $linker
     $link = @('--plugin',(Join-Path $bin 'LLVMgold.dll'),'-o','sdk.elf') + $objects + @(

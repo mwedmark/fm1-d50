@@ -7,7 +7,9 @@ $ErrorActionPreference = 'Stop'
 $repo = Resolve-Path "$PSScriptRoot\..\.."
 $out = Join-Path $repo 'roms\out'
 $sources = @("$PSScriptRoot\render_bank.cpp", "$repo\fm1_open\app\d50\d50_inflate.c")
-foreach ($variant in @(@{ name = 'dry'; defines = @('-DD5_NO_REVERB') }, @{ name = 'reverb'; defines = @() })) {
+# reverb: the engine's float reverb (the reference); fm1: the reverb as the FM-1 builds it (16-bit lines in two segments, d5_effects.h)
+foreach ($variant in @(@{ name = 'dry'; defines = @('-DD5_NO_REVERB') }, @{ name = 'reverb'; defines = @() },
+                       @{ name = 'fm1'; defines = @('-DD5_REVERB_INT16', '-DD5_REVERB_EXTERNAL_POOL') })) {
     $wasm = Join-Path $out "render_bank_$($variant.name).wasm"
     $objs = @()
     $c = Join-Path $out 'd50_inflate.o'
