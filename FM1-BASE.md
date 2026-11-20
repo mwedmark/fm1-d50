@@ -80,7 +80,7 @@ The layout above, made a setting and tried. It runs the D-50 in fm1-emu with its
 
 The unchanged template builds to 90 608 B of image, 28 KB of RAM and 74 KB of pool, close to the README's numbers.
 
-**The fork** (`D:\gitm1-base`, branch `d50-layout`, with felucca-bsp on its own `d50-layout`; local only, not pushed):
+**The fork** (`D:\git\fm1-base`, branch `d50-layout`, with felucca-bsp on its own `d50-layout`; local only, not pushed):
 `data_lo = 0x5B000` in an app's `fm1.toml` gives
 
 - the package: a CODE region and app slot that end at data_lo (`tools/fm1pkg_make.py set_data_lo`), the VM region from there;
