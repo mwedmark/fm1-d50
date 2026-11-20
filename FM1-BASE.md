@@ -155,7 +155,12 @@ stock firmware) brings it back: someone has to be at the FM-1.
 
 **Not done or not known yet:**
 
-- On an FM-1: the loader with the smaller app area, the plain XIP window from 0x5B000 (fm1-emu does not check it), the
-  loader writing the 131 sectors of the region, and the load at 360 MHz with the engine in RAM.
-- Installing: fm1-base's own installer (`tools/fm1_install.py`, its installer page) or `install.html` with this package.
+- Not checked by ear or by recording the FM-1's USB audio for dropouts; the profiler's peak (66 %) is well under the
+  audio interrupt's deadline (87.5 % of a block).
+
+**On the FM-1 (2026-11-20).** `tools/fm1_install.py fm1base/build/d50.fwsc --port USB-Midi --yes` from fm1_open: the fast
+install, then FM-1_5000 runs; its USB port is then called "D-50 FM-1", so the installer's resource step did not find it
+and `tools/fm1_resources.py fm1base/build/d50-res.bin --port "D-50 FM-1"` wrote the region. Fantasia, eight keys (16
+voices), 360 MHz, both cores, cmd 11: **64 % (peak 66 %)**, against fm1_open's 80 % (peak 86 %) at 320 MHz; per block
+CPU1's voices 1.55 ms, all of the render 1.70 ms, resampling 0.14 ms; silent 9 %.
 - Bluetooth MIDI (`ble_stack = "own"`), velocity (`APP_TOUCH`).
