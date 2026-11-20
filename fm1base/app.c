@@ -8,8 +8,9 @@
 typedef struct {
     uint32_t magic;
     int8_t octave;                       /* -2 .. +2 */
-    uint8_t program;                     /* 0 .. 63 */
-    uint8_t rsv[2];
+    uint8_t program;                     /* 0 .. 63, in the bank */
+    uint8_t bank;                        /* 0 .. d50_banks() - 1 (issue #7; was a reserved byte, 0) */
+    uint8_t rsv;
 } settings_t;
 static settings_t set;
 static uint8_t set_dirty;
@@ -26,6 +27,7 @@ static int16_t left_in[RS_HISTORY + PLAYER_FRAMES], right_in[RS_HISTORY + PLAYER
 static uint32_t position = (uint32_t)(RESAMPLE_TAPS / 2 - 1) << 24;
 static unsigned silent = RS_HISTORY;
 static volatile int32_t program_asked = -1;  /* a program change from MIDI, for the main loop (building a program takes a while) */
+static volatile int32_t bank_asked = -1;     /* CC0 (bank select): the bank the next program change picks (issue #7) */
 static volatile uint32_t midi_count;
 
 static inline __attribute__((always_inline)) int32_t sat24(int32_t v) { return v > 8388607 ? 8388607 : v < -8388608 ? -8388608 : v; }
@@ -73,6 +75,8 @@ static void midi_in(void)                    /* audio interrupt: the packets tha
         case 0xB0u:
             if (d1 == 120u || d1 == 123u)
                 d50_panic();
+            else if (d1 == 0u)
+                bank_asked = (int32_t)d2;        /* (not the D-50's: its banks were cards; upstream PicoFaceD5's) */
             else
                 d50_cc(d1, d2);                  /* the D-50's controls: d50.h d50_cc (issue #4) */
             break;
@@ -184,6 +188,7 @@ void app_backup_hold(int on) { (void)on; }       /* (only SAVE saves) */
 void app_backup_restored(void)
 {
     settings_load();
+    d50_bank(set.bank);
     d50_program(set.program);
 }
 
@@ -195,6 +200,7 @@ static void settings_load(void)
         set.magic = SET_MAGIC;
         set.octave = 0;
         set.program = 0;
+        set.bank = 0;
     }
 }
 
@@ -205,8 +211,10 @@ void app_init(void)
 #if FM1_CPU1
     plat_cpu2_set(1);                        /* the second core renders every second sounding voice (d50.cpp split_begin); else one core */
 #endif
-    d50_program(set.program);                /* (before the data: kept for the bind) */
+    d50_bank(set.bank);                      /* (before the data: kept for the bind, which checks it) */
+    d50_program(set.program);
     bound = d50_bind_flash();
+    set.bank = (uint8_t)d50_current_bank();
 }
 
 /* ------------------------------------------------------------------------ UI --- */
@@ -268,11 +276,14 @@ static void note(uint32_t note, uint32_t vel)    /* main loop: the queue is the 
     plat_unlock(f);
 }
 
-static void program_step(int32_t to)
+static void program_step(int32_t to)         /* to: the patch over every bank, bank * 64 + program (the encoders walk them all) */
 {
-    uint32_t n = d50_programs();
-    set.program = (uint8_t)(((to % (int32_t)n) + (int32_t)n) % (int32_t)n);
+    uint32_t per = d50_programs(), banks = d50_banks() ? d50_banks() : 1u, n = per * banks, i;
+    i = (uint32_t)(((to % (int32_t)n) + (int32_t)n) % (int32_t)n);
+    set.bank = (uint8_t)(i / per);
+    set.program = (uint8_t)(i % per);
     set_dirty = 1;
+    d50_bank(set.bank);
     d50_program(set.program);
     ui.redraw = 1;
 }
@@ -329,11 +340,13 @@ static void input(void)
         ui.redraw = 1;
     }
     if ((e = plat_enc(EN_SELECT)) != 0 || (e = plat_enc(EN_PRESET)) != 0)
-        program_step((int32_t)set.program + e);
+        program_step((int32_t)(set.bank * d50_programs() + set.program) + e);
     if (program_asked >= 0) {
-        int32_t p = program_asked;
+        int32_t p = program_asked, b = bank_asked >= 0 ? bank_asked : (int32_t)set.bank;
         program_asked = -1;
-        program_step(p);
+        if (b >= (int32_t)(d50_banks() ? d50_banks() : 1u))
+            b = set.bank;                        /* (a bank there is not: the current one) */
+        program_step(b * (int32_t)d50_programs() + p % (int32_t)d50_programs());
     }
     if (keys != ui.keys || btn != ui.btn)
         ui.redraw = 1;
@@ -364,9 +377,16 @@ static void draw(void)
     if (!bound) {
         cv_text(10, 20, &FONT_M, "NO D-50 DATA", C_HI);
     } else {
-        t[0] = (char)('1' + p / 8u);
-        t[1] = (char)('1' + p % 8u);
-        t[2] = 0;
+        {                                    /* the D-50's 11..88; with several banks "2-37" (issue #7) */
+            uint32_t j = 0;
+            if (d50_banks() > 1u) {
+                t[j++] = (char)('1' + set.bank);
+                t[j++] = '-';
+            }
+            t[j++] = (char)('1' + p / 8u);
+            t[j++] = (char)('1' + p % 8u);
+            t[j] = 0;
+        }
         cv_text(10, 4, &FONT_XS, "PATCH", C_GRAY);
         cv_text(10, 18, &FONT_L, t, C_HI);
         cv_text(10, 60, &FONT_B, d50_program_name(p), C_WHITE);

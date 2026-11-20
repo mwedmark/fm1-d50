@@ -36,6 +36,11 @@ void d50_note(unsigned note, unsigned velocity);
 /* 0..d50_programs()-1, wraps */
 void d50_program(unsigned program);
 unsigned d50_programs(void);                             /* the bank's patches */
+/* Several banks (issue #7, the data's version 3): d50_banks their count (0 without data), d50_bank chooses one (0-based; unpacked into RAM,
+ * then d50_program to sound it: 1 done, 0 no such bank), main loop; before the data is bound it is kept for the bind. */
+unsigned d50_banks(void);
+unsigned d50_current_bank(void);
+int d50_bank(unsigned which);
 unsigned d50_bank_patches(void);                         /* 0 without a bank */
 unsigned d50_current_program(void);
 const char *d50_program_name(unsigned program);   /* the current program's; "" for another */
