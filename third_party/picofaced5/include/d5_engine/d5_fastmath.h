@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "d5_engine/d5_hot.h"
+
 // Has to be outside any namespace: pico.h declares types at file scope.
 #if defined(__has_include)
 #  if __has_include("pico.h")
@@ -38,6 +40,15 @@
 #  define D5_IN_RAM __attribute__((section(".volatile_ram.d5_fastmath"), aligned(4)))   // fm1-d50: initialised SRAM data (see d5_hot.h)
 #else
 #  define D5_IN_RAM
+#endif
+// fm1-d50: the JieLi clang does not inline a function into one in another section, so the small helpers that the RAM code (D5_HOT) calls
+// per sample stayed calls into the flash, through the XIP cache the sample blob thrashes. Forced inline there they are part of the RAM code.
+#ifndef D5_INL
+#  if defined(__GCC_PI32V2__) && !defined(FM1_BASE)
+#    define D5_INL __attribute__((always_inline))
+#  else
+#    define D5_INL
+#  endif
 #endif
 
 namespace d5 {
@@ -100,7 +111,7 @@ inline const Exp2Table kExp2 D5_IN_RAM = Exp2Table{};
 }  // namespace detail
 
 // sin(2*pi*turns). Any real argument; the wrap is a floor and a subtract.
-inline float fast_sin(float turns) {
+inline float D5_HOT(fast_sin)(float turns) {
     const float f = turns - static_cast<float>(static_cast<int>(turns)) +
                     (turns < 0.0f ? 1.0f : 0.0f);
     const float x = f * kSinSize;
@@ -113,10 +124,10 @@ inline float fast_sin(float turns) {
     return a + (detail::kSin.v[i + 1] - a) * frac;
 }
 
-inline float fast_cos(float turns) { return fast_sin(turns + 0.25f); }
+inline float D5_HOT(fast_cos)(float turns) { return fast_sin(turns + 0.25f); }
 
 // 2^x, for x anywhere the audio path can produce it.
-inline float fast_exp2(float x) {
+inline float D5_HOT(fast_exp2)(float x) {
     if (x < -126.0f) return 0.0f;
     if (x > 127.0f) x = 127.0f;
     const int n = static_cast<int>(x) - (x < 0.0f ? 1 : 0);   // floor
@@ -140,7 +151,7 @@ inline float fast_exp2(float x) {
 
 // log2(x) for x > 0 and normal (fm1-d50: a libm pow() per block per square partial cost the FM-1 a fifth of a core). The exponent comes
 // from the float's bits, the mantissa (folded into 0.7..1.41) through the atanh series: within 1e-7 of the true value.
-inline float fast_log2(float x) {
+inline float D5_HOT(fast_log2)(float x) {
     uint32_t bits;
     std::memcpy(&bits, &x, sizeof bits);
     int e = static_cast<int>((bits >> 23) & 0xFF) - 127;

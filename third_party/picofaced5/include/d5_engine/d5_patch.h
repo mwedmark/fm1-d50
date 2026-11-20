@@ -18,6 +18,15 @@
 #include "d5_engine/d5_hot.h"
 #include "d5_engine/d5_voice.h"
 
+// fm1-d50: a measurement build's hooks (d50.cpp FM1_D50_PROF): D5_MARK(k) notes the time at point k of a block, D5_SKIP(bit) leaves a stage
+// out (1 the reverb, 2 the chorus, 4 the EQ) to measure its share. Nothing without them.
+#ifndef D5_MARK
+#define D5_MARK(k) ((void)0)
+#endif
+#ifndef D5_SKIP
+#define D5_SKIP(bit) false
+#endif
+
 namespace d5 {
 
 struct ToneSpec {
@@ -219,7 +228,7 @@ public:
             s.raw0 = lfo_[0].raw();
         }
     }
-    int active_voices(uint8_t* out) const {
+    D5_INL int active_voices(uint8_t* out) const {
         int n = 0;
         for (int i = 0; i < kVoices; ++i) {
             if (active_[i]) out[n++] = static_cast<uint8_t>(i);
@@ -235,7 +244,9 @@ public:
     static constexpr int kQuietSamples = 8000;
     void D5_HOT(finish_sample)(float sum, float& l, float& r) {
         if (sum == 0.0f && quiet_ >= kQuietSamples) { l = 0.0f; r = 0.0f; return; }
-        chorus_.process(eq_.process(sum), l, r);
+        const float e = D5_SKIP(4) ? sum : eq_.process(sum);
+        if (D5_SKIP(2)) { l = e; r = e; }
+        else chorus_.process(e, l, r);
         l *= spec_.level;
         r *= spec_.level;
         const float a = (l < 0.0f ? -l : l) + (r < 0.0f ? -r : r);
@@ -423,6 +434,7 @@ public:
     void silence() {
         upper_.silence();
         lower_.silence();
+        clear_lag();
         pend_head_ = pend_count_ = 0;
         reverb_.configure(spec_.reverb, sr_);
         solo_note_[0] = solo_note_[1] = -1;
@@ -434,7 +446,14 @@ public:
         upper_.configure(spec.upper, sample_rate);
         lower_.configure(spec.lower, sample_rate);
         reverb_.configure(spec.reverb, sample_rate);
+        clear_lag();
         apply_limits();
+    }
+    // fm1-d50: nothing of the old sound waits for the effects (D5_FX_LAG)
+    void clear_lag() {
+#if D5_FX_LAG
+        for (int i = 0; i < kLagRing; ++i) lag_[0][i] = lag_[1][i] = 0.0f;
+#endif
     }
 
     // fm1-d50: a cap on each tone's voices under what the key mode grants (the CPU guard in the FM-1's d50.cpp); 16: none. New notes past
@@ -565,15 +584,18 @@ private:
     };
     static void run_job(void* arg) {
         const SplitJob& j = *static_cast<const SplitJob*>(arg);
+        D5_MARK(5);
         j.patch->render_voices(j.voices, j.count, j.upper, j.lower, j.n);
+        D5_MARK(6);
     }
-    void render_voices(const uint8_t* voices, int count, float* upper, float* lower, int n) {
+    void D5_HOT(render_voices)(const uint8_t* voices, int count, float* upper, float* lower, int n) {
         for (int k = 0; k < count; ++k) {
             if (voices[k] & 0x80U) lower_.render_voice(voices[k] & 0x7F, lower, n);
             else upper_.render_voice(voices[k], upper, n);
         }
     }
     void D5_HOT(render_part)(float* l, float* r, int n, const Split* split) {
+        D5_MARK(0);
         upper_.begin_block(n);
         lower_.begin_block(n);
         uint8_t all[24], mine[24], theirs[24];
@@ -591,27 +613,59 @@ private:
         }
         for (int t = 0; t < n; ++t) acc_[0][t] = acc_[1][t] = acc_[2][t] = acc_[3][t] = 0.0f;
         job_ = SplitJob{this, theirs, nt, acc_[2], acc_[3], n};
+        D5_MARK(1);
         const bool handed = nt > 0 && split && split->begin && split->wait && split->begin(&run_job, &job_);
         if (!handed) render_voices(theirs, nt, acc_[2], acc_[3], n);
-        render_voices(mine, nm, acc_[0], acc_[1], n);
-        if (handed) split->wait();
         float uw, lw;
         int om;
         mix_weights(uw, lw, om);
+#if D5_FX_LAG
+        // fm1-d50: the effects run D5_FX_LAG samples behind the voices, on sums already made, so this core runs them while the other core
+        // renders its voices (before, they waited for the other core and ran after it). The output is the same, that much later.
+        for (int t = 0; t < n; ++t) {
+            const int at = (lag_head_ + t) & (kLagRing - 1);
+            float ul, ur, ll, lr;
+            upper_.finish_sample(lag_[0][at], ul, ur);
+            lower_.finish_sample(lag_[1][at], ll, lr);
+            mix_with(uw, lw, om, ul, ur, ll, lr, l[t], r[t]);
+        }
+        D5_MARK(2);
+        render_voices(mine, nm, acc_[0], acc_[1], n);
+        if (handed) split->wait();
+        D5_MARK(3);
+        for (int t = 0; t < n; ++t) {
+            const int at = (lag_head_ + D5_FX_LAG + t) & (kLagRing - 1);
+            lag_[0][at] = acc_[0][t] + acc_[2][t];
+            lag_[1][at] = acc_[1][t] + acc_[3][t];
+        }
+        lag_head_ = (lag_head_ + n) & (kLagRing - 1);
+#else
+        render_voices(mine, nm, acc_[0], acc_[1], n);
+        D5_MARK(2);
+        if (handed) split->wait();
+        D5_MARK(3);
         for (int t = 0; t < n; ++t) {
             float ul, ur, ll, lr;
             upper_.finish_sample(acc_[0][t] + acc_[2][t], ul, ur);
             lower_.finish_sample(acc_[1][t] + acc_[3][t], ll, lr);
             mix_with(uw, lw, om, ul, ur, ll, lr, l[t], r[t]);
         }
+#endif
+        D5_MARK(4);
     }
+#if D5_FX_LAG
+    static_assert(D5_FX_LAG >= Tone<16>::kMaxBlock && D5_FX_LAG <= 2 * Tone<16>::kMaxBlock, "a part's reads and writes may not overlap");
+    static constexpr int kLagRing = 4 * Tone<16>::kMaxBlock;
+    float lag_[2][kLagRing]{};              // the voices' sums, upper and lower, waiting D5_FX_LAG samples for the effects
+    int lag_head_ = 0;
+#endif
     SplitJob job_{};
     int cap_ = 16;                          // fm1-d50: cap_voices
     float acc_[4][Tone<16>::kMaxBlock]{};   // upper and lower sums: this core's, the other's
 
 public:
     // The tones' outputs into the patch's two outputs (the rest of next_stereo, shared with render_block).
-    void mix_weights(float& uw_out, float& lw_out, int& om_out) const {
+    D5_INL void mix_weights(float& uw_out, float& lw_out, int& om_out) const {
         // Tone balance per the firmware's mixer (bank code 0xB397): each
         // tone's factor is min(4*b, 255)/200 of its side, so the center
         // is 1.0 each and a full tilt reaches +2.1 dB on the loud side --
@@ -644,6 +698,11 @@ public:
         mix_with(uw, lw, om, ul, ur, ll, lr, l, r);
     }
     void D5_HOT(mix_with)(float uw, float lw, int om, float ul, float ur, float ll, float lr, float& l, float& r) {
+        if (D5_SKIP(1)) {
+            l = saturate((ul * uw + ll * lw) * 0.5f * spec_.volume);
+            r = saturate((ur * uw + lr * lw) * 0.5f * spec_.volume);
+            return;
+        }
         if (om == 0) {
             const float xl = 0.5f * (ul * uw + ll * lw);
             const float xr = 0.5f * (ur * uw + lr * lw);
@@ -674,7 +733,7 @@ public:
     // a converter answers that with hard clipping. This stays linear below
     // -3 dB and bends smoothly above, so loud chords lose their peaks instead
     // of tearing.
-    static float saturate(float x) {
+    D5_INL static float saturate(float x) {
         constexpr float kKnee = 0.7f;
         const float a = x < 0.0f ? -x : x;
         if (a <= kKnee) return x;

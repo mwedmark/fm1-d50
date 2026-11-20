@@ -191,6 +191,32 @@ void sf2_upload_poll(void)
         status = sf2player_d50_clock(m[6] & 1U);
     }
 #endif
+#if FM1_D50 && !defined(FM1_HOST_TEST)
+    else if (cmd == 11 && n == 8) {                              /* F0 7D S F 02 0B 00 F7: the D-50's time per block (d50.cpp FM1_D50_PROF), then from zero */
+        extern volatile uint32_t d50_prof_sum[8];
+        void sf2out_cpu(unsigned *average, unsigned *peak);
+        uint8_t r[6 + 8 * 5 + 1] = {0xf0, 0x7d, 'S', 'F', 2, 0x4b}, *d = r + 6;
+        unsigned avg, peak;
+        sf2out_cpu(&avg, &peak);
+        uint32_t v[8];
+        const uint32_t flags = fm1_device_irq_save();
+        for (unsigned i = 0; i < 6; ++i) { v[i] = d50_prof_sum[i]; d50_prof_sum[i] = 0; }
+        fm1_device_irq_restore(flags);
+        v[6] = avg | peak << 12 | d50_split_share() << 24;
+        v[7] = d50_voices_sounding() | d50_voice_limit() << 8 | d50_cores() << 16;
+        for (unsigned i = 0; i < 8; ++i)
+            for (unsigned k = 0; k < 5; ++k) *d++ = (uint8_t)((v[i] >> (7 * k)) & 0x7fU);
+        *d = 0xf7;
+        if (upload_in.source <= FM1_MIDI_BLE) (void)fm1_midi_send_port(upload_in.source, r, sizeof r);
+        else (void)fm1_midi_send(r, sizeof r);
+        upload_in.length = 0;
+        return;
+    } else if (cmd == 12 && n == 8) {                            /* F0 7D S F 02 0C bits F7: leave out 1 the reverb, 2 the chorus, 4 the EQ */
+        extern volatile unsigned d50_prof_skip;
+        d50_prof_skip = m[6] & 7U;
+        status = 0;
+    }
+#endif
 #if SONG_UPLOAD
     else if (cmd == 4 && n == 12)
         status = song_begin(read35(m + 6));

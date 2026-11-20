@@ -79,6 +79,16 @@ int main(int argc, char** argv)
             for (int t = 0; t < n; ++t) {
                 float l, r;
                 a.next_stereo(l, r);
+#ifdef D5_FX_LAG
+                {   // the block rendering runs the effects D5_FX_LAG samples later: compare with the sample-by-sample output that much earlier
+                    static float hl[D5_FX_LAG], hr[D5_FX_LAG];
+                    static int hp = 0;
+                    if (s == 0 && t == 0) for (int i = 0; i < D5_FX_LAG; ++i) hl[i] = hr[i] = 0.0f;
+                    const float ol = hl[hp], orr = hr[hp];
+                    hl[hp] = l; hr[hp] = r; hp = (hp + 1) % D5_FX_LAG;
+                    l = ol; r = orr;
+                }
+#endif
                 const double dl = l - bl[t], dr = r - br[t];
                 const double d = dl < 0 ? -dl : dl, d2 = dr < 0 ? -dr : dr;
                 if (d > diff) diff = d;

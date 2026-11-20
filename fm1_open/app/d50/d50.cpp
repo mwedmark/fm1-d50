@@ -35,6 +35,39 @@ extern uint8_t fm1_fx_pool_end[] __attribute__((weak));
 #define D50_POOL
 #endif
 
+// FM1_D50_PROF: where a block's time goes on the FM-1 (sf2_upload.c cmd 11 reads it, cmd 12 leaves stages out). TIMER4, 24 MHz, both cores.
+#ifndef FM1_D50_PROF
+#define FM1_D50_PROF (!FM1_BASE)
+#endif
+#if FM1_D50_PROF
+extern "C" {
+volatile uint32_t d50_prof_t[8];                 // the last time at each mark (5, 6: CPU1's job)
+volatile uint32_t d50_prof_sum[8];               // 0 parts, 1 lists, 2 CPU0's voices, 3 the wait for CPU1, 4 the effects and mix, 5 CPU1's job
+volatile unsigned d50_prof_skip;
+}
+#define D50_T4 (*(volatile uint32_t *)0x10804U)
+static inline __attribute__((always_inline)) void d50_mark(int k)
+{
+    const uint32_t t = D50_T4;
+    if (k == 4) {
+        d50_prof_sum[0] += 1U;
+        d50_prof_sum[1] += d50_prof_t[1] - d50_prof_t[0];
+        d50_prof_sum[2] += d50_prof_t[2] - d50_prof_t[1];
+        d50_prof_sum[3] += d50_prof_t[3] - d50_prof_t[2];
+        d50_prof_sum[4] += t - d50_prof_t[3];
+        d50_prof_sum[5] += d50_prof_t[6] - d50_prof_t[5];
+        d50_prof_t[5] = d50_prof_t[6] = 0;
+    }
+    d50_prof_t[k] = t;
+}
+#define D5_MARK(k) d50_mark(k)
+#define D5_SKIP(bit) ((d50_prof_skip & (bit)) != 0U)
+#endif
+
+// The effects 128 samples (4 ms) behind the voices, so that CPU0 runs them while CPU1 renders voices (d5_patch.h render_part)
+#if !FM1_BASE && !defined(D5_FX_LAG)
+#define D5_FX_LAG 128
+#endif
 #include "d5_engine/d5_patch.h"
 #include "d5_engine/d5_patch_map.h"
 
@@ -105,8 +138,8 @@ void split_wait()
 d5::Patch::Split split;
 #endif
 
-// The CPU guard (sf2out_load, after each block): over 85 % of the block on CPU0 it retires the oldest released voice (a 20 ms fade,
-// PicoFaceD5's shed_voice); with none to retire and over 92 %, a lower cap on each tone's voices (new notes past it find no slot). Under 60 %
+// The CPU guard (sf2out_load, after each block): over 90 % of the block on CPU0 it retires the oldest released voice (a 20 ms fade,
+// PicoFaceD5's shed_voice); with none to retire and over 97 %, a lower cap on each tone's voices (new notes past it find no slot). Under 60 %
 // for a quarter of a second the cap comes back up a voice at a time. After a step it waits 8 blocks for the fade to show.
 unsigned guard_hold, guard_calm;
 int guard_cap = 16;
@@ -284,10 +317,10 @@ extern "C" void d50_guard(unsigned percent)
 {
     if (!ready) return;
     if (guard_hold) { --guard_hold; return; }
-    if (percent > 85U) {
+    if (percent > 90U) {
         guard_calm = 0;
         if (patch->shed_voice()) { guard_hold = 8; return; }
-        if (percent > 92U && guard_cap > 4) { patch->cap_voices(--guard_cap); guard_hold = 8; }
+        if (percent > 97U && guard_cap > 4) { patch->cap_voices(--guard_cap); guard_hold = 8; }
     } else if (percent < 60U && guard_cap < 16) {
         if (++guard_calm >= 86U) { patch->cap_voices(++guard_cap); guard_calm = 0; }
     } else {

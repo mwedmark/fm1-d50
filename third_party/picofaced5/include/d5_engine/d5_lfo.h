@@ -159,23 +159,23 @@ public:
         return v * gate();
     }
 
-    float raw() const { return raw_; }
-    float gate() const { return delay_left_ > 0.0f ? 0.0f : gate_; }
+    D5_INL float raw() const { return raw_; }
+    D5_INL float gate() const { return delay_left_ > 0.0f ? 0.0f : gate_; }
 
     // The D-50's LFOs are tone-global: the 97.66-Hz tick walks exactly one
     // phase word per LFO per tone (IC25 0x1508-0x160D), and every sounding
     // voice reads the same words from the CD40 merge area. So the tone owns
     // the LFOs and steps them once per sample...
-    float next() { return next_n(1); }
+    D5_INL float next() { return next_n(1); }
 
     // ...while a voice's block rate only READS the shared state -- calling
     // next_n() here would advance the phase once per listening voice.
-    float value() const { return raw_ * gate(); }
+    D5_INL float value() const { return raw_ * gate(); }
 
     float phase() const { return phase_; }   // diagnostic handle
 
 private:
-    float next_random() {
+    D5_INL float next_random() {
         rng_ ^= rng_ << 13;
         rng_ ^= rng_ >> 17;
         rng_ ^= rng_ << 5;
@@ -327,7 +327,7 @@ public:
     }
 
 private:
-    void arm(int seg, float target) {
+    void D5_HOT(arm)(int seg, float target) {
         seg_ = seg;
         remaining_ = static_cast<int32_t>(t_[seg] * sr_);
         if (jump_[seg]) {

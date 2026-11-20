@@ -138,7 +138,7 @@ public:
 private:
     float makeup_ = 1.0f;
     bool flat_ = false;
-    static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
+    D5_INL static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
     Biquad low_{};
     Biquad high_{};
 };
@@ -300,10 +300,10 @@ public:
 
 private:
     static constexpr float kPi = 3.14159265358979323846f;
-    static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
-    static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
+    D5_INL static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+    D5_INL static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
 
-    float read(float delay_samples) const {
+    D5_INL float read(float delay_samples) const {
         if (delay_samples < 1.0f) delay_samples = 1.0f;
         if (delay_samples > kMaxDelay - 2) delay_samples = kMaxDelay - 2;
         float pos = static_cast<float>(write_) - delay_samples;
@@ -442,17 +442,17 @@ class ReverbLine {
 public:
     void bind(ReverbSample* buf, int size) { buf_ = buf; size_ = size; i_ = 0; }
     void clear() { for (int i = 0; i < size_; ++i) buf_[i] = 0; i_ = 0; }
-    float next() {
+    D5_INL float next() {
         if (++i_ >= size_) i_ = 0;
         return reverb_load(buf_[i_]);
     }
-    float at(int pos) const {
+    D5_INL float at(int pos) const {
         int j = i_ - pos;
         if (j < 0) j += size_;
         return reverb_load(buf_[j]);
     }
-    float cur() const { return reverb_load(buf_[i_]); }
-    void put(float v) { buf_[i_] = reverb_store(v); }
+    D5_INL float cur() const { return reverb_load(buf_[i_]); }
+    D5_INL void put(float v) { buf_[i_] = reverb_store(v); }
     ReverbSample* buf_ = nullptr;
     int size_ = 0;
     int i_ = 0;
@@ -486,7 +486,7 @@ public:
         const float filter_in = in + fb_ * line_.next();
         line_.put(filt_ * last - filter_in);
     }
-    float out_at(int pos) const { return line_.at(pos); }
+    D5_INL float out_at(int pos) const { return line_.at(pos); }
 private:
     ReverbLine line_;
     float filt_ = 0.375f, fb_ = 0.5f;
@@ -507,7 +507,7 @@ public:
         line_.next();
         line_.put(amp_ * (filt_ * last + in));
     }
-    float out_at(int pos) const { return line_.at(pos); }
+    D5_INL float out_at(int pos) const { return line_.at(pos); }
 private:
     ReverbLine line_;
     float filt_ = 0.5f, amp_ = 0.375f;
@@ -791,8 +791,8 @@ private:
     static constexpr float kEarlyMix = D5_REV_EARLY;
     static constexpr float kTailMix = D5_REV_TAIL;
 
-    static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
-    static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
+    D5_INL static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+    D5_INL static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
 
     ReverbSpec spec_{};
     float sr_ = 32000.0f;

@@ -356,7 +356,7 @@ public:
         }
     }
 
-    bool active() const {
+    D5_INL bool active() const {
         const bool a = p1_pcm_ ? pcm_[0].active() : synth_[0].active();   // fm1-d50: the structure's flags from prepare_mix
         const bool b = p2_pcm_ ? pcm_[1].active() : synth_[1].active();
         // A ring structure has nothing left to say once partial 1 is gone:
@@ -564,7 +564,7 @@ public:
     }
 
 private:
-    float mix(float a, float b, float dca, float dcb) const {
+    D5_INL float mix(float a, float b, float dca, float dcb) const {
         // The asymmetric pulses carry a DC as large as the duty imbalance.
         // Inside the chip that DC is real -- the pair's ring mod multiplies
         // the raw partials -- but the D-50's line out is AC-coupled and
@@ -629,7 +629,7 @@ private:
     bool p1_pcm_ = false, p2_pcm_ = false, ring_ = false;
     float ring_gain_ = 1.0f, w1_ = 1.0f, w2_ = 1.0f;
 
-    static float lfo_value(const float l[3], const LfoRoute& r) {
+    D5_INL static float lfo_value(const float l[3], const LfoRoute& r) {
         const int i = (r.lfo < 0 || r.lfo > 2) ? 0 : r.lfo;
         return l[i];
     }
@@ -652,9 +652,9 @@ private:
     const LfoSnap* snap_ = nullptr;     // fm1-d50: set_snap
     const LfoSnap* snap_now_ = nullptr;
     int snap_t_ = 0;
-    float lfo_value(int k) const { return snap_now_ ? snap_now_->value[k] : lfo_[k]->value(); }
-    float lfo_gate0() const { return snap_now_ ? snap_now_->gate0 : lfo_[0]->gate(); }
-    float lfo_raw0() const { return snap_now_ ? snap_now_->raw0 : lfo_[0]->raw(); }
+    D5_INL float lfo_value(int k) const { return snap_now_ ? snap_now_->value[k] : lfo_[k]->value(); }
+    D5_INL float lfo_gate0() const { return snap_now_ ? snap_now_->gate0 : lfo_[0]->gate(); }
+    D5_INL float lfo_raw0() const { return snap_now_ ? snap_now_->raw0 : lfo_[0]->raw(); }
     Lfo local_lfo_[3]{};
     bool lfo_local_ = false;
     PitchEnv penv_{};

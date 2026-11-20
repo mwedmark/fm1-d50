@@ -312,13 +312,13 @@ public:
         if (level_ < kFloor) level_ = kFloor;
     }
 
-    bool finished() const { return !held_ && seg_ >= 5; }
+    D5_INL bool finished() const { return !held_ && seg_ >= 5; }
     // Past chip zero the ramp keeps its rate down to the floor, then silence. fm1-d50: -80 dB, not -90 (D5_TAIL_FLOOR): the last
     // 10 dB of every tail are under the 16-bit output's noise and held voices the CPU needs for new notes.
 #ifndef D5_TAIL_FLOOR
 #define D5_TAIL_FLOOR 1.0e-4f
 #endif
-    void coast_step() {
+    D5_INL void coast_step() {
         level_ *= factor_;
         if (level_ <= D5_TAIL_FLOOR) {
             level_ = 0.0f;
@@ -326,7 +326,7 @@ public:
             if (!held_ && seg_ == 4) seg_ = 5;
         }
     }
-    float level() const {
+    D5_INL float level() const {
         if (spec_.log_segments && remaining_ <= 0 && !coast_ && level_ <= 1.05e-3f) return 0.0f;
         return level_ < 0.0f ? 0.0f : level_;
     }
@@ -389,7 +389,7 @@ public:
     }
 
 private:
-    void arm(int seg, float target) {
+    void D5_HOT(arm)(int seg, float target) {
         seg_ = seg;
         remaining_ = static_cast<int32_t>(spec_.t[seg] * sr_);
         // Rate semantics OUTRANK the stored duration: a rate-constant
