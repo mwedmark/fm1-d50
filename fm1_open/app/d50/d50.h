@@ -46,6 +46,14 @@ void d50_bend(unsigned value);
 void d50_cc(unsigned cc, unsigned value);
 /* Channel pressure (aftertouch), 0..127 */
 void d50_pressure(unsigned value);
+/* SysEx, the D-50's DT1 and RQ1 (issue #6), main loop. d50_sysex: a frame without F0 and F7; 1 when it is the D-50's (Roland 0x41, model
+ * 0x14). DT1 writes the temporary area (00 00 00, the current patch: applied while it sounds) or the bank in RAM (02 00 00); RQ1 asks for
+ * them back. d50_sysex_reply: the next DT1 of an RQ1's answer, F0 .. F7, into frame (D50_SYSEX_REPLY_MAX bytes); its length, 0 when none is
+ * due. d50_edit_poll: a DT1 into the temporary area becomes the sound (each pass of the main loop); 1 when it did. */
+#define D50_SYSEX_REPLY_MAX 266U
+int d50_sysex(const uint8_t *p, uint32_t n);
+unsigned d50_sysex_reply(uint8_t *frame);
+int d50_edit_poll(void);
 void d50_panic(void);
 /* Add n frames at D50_RATE to out (interleaved stereo, Q23, saturated). Audio interrupt. */
 void d50_render(int32_t *out, unsigned n);

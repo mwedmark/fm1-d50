@@ -245,14 +245,28 @@ void patch_name(const uint8_t *p, char *out)
     out[n] = 0;
 }
 
-void build_program(unsigned program)
+// The temporary area (the D-50's edit buffer, SysEx 00 00 00): the current patch's 448 bytes, which a program change copies from the bank
+// and SysEx DT1 edits (issue #6). Every spec is built from it; spec_live says the interrupt is to apply it as a live edit (Patch::reconfigure:
+// what sounds goes on) instead of a new program (configure).
+uint8_t temp_patch[D50_PATCH_BYTES];
+bool spec_live[2];
+bool temp_dirty;                                 // DT1 changed the temporary area since its spec was built (main loop)
+
+void build_spec(bool live)
 {
     const unsigned slot = (spec_serial + 1U) & 1U;
-    const uint8_t *p = bank + program * D50_PATCH_BYTES;
-    new (spec_memory[slot]) d5::PatchSpec(d5::patch_from_bytes(p, pcm));   // (trivially destructible: nothing to end first)
-    patch_name(p, names[slot]);
-    program_now = program;
+    new (spec_memory[slot]) d5::PatchSpec(d5::patch_from_bytes(temp_patch, pcm));   // (trivially destructible: nothing to end first)
+    patch_name(temp_patch, names[slot]);
+    spec_live[slot] = live;
     spec_serial = spec_serial + 1U;
+}
+
+void build_program(unsigned program)
+{
+    memcpy(temp_patch, bank + program * D50_PATCH_BYTES, D50_PATCH_BYTES);
+    program_now = program;
+    temp_dirty = false;
+    build_spec(false);
 }
 
 // The bank after the samples (version 2, tools/d50_pack.js): its raw size, then its raw deflate stream.
@@ -386,6 +400,98 @@ void control(unsigned cc, unsigned v)
     }
 }
 }  // namespace
+
+// ---- SysEx: the D-50's exclusive, Roland's one-way DT1 and RQ1 (model 0x14), as upstream PicoFaceD5 speaks it (issue #6). Main loop.
+// Addresses are three 7-bit bytes, here one 21-bit number: the temporary area at 00 00 00 (448 bytes: upper partial 1, partial 2, common,
+// lower partial 1, partial 2, common, patch, 64 bytes each), internal memory at 02 00 00 (the bank, 448 bytes a patch, held in RAM: a
+// power cycle brings back the bank in the flash). Anything else (the reverb data at 03 60 00) is taken and ignored.
+namespace {
+constexpr uint8_t kRoland = 0x41, kModel = 0x14, kRq1 = 0x11, kDt1 = 0x12;
+constexpr uint32_t kInternal = 2U << 14;
+constexpr unsigned kChunk = 256;                  // the data bytes of one DT1 the D-50 sends
+
+uint32_t addr_of(const uint8_t *a) { return static_cast<uint32_t>(a[0]) << 14 | static_cast<uint32_t>(a[1]) << 7 | a[2]; }
+// the byte at an address, nullptr where nothing is
+uint8_t *byte_at(uint32_t a)
+{
+    if (a < D50_PATCH_BYTES) return temp_patch + a;
+    if (a >= kInternal && a - kInternal < bank_patches * D50_PATCH_BYTES) return bank + (a - kInternal);
+    return nullptr;
+}
+uint8_t roland_sum(const uint8_t *p, unsigned n)
+{
+    unsigned s = 0;
+    for (unsigned i = 0; i < n; ++i) s += p[i];
+    return static_cast<uint8_t>((128U - (s & 127U)) & 127U);
+}
+
+// an RQ1 being answered: DT1s of up to 256 bytes from its address, one per d50_sysex_reply
+struct Reply {
+    uint8_t dev;
+    uint32_t at, left;
+} reply;
+}  // namespace
+
+extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
+{
+    if (n < 4U || p[0] != kRoland || p[2] != kModel) return 0;
+    if (!ready) return 1;                         // (ours, but nothing to edit yet)
+    if (p[3] == kDt1 && n >= 9U) {                // 41 dev 14 12 a a a data.. sum
+        const unsigned len = n - 8U;
+        if (roland_sum(p + 4, 3U + len) != p[n - 1]) return 1;
+        const uint32_t a = addr_of(p + 4);
+        for (unsigned i = 0; i < len; ++i) {
+            uint8_t *b = byte_at(a + i);
+            if (!b) continue;
+            *b = p[7 + i] & 127U;
+            if (a + i < D50_PATCH_BYTES) temp_dirty = true;
+        }
+    } else if (p[3] == kRq1 && n == 11U) {        // 41 dev 14 11 a a a s s s sum
+        if (roland_sum(p + 4, 6U) != p[10]) return 1;
+        const uint32_t a = addr_of(p + 4);
+        uint32_t size = addr_of(p + 7);
+        // only what is there: the temporary area or the bank, cut at its end
+        const uint32_t end = a < D50_PATCH_BYTES ? D50_PATCH_BYTES : kInternal + bank_patches * D50_PATCH_BYTES;
+        if (!byte_at(a)) return 1;
+        if (size > end - a) size = end - a;
+        reply.dev = p[1];
+        reply.at = a;
+        reply.left = size;
+    }
+    return 1;
+}
+
+extern "C" unsigned d50_sysex_reply(uint8_t *frame)
+{
+    if (!reply.left) return 0;
+    const unsigned len = reply.left > kChunk ? kChunk : reply.left;
+    frame[0] = 0xF0;
+    frame[1] = kRoland;
+    frame[2] = reply.dev;
+    frame[3] = kModel;
+    frame[4] = kDt1;
+    frame[5] = static_cast<uint8_t>(reply.at >> 14 & 127U);
+    frame[6] = static_cast<uint8_t>(reply.at >> 7 & 127U);
+    frame[7] = static_cast<uint8_t>(reply.at & 127U);
+    for (unsigned i = 0; i < len; ++i) {
+        const uint8_t *b = byte_at(reply.at + i);
+        frame[8 + i] = b ? *b : 0U;
+    }
+    frame[8 + len] = roland_sum(frame + 5, 3U + len);
+    frame[9 + len] = 0xF7;
+    reply.at += len;
+    reply.left -= len;
+    return 10U + len;
+}
+
+extern "C" int d50_edit_poll(void)
+{
+    if (!temp_dirty || !ready || spec_done != spec_serial) return 0;   // (the last spec not applied yet: next time)
+    temp_dirty = false;
+    build_spec(true);
+    return 1;
+}
+
 extern "C" unsigned d50_programs(void) { return bank_patches ? bank_patches : 1U; }
 extern "C" unsigned d50_bank_patches(void) { return bank_patches; }
 extern "C" unsigned d50_current_program(void) { return program_now; }
@@ -443,9 +549,16 @@ extern "C" D50_RENDER_RAM void d50_render(int32_t *out, unsigned n)
 #endif
     if (spec_done != spec_serial) {               // a new program: configure stops what sounds
         const unsigned serial = spec_serial;
-        patch->configure(spec_at(serial & 1U), static_cast<float>(D50_RATE));
-        spec_done = serial;
-        after_configure();
+        if (spec_live[serial & 1U]) {             // a SysEx edit of the temporary area: what sounds goes on (Patch::reconfigure)
+            patch->reconfigure(spec_at(serial & 1U));
+            spec_done = serial;
+            apply_bend();                        // (the bender range or the level may be what was edited)
+            apply_volume();
+        } else {
+            patch->configure(spec_at(serial & 1U), static_cast<float>(D50_RATE));
+            spec_done = serial;
+            after_configure();
+        }
     }
     while (queue_tail != queue_head) {
         const uint32_t e = queue[queue_tail];
