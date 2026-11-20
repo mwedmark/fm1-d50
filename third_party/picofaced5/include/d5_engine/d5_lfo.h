@@ -159,6 +159,48 @@ public:
         return v * gate();
     }
 
+    // fm1-d50: n samples of what the tone's begin_block keeps per sample, in one loop: step (next_n(1)), then value[t] = value(), and
+    // when gate0 / raw0 are given, gate() and raw(). With step false the LFO stands still and the values repeat. stride: in floats.
+    // The same as n calls of next() and the readers, without a call and a switch per sample.
+    void D5_HOT(fill)(int n, bool step, float* value, float* gate0, float* raw0, int stride) {
+        if (!step) {
+            const float v = value_now(), g = gate(), r = raw_;
+            for (int t = 0; t < n; ++t) {
+                value[t * stride] = v;
+                if (gate0) { gate0[t * stride] = g; raw0[t * stride] = r; }
+            }
+            return;
+        }
+        const LfoWave wave = spec_.wave;
+        float phase = phase_, delay_left = delay_left_, gate = gate_;
+        const float inc = inc_, gate_step = gate_step_;
+        bool half = half_;
+        float v = raw_;
+        for (int t = 0; t < n; ++t) {
+            switch (wave) {
+                case LfoWave::kSawtooth: v = 1.0f - 2.0f * phase; break;
+                case LfoWave::kSquare:   v = phase < 0.5f ? 1.0f : 0.0f; break;
+                case LfoWave::kRandom:   v = sample_; break;
+                case LfoWave::kTriangle:
+                default: v = phase < 0.5f ? (1.0f - 4.0f * phase) : (4.0f * phase - 3.0f); break;
+            }
+            phase += inc;
+            if (!half && phase >= 0.5f) { half = true; sample_ = next_random(); }
+            while (phase >= 1.0f) { phase -= 1.0f; half = false; sample_ = next_random(); }
+            if (delay_left > 0.0f) {
+                delay_left -= 1.0f;
+            } else if (gate < 1.0f) {
+                gate += gate_step;
+                if (gate > 1.0f) gate = 1.0f;
+            }
+            const float g = delay_left > 0.0f ? 0.0f : gate;
+            value[t * stride] = v * g;
+            if (gate0) { gate0[t * stride] = g; raw0[t * stride] = v; }
+        }
+        phase_ = phase; delay_left_ = delay_left; gate_ = gate; half_ = half; raw_ = v;
+    }
+    D5_INL float value_now() const { return raw_ * gate(); }
+
     D5_INL float raw() const { return raw_; }
     D5_INL float gate() const { return delay_left_ > 0.0f ? 0.0f : gate_; }
 

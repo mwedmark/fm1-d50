@@ -41,8 +41,9 @@ extern uint8_t fm1_fx_pool_end[] __attribute__((weak));
 #endif
 #if FM1_D50_PROF
 extern "C" {
-volatile uint32_t d50_prof_t[8];                 // the last time at each mark (5, 6: CPU1's job)
-volatile uint32_t d50_prof_sum[8];               // 0 parts, 1 lists, 2 CPU0's voices, 3 the wait for CPU1, 4 the effects and mix, 5 CPU1's job
+volatile uint32_t d50_prof_t[8];                 // the last time at each mark (5, 6: CPU1's job; 7: after the LFO steps)
+volatile uint32_t d50_prof_sum[9];               // 0 parts, 1 lists, 2 CPU0's voices, 3 the wait for CPU1, 4 the effects and mix, 5 CPU1's job,
+                                                 // 6 the LFO steps (part of 1), 7 all of d50_render, 8 sf2out.c's resampling
 volatile unsigned d50_prof_skip;
 }
 #define D50_T4 (*(volatile uint32_t *)0x10804U)
@@ -56,6 +57,7 @@ static inline __attribute__((always_inline)) void d50_mark(int k)
         d50_prof_sum[3] += d50_prof_t[3] - d50_prof_t[2];
         d50_prof_sum[4] += t - d50_prof_t[3];
         d50_prof_sum[5] += d50_prof_t[6] - d50_prof_t[5];
+        d50_prof_sum[6] += d50_prof_t[7] - d50_prof_t[0];
         d50_prof_t[5] = d50_prof_t[6] = 0;
     }
     d50_prof_t[k] = t;
@@ -64,9 +66,11 @@ static inline __attribute__((always_inline)) void d50_mark(int k)
 #define D5_SKIP(bit) ((d50_prof_skip & (bit)) != 0U)
 #endif
 
-// The effects 128 samples (4 ms) behind the voices, so that CPU0 runs them while CPU1 renders voices (d5_patch.h render_part)
+// Blocks of up to 96 samples (sf2out.c asks for 92..95), and the effects one such block (3 ms) behind the voices, so that CPU0 runs them
+// while CPU1 renders voices (d5_patch.h render_part)
 #if !FM1_BASE && !defined(D5_FX_LAG)
-#define D5_FX_LAG 128
+#define D5_MAX_BLOCK 96
+#define D5_FX_LAG 96
 #endif
 #include "d5_engine/d5_patch.h"
 #include "d5_engine/d5_patch_map.h"
@@ -345,9 +349,17 @@ extern "C" void d50_program(unsigned program)
     build_program(program);
 }
 
-extern "C" void d50_render(int32_t *out, unsigned n)
+#if FM1_BASE
+#define D50_RENDER_RAM
+#else
+#define D50_RENDER_RAM                           // (in the SRAM it took 660 bytes the heap does not have)
+#endif
+extern "C" D50_RENDER_RAM void d50_render(int32_t *out, unsigned n)
 {
     if (!ready) return;
+#if FM1_D50_PROF
+    const uint32_t render_t0 = D50_T4;
+#endif
     if (spec_done != spec_serial) {               // a new program: configure stops what sounds
         const unsigned serial = spec_serial;
         patch->configure(spec_at(serial & 1U), static_cast<float>(D50_RATE));
@@ -379,4 +391,7 @@ extern "C" void d50_render(int32_t *out, unsigned n)
         s += m;
     }
     sounding = static_cast<unsigned>(patch->voices_sounding());
+#if FM1_D50_PROF
+    d50_prof_sum[7] += D50_T4 - render_t0;
+#endif
 }

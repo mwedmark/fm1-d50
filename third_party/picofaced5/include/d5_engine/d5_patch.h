@@ -196,7 +196,11 @@ public:
     // the LFOs through the block and keeps them per sample; render_voice adds one voice's block to acc, reading those (any core, one voice
     // on one core at a time); finish_sample is the rest of next_stereo for one sample of the voices' sum. In that order they do what
     // next_stereo does sample by sample; only the sum's rounding differs, as the voices are added in another order.
-    static constexpr int kMaxBlock = 128;
+    // fm1-d50: D5_MAX_BLOCK; the FM-1 asks for 92..95 samples a block and sets 96 (less SRAM for the per-sample buffers)
+#ifndef D5_MAX_BLOCK
+#define D5_MAX_BLOCK 128
+#endif
+    static constexpr int kMaxBlock = D5_MAX_BLOCK;
     // fm1-d50: an LFO that no route of this tone listens to (depth 0 everywhere, no lever or aftertouch vibrato) cannot be heard, and
     // stepping it per sample was a share of every block. It stays at its start state, which reads as 0. The pitch route always rides LFO 1.
     void update_lfo_mask() {
@@ -218,15 +222,12 @@ public:
         if (lfo_mask_ & 4) lfo_[2].next();
     }
     void D5_HOT(begin_block)(int n) {
-        for (int t = 0; t < n; ++t) {
-            step_lfos();
-            LfoSnap& s = snap_[t];
-            s.value[0] = lfo_[0].value();
-            s.value[1] = lfo_[1].value();
-            s.value[2] = lfo_[2].value();
-            s.gate0 = lfo_[0].gate();
-            s.raw0 = lfo_[0].raw();
-        }
+        // fm1-d50: one LFO at a time through the block (Lfo::fill), the same values as step_lfos and the readers per sample
+        constexpr int kStride = static_cast<int>(sizeof(LfoSnap) / sizeof(float));
+        static_assert(sizeof(LfoSnap) == 5 * sizeof(float), "LfoSnap: five floats");
+        lfo_[0].fill(n, (lfo_mask_ & 1) != 0, &snap_[0].value[0], &snap_[0].gate0, &snap_[0].raw0, kStride);
+        lfo_[1].fill(n, (lfo_mask_ & 2) != 0, &snap_[0].value[1], nullptr, nullptr, kStride);
+        lfo_[2].fill(n, (lfo_mask_ & 4) != 0, &snap_[0].value[2], nullptr, nullptr, kStride);
     }
     D5_INL int active_voices(uint8_t* out) const {
         int n = 0;
@@ -554,7 +555,7 @@ public:
 
     // fm1-d50: n samples (up to Tone::kMaxBlock) into l and r, as n calls of next_stereo would make them, with every second sounding voice
     // on the other core. The block is cut where a delayed lower note is due, as next_stereo services it before that sample.
-    void render_block(float* l, float* r, int n, const Split* split) {
+    void D5_HOT(render_block)(float* l, float* r, int n, const Split* split) {
         const uint32_t c0 = clock_;
         int s = 0;
         while (s < n) {
@@ -598,6 +599,7 @@ private:
         D5_MARK(0);
         upper_.begin_block(n);
         lower_.begin_block(n);
+        D5_MARK(7);
         uint8_t all[24], mine[24], theirs[24];
         int count = upper_.active_voices(all);
         const int lower_count = lower_.active_voices(all + count);
@@ -654,8 +656,9 @@ private:
         D5_MARK(4);
     }
 #if D5_FX_LAG
-    static_assert(D5_FX_LAG >= Tone<16>::kMaxBlock && D5_FX_LAG <= 2 * Tone<16>::kMaxBlock, "a part's reads and writes may not overlap");
-    static constexpr int kLagRing = 4 * Tone<16>::kMaxBlock;
+    static constexpr int kLagRing = 256;    // a power of two (the index is masked), at least D5_FX_LAG + a block
+    static_assert(D5_FX_LAG >= Tone<16>::kMaxBlock && D5_FX_LAG + Tone<16>::kMaxBlock <= kLagRing && (kLagRing & (kLagRing - 1)) == 0,
+                  "a part's reads and writes may not overlap");
     float lag_[2][kLagRing]{};              // the voices' sums, upper and lower, waiting D5_FX_LAG samples for the effects
     int lag_head_ = 0;
 #endif

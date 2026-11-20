@@ -73,6 +73,7 @@ int main(int argc, char** argv)
                 ++e;
             }
             int n = sizes[k++ % (sizeof sizes / sizeof sizes[0])];
+            if (n > d5::Tone<16>::kMaxBlock) n = d5::Tone<16>::kMaxBlock;
             if (e < static_cast<int>(sizeof events / sizeof events[0]) && s + n > events[e].at) n = events[e].at - s;
             if (s + n > total) n = total - s;
             b.render_block(bl, br, n, &split);

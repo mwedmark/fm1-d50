@@ -364,7 +364,7 @@ public:
         return level();
     }
 
-    float D5_HOT_TAG(d5_env_next, next)() {
+    D5_INL float D5_HOT_TAG(d5_env_next, next)() {   // fm1-d50: inline in the partials' sample loops
         if (remaining_ > 1) {            // fm1-d50: stays in the segment; level() then is the plain clamp
             if (seg_log_) level_ *= factor_;
             else level_ += step_;
