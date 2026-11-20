@@ -308,6 +308,19 @@ public:
         shedding_[victim] = true;
         return true;
     }
+    // fm1-d50: the last resort of the FM-1's CPU guard, when no tail is left to retire and the audio would miss blocks: the same 20 ms
+    // fade on the voice held longest. Its key keeps the slot until it is lifted, as a tail's does. The original never needs it.
+    bool shed_oldest_held() {
+        int victim = -1;
+        for (int i = 0; i < kVoices; ++i) {
+            if (!active_[i] || !key_[i] || shedding_[i]) continue;
+            if (victim < 0 || age_[i] > age_[victim]) victim = i;
+        }
+        if (victim < 0) return false;
+        voices_[victim].quick_release();
+        shedding_[victim] = true;
+        return true;
+    }
 
     // Diagnostic handles for the host-side LFO sync test: the shared LFO's
     // phase and its delay/fade gate, like Voice::glide_offset_semitones().
@@ -768,6 +781,13 @@ public:
             return upper_.shed_oldest_tail() || lower_.shed_oldest_tail();
         }
         return lower_.shed_oldest_tail() || upper_.shed_oldest_tail();
+    }
+    // fm1-d50: a held voice, from the tone with more of them sounding (Tone::shed_oldest_held)
+    bool shed_held_voice() {
+        if (upper_.voices_sounding() >= lower_.voices_sounding()) {
+            return upper_.shed_oldest_held() || lower_.shed_oldest_held();
+        }
+        return lower_.shed_oldest_held() || upper_.shed_oldest_held();
     }
 
     // Panel controls that apply while the patch is playing. Anything that
