@@ -163,4 +163,23 @@ install, then FM-1_5000 runs; its USB port is then called "D-50 FM-1", so the in
 and `tools/fm1_resources.py fm1base/build/d50-res.bin --port "D-50 FM-1"` wrote the region. Fantasia, eight keys (16
 voices), 360 MHz, both cores, cmd 11: **64 % (peak 66 %)**, against fm1_open's 80 % (peak 86 %) at 320 MHz; per block
 CPU1's voices 1.55 ms, all of the render 1.70 ms, resampling 0.14 ms; silent 9 %.
+
+**Every factory patch with 16 voices (issue #13, 2026-11-20).** Sixteen keys over five octaves held for 4 s, then released,
+on each of PN-D50-00's 64 patches, the FM-1 silenced and settled between them. cmd 11 reports the missed audio blocks
+(`plat_xruns`, v11); fm1-base has no margin under 100 %: a render past its half is a dropout.
+- **At 360 MHz**, 62 patches had no missed block. Two patches did:
+  - Afterthought: 96 %, 190 missed blocks in 4 s with every voice held.
+  - Spacious Sweep: 97 %, 5 missed blocks in its release.
+  - JX Horns-Strings, PressureMe Strings and Pressure Me Lead were at 88–92 % with none.
+- **The CPU guard** used to retire only released tails, and capped only over 97 %. Now, with no tail left and over 93 %
+  or after a missed block, it fades the voice held longest (`Patch::shed_held_voice`) and caps each tone a voice under its
+  share. A new program starts uncapped.
+  - At 360 MHz: Afterthought had 1 missed block (the one that triggers the guard), then ran at 91 % with a voice less.
+  - At 360 MHz: Spacious Sweep kept 14 voices, with none missed.
+- **At 396 MHz** (`cpu_clock = 396`, JieLi's top):
+  - All 64 patches hold all their voices with no missed block and the guard idle.
+  - The heaviest: Spacious Sweep 88 % (release 90 %), Afterthought 87 %, JX Horns-Strings and Pianissimo 83 %, PressureMe Strings 81 %.
+  - Fantasia: 58 %.
+  - fm1-base raises the clock after its boot guard's choice, so two hung starts fall back to 360 MHz in safe mode, with
+    USB on to install again.
 - Bluetooth MIDI (`ble_stack = "own"`), velocity (`APP_TOUCH`).
