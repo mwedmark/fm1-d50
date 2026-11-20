@@ -313,6 +313,11 @@ static void input(void)
         } else if (k == B_OCTUP && set.octave < 2) {
             set.octave++;
             set_dirty = 1;
+        } else if (k == B_ARP) {                 /* the D-50's CHASE button: Chase Play on or off (d50.h, issue #18) */
+            uint32_t f = plat_lock(), on = !d50_chase_on();
+            d50_cc(D50_CHASE_CC, on ? 127u : 0u);
+            plat_unlock(f);
+            app_say("CHASE", on ? "ON" : "OFF");
         } else if (k == B_SAVE) {
             if (plat_store_save(OBJ_SETTINGS, &set, sizeof set) == 0) {
                 set_dirty = 0;
@@ -351,6 +356,8 @@ static void draw(void)
     } else {
         cv_text(10, 6, &FONT_B, "D-50", C_WHITE);
         cv_text(70, 10, &FONT_XS, "fm1-base", C_DIM);
+        if (d50_chase_on())
+            cv_text(180, 10, &FONT_XS, "CHASE", C_HI);
     }
     cv_blit(0, 0);
     cv_begin(240, 120, C_BLACK);
