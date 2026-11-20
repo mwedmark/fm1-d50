@@ -260,12 +260,14 @@ static void program_step(int32_t to)
 
 static void input(void)
 {
-    uint32_t keys = plat_keys(), btn = plat_buttons(), k;
+    uint32_t keys, btn = plat_buttons(), k;
     int32_t e;
+    touch_poll();                                /* the sensed keys' presses and velocities (lib/touch.h) */
+    keys = touch_keys();
     for (k = 0; k < NKEYS; k++) {                /* key 0 is F3 (MIDI 53) */
         uint32_t bit = 1u << k, n = (uint32_t)(53 + (int32_t)k + 12 * set.octave);
         if ((keys & bit) && !(ui.keys & bit))
-            note(n, 100u);
+            note(n, touch_vel(k));               /* (1..127; the top row's through the LED probe, else 100) */
         else if (!(keys & bit) && (ui.keys & bit))
             note(n, 0u);
     }
@@ -355,6 +357,7 @@ static void draw(void)
 
 void app_ui_init(void)
 {
+    touch_on(1);                                 /* velocity: the keys' readings on */
     lcd_fill(0, 0, 240, 240, C_BLACK);
     ui.redraw = 1;
 }

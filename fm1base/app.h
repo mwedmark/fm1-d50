@@ -7,6 +7,7 @@
 #define APP_NAME "D-50"
 #define APP_SPLASH_RGB RGB(40, 90, 200)
 #define APP_BLOCK 128u                   /* frames per audio block: 2.9 ms at 44.1 kHz, as the fm1_open build's */
+#define APP_TOUCH                        /* velocity from the keys (lib/touch.h; fm1.toml input_hz = 10000, as it was measured at) */
 
 /* the store: the settings (octave, program) and the panel's calibration (the platform's). The data area holds the D-50's data from
  * data_lo (fm1.toml) up to 0xDD648, so the panel's two sectors are 0xDE000 and 0xDF000; nothing may sit in 0xE0000..0xFBFFF */
