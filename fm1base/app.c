@@ -70,7 +70,13 @@ static void midi_in(void)                    /* audio interrupt: the packets tha
         case 0x80u: d50_note(d1, 0); break;
         case 0xE0u: d50_bend(d1 | d2 << 7); break;
         case 0xC0u: program_asked = (int32_t)d1; break;
-        case 0xB0u: if (d1 == 120u || d1 == 123u) d50_panic(); break;
+        case 0xB0u:
+            if (d1 == 120u || d1 == 123u)
+                d50_panic();
+            else
+                d50_cc(d1, d2);                  /* the D-50's controls: d50.h d50_cc (issue #4) */
+            break;
+        case 0xD0u: d50_pressure(d1); break;     /* channel pressure: the D-50's aftertouch */
         }
     }
 }
