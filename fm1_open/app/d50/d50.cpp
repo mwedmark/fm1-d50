@@ -151,7 +151,22 @@ d5::Patch::Split split;
 unsigned guard_hold, guard_calm;
 int guard_cap = 16;
 
-enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kQueue = 64 };
+enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kQueue = 64 };
+
+// The controllers' state, the audio interrupt's (d50_render's events): what a program change keeps (the lever, the pressure, CC7: the
+// voices' and the patch's live controls) and what it resets to the new patch's (the bender range, the portamento). Issue #4.
+struct Controls {
+    unsigned bend = 8192;                        // the last pitch bend, 0..16383
+    int bend_range = -1;                         // RPN 0's semitones, -1: the patch's (pb26)
+    unsigned rpn = 0x3FFF;                       // CC101 << 7 | CC100; 0x3FFF: none (RPN null)
+    unsigned volume = 127;                       // CC7
+    bool porta_switch = false;
+    int porta_time = 0;                          // 0..100
+    bool hold = false;                           // CC64
+    uint32_t down[4] = {0, 0, 0, 0};             // the notes whose key is down, a bit each
+    uint32_t held[4] = {0, 0, 0, 0};             // released while the pedal held them
+} ctl;
+void after_configure();                          // (below, with the other controls)
 
 alignas(8) unsigned char patch_memory[sizeof(d5::Patch)] D50_POOL;
 d5::Patch *patch;
@@ -290,6 +305,7 @@ extern "C" int d50_bind_flash(void)
     build_program(program_now);
     patch->configure(spec_at(spec_serial & 1U), static_cast<float>(D50_RATE));
     spec_done = spec_serial;
+    after_configure();
     queue_tail = queue_head;
     ready = 1;
     return 1;
@@ -308,6 +324,68 @@ extern "C" uint32_t d50_flash_bytes(void)
 extern "C" void d50_note(unsigned note, unsigned velocity) { push(kEvNote << 24 | (note & 127U) << 8 | (velocity & 127U)); }
 extern "C" void d50_bend(unsigned value) { push(kEvBend << 24 | (value & 16383U)); }
 extern "C" void d50_panic(void) { push(kEvPanic << 24); }
+extern "C" void d50_cc(unsigned cc, unsigned value) { push(kEvCc << 24 | (cc & 127U) << 8 | (value & 127U)); }
+extern "C" void d50_pressure(unsigned value) { push(kEvPressure << 24 | (value & 127U)); }
+
+namespace {
+bool bit_of(const uint32_t *set, int note) { return (set[note >> 5] >> (note & 31)) & 1U; }
+void bit_set(uint32_t *set, int note, bool on)
+{
+    if (on) set[note >> 5] |= 1U << (note & 31);
+    else set[note >> 5] &= ~(1U << (note & 31));
+}
+void apply_bend()
+{
+    const int range = ctl.bend_range >= 0 ? ctl.bend_range : spec_at(spec_done & 1U).bend_range;
+    patch->set_bend_semis((static_cast<int>(ctl.bend) - 8192) * (static_cast<float>(range) / 8192.0f));
+}
+void apply_volume() { patch->set_volume(spec_at(spec_done & 1U).volume * (static_cast<float>(ctl.volume) / 127.0f)); }
+// after configure (a new program, or the first): the new patch's own bender range and portamento; the volume, the bend and the
+// pedal's notes as they were (configure stopped what sounded, so nothing is held any more)
+void after_configure()
+{
+    const d5::PatchSpec &s = spec_at(spec_done & 1U);
+    ctl.bend_range = -1;
+    ctl.porta_switch = s.upper.voice.porta_switch;
+    ctl.porta_time = s.upper.voice.porta_time;
+    for (unsigned i = 0; i < 4; ++i) ctl.held[i] = 0;
+    apply_bend();
+    apply_volume();
+}
+void hold_release()
+{
+    for (int note = 0; note < 128; ++note)
+        if (bit_of(ctl.held, note)) patch->note_off(note);
+    for (unsigned i = 0; i < 4; ++i) ctl.held[i] = 0;
+}
+void control(unsigned cc, unsigned v)
+{
+    switch (cc) {
+    case 1: patch->set_mod_wheel(static_cast<float>(v) / 127.0f); break;
+    case 5:
+        ctl.porta_time = static_cast<int>((v * 100U + 63U) / 127U);
+        patch->set_porta(ctl.porta_switch, ctl.porta_time);
+        break;
+    case 65:
+        ctl.porta_switch = v >= 64U;
+        patch->set_porta(ctl.porta_switch, ctl.porta_time);
+        break;
+    case 7: ctl.volume = v; apply_volume(); break;
+    case 64:
+        ctl.hold = v >= 64U;
+        if (!ctl.hold) hold_release();
+        break;
+    case 101: ctl.rpn = (ctl.rpn & 127U) | v << 7; break;
+    case 100: ctl.rpn = (ctl.rpn & ~127U) | v; break;
+    case 6:
+        if (ctl.rpn == 0) {                      // RPN 0: the bender range, 0..12 semitones as the D-50's pb26
+            ctl.bend_range = v > 12U ? 12 : static_cast<int>(v);
+            apply_bend();
+        }
+        break;
+    }
+}
+}  // namespace
 extern "C" unsigned d50_programs(void) { return bank_patches ? bank_patches : 1U; }
 extern "C" unsigned d50_bank_patches(void) { return bank_patches; }
 extern "C" unsigned d50_current_program(void) { return program_now; }
@@ -367,6 +445,7 @@ extern "C" D50_RENDER_RAM void d50_render(int32_t *out, unsigned n)
         const unsigned serial = spec_serial;
         patch->configure(spec_at(serial & 1U), static_cast<float>(D50_RATE));
         spec_done = serial;
+        after_configure();
     }
     while (queue_tail != queue_head) {
         const uint32_t e = queue[queue_tail];
@@ -374,12 +453,25 @@ extern "C" D50_RENDER_RAM void d50_render(int32_t *out, unsigned n)
         switch (e >> 24) {
         case kEvNote: {
             const int note = static_cast<int>((e >> 8) & 127U), velocity = static_cast<int>(e & 127U);
-            if (velocity) patch->note_on(note, velocity / 127.0f);
-            else patch->note_off(note);
+            bit_set(ctl.down, note, velocity != 0);
+            if (velocity) {
+                bit_set(ctl.held, note, false);  // (struck again under the pedal: the new note is the one held now)
+                patch->note_on(note, velocity / 127.0f);
+            } else if (ctl.hold) {
+                bit_set(ctl.held, note, true);   // CC64: the note-off waits for the pedal
+            } else {
+                patch->note_off(note);
+            }
             break;
         }
-        case kEvBend: patch->set_bend_semis((static_cast<int>(e & 16383U) - 8192) * (2.0f / 8192.0f)); break;
-        case kEvPanic: patch->silence(); break;
+        case kEvBend: ctl.bend = e & 16383U; apply_bend(); break;
+        case kEvCc: control((e >> 8) & 127U, e & 127U); break;
+        case kEvPressure: patch->set_aftertouch(static_cast<float>(e & 127U) / 127.0f); break;
+        case kEvPanic:
+            patch->silence();
+            ctl.hold = false;
+            for (unsigned i = 0; i < 4; ++i) ctl.held[i] = ctl.down[i] = 0;
+            break;
         }
     }
     // A block at a time, every second sounding voice on the SDK's CPU1 (Patch::render_block; FM1B_SPLIT, app/cpu1_split.c)

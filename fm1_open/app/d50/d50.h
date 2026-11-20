@@ -39,8 +39,13 @@ unsigned d50_programs(void);                             /* the bank's patches *
 unsigned d50_bank_patches(void);                         /* 0 without a bank */
 unsigned d50_current_program(void);
 const char *d50_program_name(unsigned program);   /* the current program's; "" for another */
-/* MIDI pitch bend, 0..16383, 8192 = centre; +-2 semitones */
+/* MIDI pitch bend, 0..16383, 8192 = centre; over the patch's bender range (pb26, 0..12 semitones), or RPN 0's */
 void d50_bend(unsigned value);
+/* A control change, as the D-50 receives them: 1 modulation lever, 5 portamento time, 6 data entry (RPN 0: the bender range),
+ * 7 volume, 64 hold pedal, 65 portamento switch, 100/101 the RPN; the others are ignored. Issue #4. */
+void d50_cc(unsigned cc, unsigned value);
+/* Channel pressure (aftertouch), 0..127 */
+void d50_pressure(unsigned value);
 void d50_panic(void);
 /* Add n frames at D50_RATE to out (interleaved stereo, Q23, saturated). Audio interrupt. */
 void d50_render(int32_t *out, unsigned n);
