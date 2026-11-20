@@ -74,6 +74,7 @@ struct fm1b_split_times { uint32_t count, handshake_us, wait_us, job_us; };
 void fm1b_split_times(struct fm1b_split_times *t);
 extern volatile uint8_t fm1b_split_share;                  /* the share of the voices' cost for the other core, in % (0: none) */
 void fm1b_split_hold(int on);                              /* on: no splitting from now on (a flash write starts); off: it may again. Control task only; nests. */
+int fm1b_split_held(void);                                 /* 1 while a flash write holds the split */
 #else
 #define fm1b_split_hold(on) ((void)(on))
 #endif

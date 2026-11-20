@@ -42,7 +42,8 @@ $split = $DualCore -eq 'on' -or ($DualCore -eq 'auto' -and $Rate -eq 44100 -and 
 if ($SplitCheck -and !$split) { throw '-SplitCheck needs -DualCore on (or auto at -Rate 44100)' }
 if ($FlashProbe -and $split) { throw '-FlashProbe measures one core: add -DualCore off' }
 if ($FlashProbe -and $Interp4) { throw '-FlashProbe is for the linear voice loop: not with -Interp4' }
-if ($split -and !$LiveCache) { throw '-DualCore: the dual-core build is the live-cache build' }
+# fm1-d50: the D-50 build (FM1_D50_ONLY, no live cache) shares its voices between the cores too (app/d50/d50.cpp): -Rate 32000 -LiveCache:$false -DualCore on
+if ($split -and !$LiveCache -and $Rate -ne 32000) { throw '-DualCore: the dual-core build is the live-cache build (or the D-50 build at -Rate 32000)' }
 # the pool the heap allows (KB): at 44.1 kHz the heap is 2 KB smaller; the dual-core buffers take 4 KB, four-point interpolation 3, the check build's copies of the voices 18
 if (!$PSBoundParameters.ContainsKey('CacheKB')) {
     $CacheKB = ($(if ($Rate -eq 44100) { 81 } else { 84 })) - ($(if ($split) { 4 } else { 0 })) - ($(if ($Interp4) { 3 } else { 0 })) - ($(if ($SplitCheck) { 18 } else { 0 }))

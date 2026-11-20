@@ -2,15 +2,79 @@
 // The glue between the FM-1 firmware and the PicoFaceD5 engine (third_party/picofaced5, GPL-3.0-or-later, Michi71). d50.h says what each call does.
 // Built for our own use: the engine's licence has no linking exception for the FM-1's SDK (RESEARCH.md section 3).
 #include "d50.h"
+#if FM1_BASE
+// On fm1-base (fm1base/, fm1.toml data_lo): the data at the start of the data area, the second core through plat_cpu2_*, the big buffers in the
+// platform's pool. plat.h is C; the few calls are declared here.
+extern "C" {
+#include "d50_inflate.h"
+#include <string.h>
+const uint8_t *plat_res(uint32_t *len);
+int plat_cpu2_on(void);
+int plat_cpu2_run(void (*fn)(uint32_t), uint32_t arg);
+int plat_cpu2_wait(void);
+uint32_t plat_ticks24(void);
+}
+#if FM1_CPU1                                     // fm1.toml cpu2 = true
+#define FM1B_SPLIT 1
+#endif
+#define D50_POOL __attribute__((section(".pool")))
+// the data: the resource region (fm1.toml resources, app.h APP_RES_BASE), which the update loader writes from the package
+static const uint8_t *fm1_flash_map(uint32_t off, uint32_t n)
+{
+    uint32_t len;
+    const uint8_t *p = plat_res(&len);
+    return p && off <= len && n <= len - off ? p + off : nullptr;
+}
+#else
 extern "C" {
 #include "fm1_device.h"
 #include "d50_inflate.h"
+#include "fm1b.h"                                        /* FM1B_SPLIT (build_fw.ps1 -DualCore) and the other core's hand-over */
 #include <string.h>
 /* The engine library's two effect units, which sdk/Build.ps1 places between these two symbols for a D-50 build. Weak: without them, no reverb. */
 extern uint8_t fm1_fx_pool_begin[] __attribute__((weak));
 extern uint8_t fm1_fx_pool_end[] __attribute__((weak));
 }
+#define D50_POOL
+#endif
 
+// FM1_D50_PROF: where a block's time goes on the FM-1 (sf2_upload.c cmd 11 reads it, cmd 12 leaves stages out). TIMER4, 24 MHz, both cores.
+#ifndef FM1_D50_PROF
+#define FM1_D50_PROF 1                           // (fm1-base: app.c's APP_SYSEX answers the same cmd 11 and 12)
+#endif
+#if FM1_D50_PROF
+extern "C" {
+volatile uint32_t d50_prof_t[8];                 // the last time at each mark (5, 6: CPU1's job; 7: after the LFO steps)
+volatile uint32_t d50_prof_sum[9];               // 0 parts, 1 lists, 2 CPU0's voices, 3 the wait for CPU1, 4 the effects and mix, 5 CPU1's job,
+                                                 // 6 the LFO steps (part of 1), 7 all of d50_render, 8 sf2out.c's resampling
+volatile unsigned d50_prof_skip;
+}
+#define D50_T4 (*(volatile uint32_t *)0x10804U)
+static inline __attribute__((always_inline)) void d50_mark(int k)
+{
+    const uint32_t t = D50_T4;
+    if (k == 4) {
+        d50_prof_sum[0] += 1U;
+        d50_prof_sum[1] += d50_prof_t[1] - d50_prof_t[0];
+        d50_prof_sum[2] += d50_prof_t[2] - d50_prof_t[1];
+        d50_prof_sum[3] += d50_prof_t[3] - d50_prof_t[2];
+        d50_prof_sum[4] += t - d50_prof_t[3];
+        d50_prof_sum[5] += d50_prof_t[6] - d50_prof_t[5];
+        d50_prof_sum[6] += d50_prof_t[7] - d50_prof_t[0];
+        d50_prof_t[5] = d50_prof_t[6] = 0;
+    }
+    d50_prof_t[k] = t;
+}
+#define D5_MARK(k) d50_mark(k)
+#define D5_SKIP(bit) ((d50_prof_skip & (bit)) != 0U)
+#endif
+
+// Blocks of up to 96 samples (sf2out.c asks for 92..95), and the effects one such block (3 ms) behind the voices, so that CPU0 runs them
+// while CPU1 renders voices (d5_patch.h render_part)
+#if !defined(D5_FX_LAG)
+#define D5_MAX_BLOCK 96
+#define D5_FX_LAG 96
+#endif
 #include "d5_engine/d5_patch.h"
 #include "d5_engine/d5_patch_map.h"
 
@@ -19,9 +83,77 @@ inline void *operator new(decltype(sizeof 0), void *where) noexcept { return whe
 
 namespace {
 
+constexpr unsigned kBlock = static_cast<unsigned>(d5::Tone<16>::kMaxBlock);
+
+// The other core (build_fw.ps1 -DualCore: FM1B_SPLIT, app/cpu1_split.c, the SDK's own hand-over to its CPU1). begin hands CPU1 the job
+// or says no (CPU1 not up, or the SDK holding it for a flash write: the job then runs here). wait gives CPU1 up to 20 ms; if it is not done
+// by then the split is switched off for good, so that a stuck CPU1 costs one block and not every block.
+volatile bool split_on = true;
+volatile unsigned split_blocks, split_lost;
+#if FM1_BASE && FM1B_SPLIT
+d5::Patch::Split split;
+void (*split_job)(void *);
+void *split_arg;
+void split_run(uint32_t) { split_job(split_arg); }
+bool split_begin(void (*job)(void *), void *arg)
+{
+    split_job = job;
+    split_arg = arg;
+    if (!split_on || !plat_cpu2_run(&split_run, 0)) return false;   // (the platform holds it while the flash is written)
+    ++split_blocks;
+    return true;
+}
+void split_wait()
+{
+    const uint32_t t0 = plat_ticks24();
+    if (plat_cpu2_wait() < 0) {                  // given up (fm1.toml cpu2_fallback): the job was dropped, so it runs here
+        split_job(split_arg);
+        split_on = false;
+        ++split_lost;
+        return;
+    }
+    const uint32_t waited_us = (plat_ticks24() - t0) / 24U;
+    if (waited_us > 40U && split.share16 > 4) --split.share16;
+    else if (waited_us < 5U && split.share16 < 13) ++split.share16;
+}
+#elif FM1B_SPLIT && !FM1_BASE
+#define T4 (*(volatile uint32_t *)0x10804U)      /* TIMER4, 24 MHz, free running (board/device.c) */
+d5::Patch::Split split;
+bool split_begin(void (*job)(void *), void *arg)
+{
+    if (!split_on || fm1b_split_held() || !fm1b_split_begin(job, arg)) return false;   // not while the flash is written
+    ++split_blocks;
+    return true;
+}
+// CPU0 also mixes, runs the effects and resamples, so an even share of the voices leaves CPU1 idle part of the block. The share follows
+// what CPU0 waited: over 40 us, CPU1 had too much and gets a sixteenth less; under 5 us, CPU1 was done first and gets a sixteenth more.
+void split_wait()
+{
+    const uint32_t t0 = T4;
+    for (int k = 0; k < 4; ++k)
+        if (fm1b_split_wait()) {
+            const uint32_t waited_us = (T4 - t0) / 24U;
+            if (waited_us > 40U && split.share16 > 4) --split.share16;
+            else if (waited_us < 5U && split.share16 < 13) ++split.share16;
+            return;
+        }
+    split_on = false;
+    ++split_lost;
+}
+#endif
+#if !FM1B_SPLIT
+d5::Patch::Split split;
+#endif
+
+// The CPU guard (sf2out_load, after each block): over 90 % of the block on CPU0 it retires the oldest released voice (a 20 ms fade,
+// PicoFaceD5's shed_voice); with none to retire and over 97 %, a lower cap on each tone's voices (new notes past it find no slot). Under 60 %
+// for a quarter of a second the cap comes back up a voice at a time. After a step it waits 8 blocks for the fade to show.
+unsigned guard_hold, guard_calm;
+int guard_cap = 16;
+
 enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kQueue = 64 };
 
-alignas(8) unsigned char patch_memory[sizeof(d5::Patch)];
+alignas(8) unsigned char patch_memory[sizeof(d5::Patch)] D50_POOL;
 d5::Patch *patch;
 const int16_t *pcm;
 volatile unsigned ready;
@@ -30,11 +162,14 @@ volatile uint32_t queue[kQueue];
 volatile unsigned queue_head, queue_tail;        // head: written by the tasks, tail: by the interrupt
 
 // The patch bank, unpacked from the flash when it is bound: the D-50's own 448 bytes a patch, which patch_from_bytes reads.
-uint8_t bank[D50_BANK_PATCHES * D50_PATCH_BYTES];
+uint8_t bank[D50_BANK_PATCHES * D50_PATCH_BYTES] D50_POOL;
 unsigned bank_patches;                           // 0: no bank (d50_bind_flash then refuses the flash)
 
-// The program is built in the control task into one of two specs; the interrupt configures the patch from the newest one.
-d5::PatchSpec specs[2];
+// The program is built in the control task into one of two specs; the interrupt configures the patch from the newest one. Raw storage, as
+// patch_memory: a PatchSpec array has default values, which would put its 3.6 KB in the image's .data; a slot is built before it is read.
+alignas(d5::PatchSpec) unsigned char spec_memory[2][sizeof(d5::PatchSpec)];
+static_assert(__has_trivial_destructor(d5::PatchSpec), "a slot is rebuilt in place without ending the old spec");
+const d5::PatchSpec &spec_at(unsigned slot) { return *reinterpret_cast<const d5::PatchSpec *>(spec_memory[slot]); }
 char names[2][D50_NAME_CHARS + 1];
 volatile unsigned spec_serial, spec_done;        // spec_serial & 1 is the slot the newest one is in
 unsigned program_now;
@@ -48,6 +183,15 @@ uint32_t u32(const uint8_t *p) { return p[0] | static_cast<uint32_t>(p[1]) << 8 
 enum : unsigned { kFxUnit = 24416, kFxState = 24380, kFxUnits = 2 };
 bool reverb_attached;
 
+#if FM1_BASE
+// fm1-base: the lines in the pool, the same two segments as in the SDK's units
+d5::ReverbSample reverb_lines[kFxState / 2U + (kFxUnit - 4U) / 2U] D50_POOL;
+void attach_reverb()
+{
+    reverb_attached = true;
+    patch->attach_reverb(reverb_lines, static_cast<int>(kFxState / 2U), reverb_lines + kFxState / 2U, static_cast<int>((kFxUnit - 4U) / 2U));
+}
+#else
 void attach_reverb()
 {
     const uintptr_t begin = reinterpret_cast<uintptr_t>(fm1_fx_pool_begin), end = reinterpret_cast<uintptr_t>(fm1_fx_pool_end);
@@ -63,6 +207,7 @@ void attach_reverb()
     auto *seg1 = reinterpret_cast<d5::ReverbSample *>(fm1_fx_pool_begin + kFxState + 4U);
     patch->attach_reverb(seg0, static_cast<int>(kFxState / 2U), seg1, static_cast<int>((kFxUnit + kFxState - (kFxState + 4U)) / 2U));
 }
+#endif
 
 void push(uint32_t event)
 {
@@ -89,7 +234,7 @@ void build_program(unsigned program)
 {
     const unsigned slot = (spec_serial + 1U) & 1U;
     const uint8_t *p = bank + program * D50_PATCH_BYTES;
-    specs[slot] = d5::patch_from_bytes(p, pcm);
+    new (spec_memory[slot]) d5::PatchSpec(d5::patch_from_bytes(p, pcm));   // (trivially destructible: nothing to end first)
     patch_name(p, names[slot]);
     program_now = program;
     spec_serial = spec_serial + 1U;
@@ -135,9 +280,15 @@ extern "C" int d50_bind_flash(void)
     if (!bank_patches) return 0;                 // samples without a bank: nothing to play (the image has no room for built-in presets)
     if (program_now >= d50_programs()) program_now = 0;
     patch = new (patch_memory) d5::Patch();
+#if FM1B_SPLIT
+    split.begin = &split_begin;
+    split.wait = &split_wait;
+#endif
+    guard_cap = 16;
+    guard_hold = guard_calm = 0;
     attach_reverb();                             // before configure, which binds the reverb's lines
     build_program(program_now);
-    patch->configure(specs[spec_serial & 1U], static_cast<float>(D50_RATE));
+    patch->configure(spec_at(spec_serial & 1U), static_cast<float>(D50_RATE));
     spec_done = spec_serial;
     queue_tail = queue_head;
     ready = 1;
@@ -145,6 +296,15 @@ extern "C" int d50_bind_flash(void)
 }
 
 extern "C" unsigned d50_ready(void) { return ready; }
+extern "C" void d50_unbind(void) { ready = 0; }
+extern "C" uint32_t d50_flash_bytes(void)
+{
+    if (!ready) return 0;
+    const uint8_t *header = fm1_flash_map(0, D50_HEADER_BYTES);
+    if (!header) return 0;
+    const uint32_t deflated = u32(header + 12);
+    return D50_HEADER_BYTES + D50_PCM_BYTES + (header[4] >= 2U && deflated ? 4U + deflated : 0U);
+}
 extern "C" void d50_note(unsigned note, unsigned velocity) { push(kEvNote << 24 | (note & 127U) << 8 | (velocity & 127U)); }
 extern "C" void d50_bend(unsigned value) { push(kEvBend << 24 | (value & 16383U)); }
 extern "C" void d50_panic(void) { push(kEvPanic << 24); }
@@ -157,6 +317,33 @@ extern "C" const char *d50_program_name(unsigned program)
 }
 extern "C" unsigned d50_voices_sounding(void) { return sounding; }
 extern "C" unsigned d50_reverb(void) { return reverb_attached; }
+extern "C" unsigned d50_voice_limit(void) { return static_cast<unsigned>(guard_cap); }
+extern "C" unsigned d50_split_share(void) { return static_cast<unsigned>(split.share16); }
+
+extern "C" void d50_guard(unsigned percent)
+{
+    if (!ready) return;
+    if (guard_hold) { --guard_hold; return; }
+    if (percent > 90U) {
+        guard_calm = 0;
+        if (patch->shed_voice()) { guard_hold = 8; return; }
+        if (percent > 97U && guard_cap > 4) { patch->cap_voices(--guard_cap); guard_hold = 8; }
+    } else if (percent < 60U && guard_cap < 16) {
+        if (++guard_calm >= 86U) { patch->cap_voices(++guard_cap); guard_calm = 0; }
+    } else {
+        guard_calm = 0;
+    }
+}
+extern "C" unsigned d50_cores(void)
+{
+#if FM1_BASE && FM1B_SPLIT
+    return split_on && plat_cpu2_on() ? 2U : 1U;
+#elif FM1B_SPLIT && !FM1_BASE
+    return split_on && fm1b_split_up() ? 2U : 1U;
+#else
+    return 1U;
+#endif
+}
 
 extern "C" void d50_program(unsigned program)
 {
@@ -165,12 +352,20 @@ extern "C" void d50_program(unsigned program)
     build_program(program);
 }
 
-extern "C" void d50_render(int32_t *out, unsigned n)
+#if FM1_BASE
+#define D50_RENDER_RAM
+#else
+#define D50_RENDER_RAM                           // (in the SRAM it took 660 bytes the heap does not have)
+#endif
+extern "C" D50_RENDER_RAM void d50_render(int32_t *out, unsigned n)
 {
     if (!ready) return;
+#if FM1_D50_PROF
+    const uint32_t render_t0 = D50_T4;
+#endif
     if (spec_done != spec_serial) {               // a new program: configure stops what sounds
         const unsigned serial = spec_serial;
-        patch->configure(specs[serial & 1U], static_cast<float>(D50_RATE));
+        patch->configure(spec_at(serial & 1U), static_cast<float>(D50_RATE));
         spec_done = serial;
     }
     while (queue_tail != queue_head) {
@@ -187,11 +382,19 @@ extern "C" void d50_render(int32_t *out, unsigned n)
         case kEvPanic: patch->silence(); break;
         }
     }
-    for (unsigned i = 0; i < n; ++i) {
-        float l, r;
-        patch->next_stereo(l, r);
-        out[2 * i] = sat24(out[2 * i] + to_q23(l));
-        out[2 * i + 1] = sat24(out[2 * i + 1] + to_q23(r));
+    // A block at a time, every second sounding voice on the SDK's CPU1 (Patch::render_block; FM1B_SPLIT, app/cpu1_split.c)
+    static float left[kBlock], right[kBlock];
+    for (unsigned s = 0; s < n;) {
+        const unsigned m = n - s > kBlock ? kBlock : n - s;
+        patch->render_block(left, right, static_cast<int>(m), &split);
+        for (unsigned i = 0; i < m; ++i) {
+            out[2 * (s + i)] = sat24(out[2 * (s + i)] + to_q23(left[i]));
+            out[2 * (s + i) + 1] = sat24(out[2 * (s + i) + 1] + to_q23(right[i]));
+        }
+        s += m;
     }
     sounding = static_cast<unsigned>(patch->voices_sounding());
+#if FM1_D50_PROF
+    d50_prof_sum[7] += D50_T4 - render_t0;
+#endif
 }

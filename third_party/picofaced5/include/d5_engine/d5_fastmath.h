@@ -24,6 +24,8 @@
 #include <cstdint>
 #include <cstring>
 
+#include "d5_engine/d5_hot.h"
+
 // Has to be outside any namespace: pico.h declares types at file scope.
 #if defined(__has_include)
 #  if __has_include("pico.h")
@@ -32,8 +34,30 @@
 #endif
 #ifdef __not_in_flash
 #  define D5_IN_RAM __attribute__((section(".time_critical.d5_fastmath")))
+#elif defined(FM1_BASE)
+#  define D5_IN_RAM __attribute__((section(".data.d5_fastmath"), aligned(4)))   // fm1-d50 on fm1-base: initialised data, in the SRAM (const would be XIP)
+#elif defined(__GCC_PI32V2__)
+#  define D5_IN_RAM __attribute__((section(".volatile_ram.d5_fastmath"), aligned(4)))   // fm1-d50: initialised SRAM data (see d5_hot.h)
 #else
 #  define D5_IN_RAM
+#endif
+// fm1-d50: the JieLi clang does not inline a function into one in another section, so the small helpers that the RAM code (D5_HOT) calls
+// per sample stayed calls into the flash, through the XIP cache the sample blob thrashes. Forced inline there they are part of the RAM code.
+// fm1-d50 on fm1-base: the RAM code is more than a call's reach (+-4 MiB) from the XIP code, so the math the flash code also calls
+// (configure, note on) is inline everywhere instead of one copy in RAM: fm1-base has the room
+#if defined(FM1_BASE)
+#  define D5_MATH(f) __attribute__((always_inline)) f
+#else
+#  define D5_MATH(f) D5_HOT(f)
+#endif
+// fm1-d50: the bit copies as the compiler's own (a register move): fm1-base builds -fno-builtin, where std::memcpy stays a call into XIP
+#define D5_BITCOPY(d, s, n) __builtin_memcpy((d), (s), (n))
+#ifndef D5_INL
+#  if defined(__GCC_PI32V2__) || defined(FM1_BASE)
+#    define D5_INL __attribute__((always_inline))
+#  else
+#    define D5_INL
+#  endif
 #endif
 
 namespace d5 {
@@ -46,11 +70,11 @@ inline constexpr int kExpSize = 1 << kExpBits;          // 256 points per octave
 namespace detail {
 
 struct SinTable {
-    float v[kSinSize + 1];
+    float v[kSinSize + 2];   // fm1-d50: one more than the pair needs, so no index has to be clamped
     constexpr SinTable() : v{} {
         // constexpr, so the table is built at compile time and lands in flash
         // rather than costing RAM and a startup pass.
-        for (int i = 0; i <= kSinSize; ++i) {
+        for (int i = 0; i <= kSinSize + 1; ++i) {
             const double t = 6.283185307179586476925286766559 * i / kSinSize;
             // Taylor about the nearest quadrant keeps the constexpr evaluation
             // short and stays well inside float precision.
@@ -68,9 +92,9 @@ struct SinTable {
 };
 
 struct Exp2Table {
-    float v[kExpSize + 1];
+    float v[kExpSize + 2];
     constexpr Exp2Table() : v{} {
-        for (int i = 0; i <= kExpSize; ++i) {
+        for (int i = 0; i <= kExpSize + 1; ++i) {
             const double x = static_cast<double>(i) / kExpSize;
             const double t = x * 0.69314718055994530942;   // x * ln 2
             double term = 1.0, sum = 1.0;
@@ -96,46 +120,57 @@ inline const Exp2Table kExp2 D5_IN_RAM = Exp2Table{};
 }  // namespace detail
 
 // sin(2*pi*turns). Any real argument; the wrap is a floor and a subtract.
-inline float fast_sin(float turns) {
+inline float D5_MATH(fast_sin)(float turns) {
     const float f = turns - static_cast<float>(static_cast<int>(turns)) +
                     (turns < 0.0f ? 1.0f : 0.0f);
     const float x = f * kSinSize;
-    // A tiny negative argument makes f round to exactly 1.0, and then i
-    // indexes one past the last interpolation pair. The table has one spare
-    // entry so i+1 is always readable, but i itself has to stay inside it.
-    int i = static_cast<int>(x);
-    float frac = x - static_cast<float>(i);
-    if (i >= kSinSize) { i = kSinSize - 1; frac = 1.0f; }
-    if (i < 0) { i = 0; frac = 0.0f; }
+    // A tiny negative argument makes f round to exactly 1.0: then i is
+    // kSinSize, frac 0, and the table's second spare entry keeps i+1 inside
+    // it. f is never negative, so i never is.
+    const int i = static_cast<int>(x);
+    const float frac = x - static_cast<float>(i);
     const float a = detail::kSin.v[i];
     return a + (detail::kSin.v[i + 1] - a) * frac;
 }
 
-inline float fast_cos(float turns) { return fast_sin(turns + 0.25f); }
+inline float D5_MATH(fast_cos)(float turns) { return fast_sin(turns + 0.25f); }
 
 // 2^x, for x anywhere the audio path can produce it.
-inline float fast_exp2(float x) {
+inline float D5_MATH(fast_exp2)(float x) {
     if (x < -126.0f) return 0.0f;
     if (x > 127.0f) x = 127.0f;
     const int n = static_cast<int>(x) - (x < 0.0f ? 1 : 0);   // floor
     const float f = x - static_cast<float>(n);
     const float y = f * kExpSize;
-    int i = static_cast<int>(y);
-    float frac = y - static_cast<float>(i);
-    if (i >= kExpSize) { i = kExpSize - 1; frac = 1.0f; }   // f rounded to 1.0
-    if (i < 0) { i = 0; frac = 0.0f; }
+    const int i = static_cast<int>(y);          // fm1-d50: f rounded to 1.0 gives kExpSize, frac 0; the spare entry covers i+1
+    const float frac = y - static_cast<float>(i);
     const float a = detail::kExp2.v[i];
     const float m = a + (detail::kExp2.v[i + 1] - a) * frac;
     // scale by 2^n through the exponent field rather than a second table
     uint32_t bits;
-    std::memcpy(&bits, &m, sizeof bits);
+    D5_BITCOPY(&bits, &m, sizeof bits);
     const int e = static_cast<int>((bits >> 23) & 0xFF) + n;
     if (e <= 0) return 0.0f;
     if (e >= 255) return m * 1e30f;
     bits = (bits & 0x807FFFFFu) | (static_cast<uint32_t>(e) << 23);
     float out;
-    std::memcpy(&out, &bits, sizeof out);
+    D5_BITCOPY(&out, &bits, sizeof out);
     return out;
+}
+
+// log2(x) for x > 0 and normal (fm1-d50: a libm pow() per block per square partial cost the FM-1 a fifth of a core). The exponent comes
+// from the float's bits, the mantissa (folded into 0.7..1.41) through the atanh series: within 1e-7 of the true value.
+inline float D5_MATH(fast_log2)(float x) {
+    uint32_t bits;
+    D5_BITCOPY(&bits, &x, sizeof bits);
+    int e = static_cast<int>((bits >> 23) & 0xFF) - 127;
+    bits = (bits & 0x007FFFFFu) | 0x3F800000u;
+    float m;
+    D5_BITCOPY(&m, &bits, sizeof m);
+    if (m > 1.41421356f) { m *= 0.5f; ++e; }
+    const float t = (m - 1.0f) / (m + 1.0f);
+    const float t2 = t * t;
+    return static_cast<float>(e) + t * (2.88539008f + t2 * (0.96179669f + t2 * (0.57707802f + t2 * 0.41219858f)));
 }
 
 // e^-x for x >= 0, which is every use here (decays, never growth).

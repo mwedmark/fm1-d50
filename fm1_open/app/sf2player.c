@@ -793,10 +793,38 @@ static void screen_update(void)
         line_show(1, 34, line, 2, WHITE);
         d = put_text(line, "D-50  VOICES ");
         d = put_number(d, (int32_t)d50_voices_sounding(), 0);
-        d = put_text(d, "  BANK 64");
         d = put_text(d, d50_reverb() ? "  REVERB" : "  DRY");
+        d = put_text(d, d50_cores() == 2U ? "  2 CORES" : "  1 CORE");
         *d = 0;
         line_show(2, 64, line, 1, YELLOW);
+        {   /* "CPU 45% MAX 72%  OVR 0  LIMIT 16  CPU1 8": the audio interrupt's share of a block on CPU0, the blocks it overran since start, the guard's
+             * voice limit, CPU1's share of the voices in sixteenths */
+            struct fm1_audio_stats a;
+            fm1_audio_stats_read(&a);
+            d = put_cpu(line);
+            d = put_text(d, "  OVR ");
+            d = put_number(d, (int32_t)a.overruns, 0);
+            d = put_text(d, "  LIMIT ");
+            d = put_number(d, (int32_t)d50_voice_limit(), 0);
+            if (d50_cores() == 2U) {                     /* CPU1's share of the voices, in sixteenths */
+                d = put_text(d, "  CPU1 ");
+                d = put_number(d, (int32_t)d50_split_share(), 0);
+            }
+            *d = 0;
+            line_show(3, 78, line, 1, a.overruns ? ORANGE : GREY);
+        }
+#if FM1_CLOCK_SWITCH
+        {   /* "CLOCK 320 MHZ  EDIT: 360 MHZ": EDIT on this page switches the CPU clock (every start is at 320 MHz) */
+            static const char *const why[] = {"", "", "TIMER OFF", "NO READBACK", "FLASH DIFFERS", "ALU DIFFERS"};
+            const unsigned mhz = sf2clock_mhz() ? sf2clock_mhz() : 320U;
+            d = put_number(put_text(line, "CLOCK "), (int32_t)mhz, 0);
+            d = put_text(d, " MHZ");
+            if (clock_tried && clock_status) d = put_text(put_text(d, "  "), why[clock_status]);
+            else if (sf2clock_switchable()) d = put_text(d, sf2clock_raised() ? "  EDIT: 320 MHZ" : "  EDIT: 360 MHZ");
+            *d = 0;
+            line_show(4, 92, line, 1, sf2clock_raised() ? ORANGE : clock_tried && clock_status ? ORANGE : GREY);
+        }
+#endif
         upload_line();
         return;
     }
@@ -1051,6 +1079,21 @@ static int safe_start(void)
     return 0;
 }
 
+#if FM1_CLOCK_SWITCH && FM1_D50
+/* The D-50's clock switch, from EDIT on its page or from SysEx (sf2_upload.c cmd 10): toggle 1 switches 320 <-> 360 MHz (the self-tests read the
+ * D-50's data in place), 0 only asks. Returns the clock now (1: 360 MHz) plus twice sf2clock_toggle's status. */
+unsigned sf2player_d50_clock(unsigned toggle)
+{
+    if (toggle && d50_ready()) {
+        const uint32_t bytes = d50_flash_bytes();
+        clock_status = (uint8_t)sf2clock_toggle(fm1_flash_map(0, bytes), bytes);
+        clock_tried = 1;
+        if (page != PAGE_INFO) page_clear();
+    }
+    return (sf2clock_raised() ? 1U : 0U) | (unsigned)clock_status << 1;
+}
+#endif
+
 #if FM1_STATS_MIDI
 static void control_step(void)
 #else
@@ -1196,6 +1239,10 @@ void groove_screen_control(void)
         fm1_audio_stats_read(&audio_base);                    /* the audio counters are shown from this switch on */
         page_clear();
     }
+#if FM1_D50
+    if (page != PAGE_INFO && !channels && D50_ON() && (pressed & (1U << BUTTON_EDIT)))   /* EDIT on the D-50's page: 320 <-> 360 MHz (not saved) */
+        (void)sf2player_d50_clock(1);
+#endif
 #endif
     if (channels && page != PAGE_INFO && (pressed & (1U << BUTTON_EDIT))) {            /* EDIT: arm or disarm the selected row (MIDI channel 1 when armed) */
         armed ^= (uint16_t)(1U << cursor);

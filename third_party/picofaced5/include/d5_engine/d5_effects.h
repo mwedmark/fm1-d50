@@ -129,13 +129,16 @@ public:
         const float boost = (spec.low_gain_db > 0.0f ? spec.low_gain_db : 0.0f)
                           + (spec.high_gain_db > 0.0f ? spec.high_gain_db : 0.0f);
         makeup_ = std::pow(10.0f, -0.5f * boost / 20.0f);
+        // fm1-d50: both bands at 0 dB are exact identities (b == a), so the two biquads are skipped
+        flat_ = spec.low_gain_db == 0.0f && spec.high_gain_db == 0.0f;
     }
 
-    float D5_HOT(process)(float x) { return makeup_ * high_.process(low_.process(x)); }
+    float D5_HOT(process)(float x) { return flat_ ? x : makeup_ * high_.process(low_.process(x)); }
 
 private:
     float makeup_ = 1.0f;
-    static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
+    bool flat_ = false;
+    D5_INL static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
     Biquad low_{};
     Biquad high_{};
 };
@@ -185,6 +188,8 @@ public:
         spec_ = spec;
         sr_ = sr;
         phase_ = 0.0f;
+        primed_ = false;
+        stride_ = tstride_ = 0;
         inc_ = rate_hz(spec.rate) / sr;
         for (int i = 0; i < kMaxDelay; ++i) buf_[i] = 0.0f;
         write_ = 0;
@@ -195,7 +200,7 @@ public:
     void set_balance(float b) { spec_.balance = clamp01(b); }
     // Type and depth are read per sample, the rate only sets the LFO step:
     // none of them needs the delay line cleared, so a knob turn is silent.
-    void set_type(int t) { spec_.type = t < 0 ? 0 : (t > 7 ? 7 : t); }
+    void set_type(int t) { spec_.type = t < 0 ? 0 : (t > 7 ? 7 : t); primed_ = false; }   // fm1-d50: re-primes the strided delays
     void set_depth(float d) { spec_.depth = clamp01(d); }
     void set_rate(float r) {
         spec_.rate = clamp01(r);
@@ -239,26 +244,44 @@ public:
             wl = x;
             wr = x;
         } else {
-            const float swing = d * kSwingMs;
-            for (int v = 0; v < t.voices; ++v) {
-                const float ph = phase_ + static_cast<float>(v) / t.voices;   // wraps on its own
-                const float ms = t.base_ms + t.spread_ms * v;
-                // The right side sweeps 0.3 of a turn behind the left, not
-                // half: the VST's two pitch tracks correlate at -0.2 to -0.6
-                // across depths and rates, a pure counter-sweep would sit
-                // at -1 and coincide with the left twice per cycle.
-                wl += read((ms + swing * fast_sin(ph)) * 0.001f * sr_);
-                wr += read((ms + swing * fast_sin(ph + 0.3f)) * 0.001f * sr_);
+            // fm1-d50: the delays (two sines a voice) are worked out every kStride samples and interpolated in between: the
+            // sweep moves by about a tenth of a sample per sample at the fastest, so the line is within 1e-3 sample of the sine.
+            if (stride_ == 0) {
+                const float swing = d * kSwingMs;
+                const float ahead = phase_ + kStride * inc_;
+                for (int v = 0; v < t.voices; ++v) {
+                    const float ph = ahead + static_cast<float>(v) / t.voices;   // wraps on its own
+                    const float ms = t.base_ms + t.spread_ms * v;
+                    // The right side sweeps 0.3 of a turn behind the left, not
+                    // half: the VST's two pitch tracks correlate at -0.2 to -0.6
+                    // across depths and rates, a pure counter-sweep would sit
+                    // at -1 and coincide with the left twice per cycle.
+                    const float tl = (ms + swing * fast_sin(ph)) * 0.001f * sr_;
+                    const float tr = (ms + swing * fast_sin(ph + 0.3f)) * 0.001f * sr_;
+                    if (!primed_) { dl_[v] = tl; dr_[v] = tr; }
+                    sl_[v] = (tl - dl_[v]) * (1.0f / kStride);
+                    sr_step_[v] = (tr - dr_[v]) * (1.0f / kStride);
+                }
+                primed_ = true;
+                stride_ = kStride;
             }
-            wl /= static_cast<float>(t.voices);
-            wr /= static_cast<float>(t.voices);
+            --stride_;
+            for (int v = 0; v < t.voices; ++v) {
+                dl_[v] += sl_[v];
+                dr_[v] += sr_step_[v];
+                wl += read(dl_[v]);
+                wr += read(dr_[v]);
+            }
+            if (t.voices == 2) { wl *= 0.5f; wr *= 0.5f; }   // fm1-d50: voices is 1 or 2 here; no divide
         }
         if (t.tremolo) {
             // Counter-phased amplitude modulation at twice the LFO rate
             // (VST type 6: 2.65 Hz at panel rate 50 against 1.26 Hz of
             // pitch sweep on type 1), about 14 dB deep at panel depth 50.
             const float m = d * 1.6f > 1.0f ? 1.0f : d * 1.6f;
-            const float sq = fast_sin(2.0f * phase_);
+            if (tstride_ == 0) { sq_ = fast_sin(2.0f * phase_); tstride_ = kStride; }
+            --tstride_;
+            const float sq = sq_;
             wl *= 1.0f - m * 0.5f * (1.0f + sq);
             wr *= 1.0f - m * 0.5f * (1.0f - sq);
         }
@@ -277,25 +300,30 @@ public:
 
 private:
     static constexpr float kPi = 3.14159265358979323846f;
-    static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
-    static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
+    D5_INL static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+    D5_INL static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
 
-    float read(float delay_samples) const {
+    D5_INL float read(float delay_samples) const {
         if (delay_samples < 1.0f) delay_samples = 1.0f;
         if (delay_samples > kMaxDelay - 2) delay_samples = kMaxDelay - 2;
         float pos = static_cast<float>(write_) - delay_samples;
-        while (pos < 0.0f) pos += kMaxDelay;
+        if (pos < 0.0f) pos += kMaxDelay;      // fm1-d50: delay <= kMaxDelay-2, so once is enough
         // A hair below zero rounds UP to exactly kMaxDelay in float32 (the
         // ulp at 1536 is ~1.2e-4, wider than the negative numbers that
         // land here), and pos == kMaxDelay would index one slot past the
         // ring -- a single garbage sample, audible as a pop. Wrap it back.
         if (pos >= kMaxDelay) pos -= kMaxDelay;
         const int i0 = static_cast<int>(pos);
-        const int i1 = (i0 + 1) % kMaxDelay;
+        const int i1 = i0 + 1 >= kMaxDelay ? 0 : i0 + 1;
         const float f = pos - static_cast<float>(i0);
         return buf_[i0] + (buf_[i1] - buf_[i0]) * f;
     }
 
+    static constexpr int kStride = 4;
+    bool primed_ = false;
+    int stride_ = 0, tstride_ = 0;
+    float sq_ = 0.0f;
+    float dl_[2] = {0, 0}, dr_[2] = {0, 0}, sl_[2] = {0, 0}, sr_step_[2] = {0, 0};
     ChorusSpec spec_{};
     float sr_ = 32000.0f;
     float phase_ = 0.0f;
@@ -414,17 +442,17 @@ class ReverbLine {
 public:
     void bind(ReverbSample* buf, int size) { buf_ = buf; size_ = size; i_ = 0; }
     void clear() { for (int i = 0; i < size_; ++i) buf_[i] = 0; i_ = 0; }
-    float next() {
+    D5_INL float next() {
         if (++i_ >= size_) i_ = 0;
         return reverb_load(buf_[i_]);
     }
-    float at(int pos) const {
+    D5_INL float at(int pos) const {
         int j = i_ - pos;
         if (j < 0) j += size_;
         return reverb_load(buf_[j]);
     }
-    float cur() const { return reverb_load(buf_[i_]); }
-    void put(float v) { buf_[i_] = reverb_store(v); }
+    D5_INL float cur() const { return reverb_load(buf_[i_]); }
+    D5_INL void put(float v) { buf_[i_] = reverb_store(v); }
     ReverbSample* buf_ = nullptr;
     int size_ = 0;
     int i_ = 0;
@@ -434,7 +462,7 @@ public:
 class ReverbAllpass {
 public:
     void bind(ReverbSample* buf, int size) { line_.bind(buf, size); line_.clear(); }
-    float process(float in) {
+    float D5_HOT(process)(float in) {
         const float out = line_.next();
         line_.put(in - 0.5f * out);
         return out + 0.5f * line_.cur();
@@ -453,12 +481,12 @@ public:
         filt_ = filter;
         fb_ = feedback;
     }
-    void process(float in) {
+    void D5_HOT(process)(float in) {
         const float last = line_.cur();
         const float filter_in = in + fb_ * line_.next();
         line_.put(filt_ * last - filter_in);
     }
-    float out_at(int pos) const { return line_.at(pos); }
+    D5_INL float out_at(int pos) const { return line_.at(pos); }
 private:
     ReverbLine line_;
     float filt_ = 0.375f, fb_ = 0.5f;
@@ -474,12 +502,12 @@ public:
         filt_ = filter;
         amp_ = amp;
     }
-    void process(float in) {
+    void D5_HOT(process)(float in) {
         const float last = line_.cur();
         line_.next();
         line_.put(amp_ * (filt_ * last + in));
     }
-    float out_at(int pos) const { return line_.at(pos); }
+    D5_INL float out_at(int pos) const { return line_.at(pos); }
 private:
     ReverbLine line_;
     float filt_ = 0.5f, amp_ = 0.375f;
@@ -566,6 +594,12 @@ public:
             }
             boss_ = &m;
             sr_scale_ = scale;
+            // fm1-d50: the tap positions, which process() computed from floats every sample
+            tap_entr_ = static_cast<int>(m.comb_sizes[0] * scale) - 1;
+            for (int k = 0; k < 3; ++k) {
+                tap_ol_[k] = static_cast<int>(m.out_l[k] * scale) - 1;
+                tap_or_[k] = static_cast<int>(m.out_r[k] * scale) - 1;
+            }
         } else {
             // at(1) is the word just written: a 0 ms tap is the direct copy
             tap_l_ = static_cast<int>(t.tap_l_ms * 0.001f * sr) + 1;
@@ -644,15 +678,24 @@ public:
 #ifdef D5_REVERB_EXTERNAL_POOL
         if (!seg_[0]) { l = xl; r = xr; return; }   // fm1-d50: no pool attached, dry only
 #endif
+        // fm1-d50: no send for half a second and the wet part under -100 dB: the room has rung out, and only the dry part passes (with the
+        // balance's dry factor) until a send comes. The FM-1's CPU spent a tenth of its time on the reverb of silence.
+        if (send == 0.0f && idle_ >= kIdleSamples) {
+            const float bi = clamp01(spec_.balance);
+            const float dry_only = bi > 0.5f ? 2.0f * (1.0f - bi) : 1.0f;
+            l = xl * dry_only;
+            r = xr * dry_only;
+            return;
+        }
         if (mode_ < 3) {
             const BossMode& m = *boss_;
             entr_.process(x);
-            float link = entr_.out_at(static_cast<int>(m.comb_sizes[0] * sr_scale_) - 1);
+            float link = entr_.out_at(tap_entr_);
             link = ap_[0].process(link);
             link = ap_[1].process(link);
             const float early_r = link;
             link = ap_[2].process(link);
-            const float out_l1 = comb_[0].out_at(static_cast<int>(m.out_l[0] * sr_scale_) - 1);
+            const float out_l1 = comb_[0].out_at(tap_ol_[0]);
             for (int c = 0; c < 3; ++c) comb_[c].process(link);
             // Early part plus tail. Roland's D-50 VST puts most of the wet
             // energy into the first tens of milliseconds and keeps the
@@ -663,12 +706,12 @@ public:
             // -- normalized to the same steady level it rang 15-20 dB too
             // loud after every note. The early signal is the diffused
             // input: after three allpasses on the left, two on the right.
-            wl = kTailMix * (1.5f * (out_l1 + comb_[1].out_at(static_cast<int>(m.out_l[1] * sr_scale_)))
-                             + comb_[2].out_at(static_cast<int>(m.out_l[2] * sr_scale_)))
+            wl = kTailMix * (1.5f * (out_l1 + comb_[1].out_at(tap_ol_[1] + 1))
+                             + comb_[2].out_at(tap_ol_[2] + 1))
                + kEarlyMix * link;
-            wr = kTailMix * (1.5f * (comb_[0].out_at(static_cast<int>(m.out_r[0] * sr_scale_))
-                                     + comb_[1].out_at(static_cast<int>(m.out_r[1] * sr_scale_)))
-                             + comb_[2].out_at(static_cast<int>(m.out_r[2] * sr_scale_)))
+            wr = kTailMix * (1.5f * (comb_[0].out_at(tap_or_[0] + 1)
+                                     + comb_[1].out_at(tap_or_[1] + 1))
+                             + comb_[2].out_at(tap_or_[2] + 1))
                + kEarlyMix * early_r;
             // A type with an inverted right side sends the same wet to both
             // outputs (the VST's Large Room: L/R correlation -0.95); the
@@ -733,6 +776,8 @@ public:
         const float wet = b < 0.5f ? 2.0f * b : 1.0f;
         l = xl * dry + wl * wet * wet_ * g;
         r = xr * dry + pol_r_ * wr * wet * wet_ * g;
+        if (send == 0.0f && (wl < 0.0f ? -wl : wl) + (wr < 0.0f ? -wr : wr) < 1e-5f) { if (idle_ < kIdleSamples) ++idle_; }
+        else idle_ = 0;
     }
 
 private:
@@ -746,8 +791,8 @@ private:
     static constexpr float kEarlyMix = D5_REV_EARLY;
     static constexpr float kTailMix = D5_REV_TAIL;
 
-    static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
-    static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
+    D5_INL static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+    D5_INL static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
 
     ReverbSpec spec_{};
     float sr_ = 32000.0f;
@@ -779,10 +824,13 @@ private:
     ReverbComb comb_[3];
     const BossMode* boss_ = &boss_mode(1);
     ReverbLine tap_line_;
+    int tap_entr_ = 0, tap_ol_[3] = {0, 0, 0}, tap_or_[3] = {0, 0, 0};
     int tap_l_ = 0, tap_r_ = 0;
     float tap_fb_ = 0.0f;
     float echo_ = 1.0f;
     float pol_r_ = 1.0f;
+    static constexpr int kIdleSamples = 16000;   // fm1-d50: see process
+    int idle_ = 0;
 };
 #endif  // D5_NO_REVERB
 

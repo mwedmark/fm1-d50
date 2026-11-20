@@ -419,7 +419,7 @@ try {
         # native objects (the LTO plugin and C++'s weak inline functions are not tried together). The reverb's lines are 16-bit, in the SDK's effect units.
         if ($source -eq 'app/d50/d50_math.c') { $options = @($options | Where-Object { $_ -ne '-flto' }) + @('-fno-builtin') }   # it defines libm's names
         if ($source -like '*.cpp') {
-            $options = @($options | Where-Object { $_ -ne '-flto' -and $_ -ne '-O2' }) + @('-Os','-x','c++','-std=c++1z','-fno-exceptions','-fno-rtti','-fno-threadsafe-statics','-nostdinc++',
+            $options = @($options | Where-Object { $_ -ne '-flto' -and $_ -ne '-O2' }) + @('-O2','-fno-unroll-loops','-fno-vectorize','-fno-slp-vectorize','-x','c++','-std=c++1z','-fno-exceptions','-fno-rtti','-fno-threadsafe-statics','-nostdinc++',
                 '-DD5_REVERB_INT16','-DD5_REVERB_EXTERNAL_POOL','-I' + (Join-Path $root 'app/d50/cxx'), '-I' + (Join-Path $root '../third_party/picofaced5/include'), '-I' + (Join-Path $root '../roms/gen'))
         }
         $arguments = @($options) + @('-MMD','-MF',($output + '.d'),'-c',$inputFile,'-o',$output)

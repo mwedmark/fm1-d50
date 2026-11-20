@@ -15,6 +15,7 @@
 #include <cstdint>
 
 #include "d5_engine/d5_fastmath.h"
+#include "d5_engine/d5_hot.h"
 
 namespace d5 {
 
@@ -119,7 +120,7 @@ public:
 
     // The block-rate step: value from the current phase, then advance by n.
     // Returns the gated value; raw() and gate() expose the parts.
-    float next_n(int32_t n) {
+    float D5_HOT_TAG(d5_lfo_next_n, next_n)(int32_t n) {
         float v;
         // Shapes as the VST plays them, measured on all three routes at
         // rate 80 (pitch, TVA and TVF, hundreds of periods): the triangle
@@ -158,23 +159,65 @@ public:
         return v * gate();
     }
 
-    float raw() const { return raw_; }
-    float gate() const { return delay_left_ > 0.0f ? 0.0f : gate_; }
+    // fm1-d50: n samples of what the tone's begin_block keeps per sample, in one loop: step (next_n(1)), then value[t] = value(), and
+    // when gate0 / raw0 are given, gate() and raw(). With step false the LFO stands still and the values repeat. stride: in floats.
+    // The same as n calls of next() and the readers, without a call and a switch per sample.
+    void D5_HOT(fill)(int n, bool step, float* value, float* gate0, float* raw0, int stride) {
+        if (!step) {
+            const float v = value_now(), g = gate(), r = raw_;
+            for (int t = 0; t < n; ++t) {
+                value[t * stride] = v;
+                if (gate0) { gate0[t * stride] = g; raw0[t * stride] = r; }
+            }
+            return;
+        }
+        const LfoWave wave = spec_.wave;
+        float phase = phase_, delay_left = delay_left_, gate = gate_;
+        const float inc = inc_, gate_step = gate_step_;
+        bool half = half_;
+        float v = raw_;
+        for (int t = 0; t < n; ++t) {
+            switch (wave) {
+                case LfoWave::kSawtooth: v = 1.0f - 2.0f * phase; break;
+                case LfoWave::kSquare:   v = phase < 0.5f ? 1.0f : 0.0f; break;
+                case LfoWave::kRandom:   v = sample_; break;
+                case LfoWave::kTriangle:
+                default: v = phase < 0.5f ? (1.0f - 4.0f * phase) : (4.0f * phase - 3.0f); break;
+            }
+            phase += inc;
+            if (!half && phase >= 0.5f) { half = true; sample_ = next_random(); }
+            while (phase >= 1.0f) { phase -= 1.0f; half = false; sample_ = next_random(); }
+            if (delay_left > 0.0f) {
+                delay_left -= 1.0f;
+            } else if (gate < 1.0f) {
+                gate += gate_step;
+                if (gate > 1.0f) gate = 1.0f;
+            }
+            const float g = delay_left > 0.0f ? 0.0f : gate;
+            value[t * stride] = v * g;
+            if (gate0) { gate0[t * stride] = g; raw0[t * stride] = v; }
+        }
+        phase_ = phase; delay_left_ = delay_left; gate_ = gate; half_ = half; raw_ = v;
+    }
+    D5_INL float value_now() const { return raw_ * gate(); }
+
+    D5_INL float raw() const { return raw_; }
+    D5_INL float gate() const { return delay_left_ > 0.0f ? 0.0f : gate_; }
 
     // The D-50's LFOs are tone-global: the 97.66-Hz tick walks exactly one
     // phase word per LFO per tone (IC25 0x1508-0x160D), and every sounding
     // voice reads the same words from the CD40 merge area. So the tone owns
     // the LFOs and steps them once per sample...
-    float next() { return next_n(1); }
+    D5_INL float next() { return next_n(1); }
 
     // ...while a voice's block rate only READS the shared state -- calling
     // next_n() here would advance the phase once per listening voice.
-    float value() const { return raw_ * gate(); }
+    D5_INL float value() const { return raw_ * gate(); }
 
     float phase() const { return phase_; }   // diagnostic handle
 
 private:
-    float next_random() {
+    D5_INL float next_random() {
         rng_ ^= rng_ << 13;
         rng_ ^= rng_ >> 17;
         rng_ ^= rng_ << 5;
@@ -282,7 +325,7 @@ public:
     }
 
     // Pitch factor, advanced n samples at once (control rate).
-    float next_n(int32_t n) {
+    float D5_HOT_TAG(d5_penv_next_n, next_n)(int32_t n) {
         while (n > 0) {
             if (pre_ > 0) {
                 const int32_t k = pre_ < n ? pre_ : n;
@@ -326,7 +369,7 @@ public:
     }
 
 private:
-    void arm(int seg, float target) {
+    void D5_HOT_SHARED(arm)(int seg, float target) {
         seg_ = seg;
         remaining_ = static_cast<int32_t>(t_[seg] * sr_);
         if (jump_[seg]) {

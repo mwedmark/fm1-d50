@@ -58,7 +58,14 @@ FM1_DSP_CODE void sf2out_render(int32_t *out)
  * new player frames. They are kept as 16-bit samples, one array a channel, after the last RESAMPLE_HISTORY frames before
  * them; position is where output frame 0 of the next block sits in those arrays, in frames, Q24. While the player and the
  * history are silent the filter is skipped. The filter is resample_table.inc (make_resampler.js). */
+#if FM1_D50_ONLY
+/* The D-50: 64 phases and the row between neighbours interpolated (make_resampler.js --interp 64, within -65 dB of the 256-phase
+ * table), 1.5 KB in the SRAM. The 6 KB table read from the flash cost a tenth of each block: the PCM had pushed it out of the cache. */
+#define RESAMPLE_ITABLE_PLACE __attribute__((section(".volatile_ram.resample"), aligned(4)))
+#include "resample_table64.inc"
+#else
 #include "resample_table.inc"
+#endif
 enum { RESAMPLE_HISTORY = RESAMPLE_TAPS, PLAYER_FRAMES = FM1_BLOCK_FRAMES * FM1B_RATE / 44100U + 3U };
 #define RESAMPLE_STEP ((uint32_t)((((uint64_t)FM1B_RATE << 24) + 22050U) / 44100U))
 static int32_t melodic[PLAYER_FRAMES], reverb_bus[PLAYER_FRAMES], chorus_bus[PLAYER_FRAMES], stereo[PLAYER_FRAMES * 2];
@@ -79,6 +86,8 @@ FM1_DSP_CODE void sf2out_render(int32_t *out)
 #if FM1_D50_ONLY
     (void)sends; (void)sides;
     d50_render(stereo, n);                               /* the D-50 renders its own stereo mix at 32 kHz (app/d50) */
+    extern volatile uint32_t d50_prof_sum[9];            /* d50.cpp FM1_D50_PROF: [8] the conversion and resampling below */
+    const uint32_t resample_t0 = *(volatile uint32_t *)0x10804U;
     if (0)
 #elif FM1_D50
     if (d50_ready())
@@ -101,14 +110,24 @@ FM1_DSP_CODE void sf2out_render(int32_t *out)
     uint32_t at = position;
     if (silent < RESAMPLE_HISTORY + n)                   /* something to hear in what this block reads */
         for (unsigned j = 0; j < FM1_BLOCK_FRAMES; ++j, at += RESAMPLE_STEP) {
-            const int16_t *c = resample_table[(at >> 16) & (RESAMPLE_PHASES - 1U)];
             const unsigned from = (at >> 24) - (RESAMPLE_TAPS / 2 - 1);
             const int16_t *xl = left_in + from, *xr = right_in + from;
             int32_t sl = 0, sr = 0;
+#if FM1_D50_ONLY
+            const int16_t *c0 = resample_itable[(at >> 18) & (RESAMPLE_IPHASES - 1U)], *c1 = c0 + RESAMPLE_TAPS;
+            const int32_t fraction = (int32_t)((at >> 2) & 0xFFFFU);              /* between the two rows, Q16 */
+            for (unsigned k = 0; k < RESAMPLE_TAPS; ++k) {
+                const int32_t c = c0[k] + (((c1[k] - c0[k]) * fraction) >> 16);
+                sl += xl[k] * c;
+                sr += xr[k] * c;
+            }
+#else
+            const int16_t *c = resample_table[(at >> 16) & (RESAMPLE_PHASES - 1U)];
             for (unsigned k = 0; k < RESAMPLE_TAPS; ++k) {    /* Q15 samples times Q14 taps: the sum stays within 31 bits */
                 sl += xl[k] * c[k];
                 sr += xr[k] * c[k];
             }
+#endif
             out[2 * j] = sat24(out[2 * j] + (sl >> 6));
             out[2 * j + 1] = sat24(out[2 * j + 1] + (sr >> 6));
         }
@@ -119,6 +138,9 @@ FM1_DSP_CODE void sf2out_render(int32_t *out)
         left_in[i] = left_in[n + i];
         right_in[i] = right_in[n + i];
     }
+#if FM1_D50_ONLY
+    d50_prof_sum[8] += *(volatile uint32_t *)0x10804U - resample_t0;
+#endif
 }
 #endif
 
@@ -141,8 +163,10 @@ FM1_DSP_CODE void sf2out_load(uint32_t used, uint32_t block)
     if (p > load_peak)
         load_peak = p;
 #if FM1_D50
-    if (d50_ready())                                     /* the guard steers the FM1B player's voices; the D-50 has its own pool */
+    if (d50_ready()) {                                   /* the D-50 has a guard of its own (app/d50/d50.cpp) */
+        d50_guard(p);
         return;
+    }
 #endif
     if (guard_hold) {
         --guard_hold;

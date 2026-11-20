@@ -18,6 +18,15 @@
 #include "d5_engine/d5_hot.h"
 #include "d5_engine/d5_voice.h"
 
+// fm1-d50: a measurement build's hooks (d50.cpp FM1_D50_PROF): D5_MARK(k) notes the time at point k of a block, D5_SKIP(bit) leaves a stage
+// out (1 the reverb, 2 the chorus, 4 the EQ) to measure its share. Nothing without them.
+#ifndef D5_MARK
+#define D5_MARK(k) ((void)0)
+#endif
+#ifndef D5_SKIP
+#define D5_SKIP(bit) false
+#endif
+
 namespace d5 {
 
 struct ToneSpec {
@@ -42,6 +51,7 @@ public:
     void configure(const ToneSpec& spec, float sample_rate) {
         spec_ = spec;
         sr_ = sample_rate;
+        update_lfo_mask();
         eq_.configure(spec.eq, sample_rate);
         chorus_.configure(spec.chorus, sample_rate);
         // The tone's three LFOs are single shared instances -- the D-50's
@@ -60,6 +70,7 @@ public:
     // click on every one of them.
     void reconfigure(const ToneSpec& spec) {
         spec_ = spec;
+        update_lfo_mask();
         eq_.retune(spec.eq, sr_);
         chorus_.set_type(spec.chorus.type);
         chorus_.set_rate(spec.chorus.rate);
@@ -171,18 +182,77 @@ public:
         // The shared LFOs walk every sample, silent or not -- the tick
         // engine's loop at 0x1508 runs unconditionally, which is why a
         // sync-off LFO never waits for a key.
-        lfo_[0].next();
-        lfo_[1].next();
-        lfo_[2].next();
+        step_lfos();
         float sum = 0.0f;
         for (int i = 0; i < kVoices; ++i) {
             if (!active_[i]) continue;
             sum += voices_[i].next();
             if (!voices_[i].active()) active_[i] = false;
         }
-        chorus_.process(eq_.process(sum), l, r);
+        finish_sample(sum, l, r);
+    }
+
+    // fm1-d50: the same a block at a time, so that the voices can be shared between two cores (Patch::render_block). begin_block steps
+    // the LFOs through the block and keeps them per sample; render_voice adds one voice's block to acc, reading those (any core, one voice
+    // on one core at a time); finish_sample is the rest of next_stereo for one sample of the voices' sum. In that order they do what
+    // next_stereo does sample by sample; only the sum's rounding differs, as the voices are added in another order.
+    // fm1-d50: D5_MAX_BLOCK; the FM-1 asks for 92..95 samples a block and sets 96 (less SRAM for the per-sample buffers)
+#ifndef D5_MAX_BLOCK
+#define D5_MAX_BLOCK 128
+#endif
+    static constexpr int kMaxBlock = D5_MAX_BLOCK;
+    // fm1-d50: an LFO that no route of this tone listens to (depth 0 everywhere, no lever or aftertouch vibrato) cannot be heard, and
+    // stepping it per sample was a share of every block. It stays at its start state, which reads as 0. The pitch route always rides LFO 1.
+    void update_lfo_mask() {
+        const VoiceSpec& v = spec_.voice;
+        auto idx = [](const LfoRoute& r) { return r.lfo < 0 || r.lfo > 2 ? 0 : r.lfo; };
+        uint8_t m = 0;
+        for (int i = 0; i < 2; ++i) {
+            if (v.pitch_lfo[i].depth != 0.0f) m |= 1;
+            if (v.pw_lfo[i].depth != 0.0f) m |= static_cast<uint8_t>(1u << idx(v.pw_lfo[i]));
+            if (v.tvf_lfo[i].depth != 0.0f) m |= static_cast<uint8_t>(1u << idx(v.tvf_lfo[i]));
+            if (v.tva_lfo[i].depth != 0.0f) m |= static_cast<uint8_t>(1u << idx(v.tva_lfo[i]));
+        }
+        if (v.lever_amount != 0.0f || v.at_amount != 0.0f) m |= 1;
+        lfo_mask_ = m;
+    }
+    void D5_HOT(step_lfos)() {
+        if (lfo_mask_ & 1) lfo_[0].next();
+        if (lfo_mask_ & 2) lfo_[1].next();
+        if (lfo_mask_ & 4) lfo_[2].next();
+    }
+    void D5_HOT(begin_block)(int n) {
+        // fm1-d50: one LFO at a time through the block (Lfo::fill), the same values as step_lfos and the readers per sample
+        constexpr int kStride = static_cast<int>(sizeof(LfoSnap) / sizeof(float));
+        static_assert(sizeof(LfoSnap) == 5 * sizeof(float), "LfoSnap: five floats");
+        lfo_[0].fill(n, (lfo_mask_ & 1) != 0, &snap_[0].value[0], &snap_[0].gate0, &snap_[0].raw0, kStride);
+        lfo_[1].fill(n, (lfo_mask_ & 2) != 0, &snap_[0].value[1], nullptr, nullptr, kStride);
+        lfo_[2].fill(n, (lfo_mask_ & 4) != 0, &snap_[0].value[2], nullptr, nullptr, kStride);
+    }
+    D5_INL int active_voices(uint8_t* out) const {
+        int n = 0;
+        for (int i = 0; i < kVoices; ++i) {
+            if (active_[i]) out[n++] = static_cast<uint8_t>(i);
+        }
+        return n;
+    }
+    void D5_HOT(render_voice)(int i, float* acc, int n) {
+        if (!active_[i]) return;
+        if (!voices_[i].render(snap_, acc, n)) active_[i] = false;
+    }
+    // fm1-d50: a tone that has had no voice for a quarter of a second and whose EQ and chorus have rung out (under -100 dB) costs
+    // nothing until a voice sounds again: the FM-1's CPU spent a third of its time on silence. The chorus's sweep then stands still.
+    static constexpr int kQuietSamples = 8000;
+    void D5_HOT(finish_sample)(float sum, float& l, float& r) {
+        if (sum == 0.0f && quiet_ >= kQuietSamples) { l = 0.0f; r = 0.0f; return; }
+        const float e = D5_SKIP(4) ? sum : eq_.process(sum);
+        if (D5_SKIP(2)) { l = e; r = e; }
+        else chorus_.process(e, l, r);
         l *= spec_.level;
         r *= spec_.level;
+        const float a = (l < 0.0f ? -l : l) + (r < 0.0f ? -r : r);
+        if (sum == 0.0f && a < 1e-5f) { if (quiet_ < kQuietSamples) ++quiet_; }
+        else quiet_ = 0;
     }
 
     // Stop everything at once and wipe what the effects still hold. Not a
@@ -299,6 +369,9 @@ private:
     int note_[kVoices] = {};
     int age_[kVoices] = {};
     bool active_[kVoices] = {};
+    LfoSnap snap_[kMaxBlock]{};      // fm1-d50: begin_block
+    int quiet_ = 0;                  // fm1-d50: finish_sample
+    uint8_t lfo_mask_ = 7;           // fm1-d50: update_lfo_mask
 };
 
 enum class KeyMode : uint8_t { kWhole = 0, kDual = 1, kSplit = 2 };
@@ -355,16 +428,14 @@ public:
         lower_.reconfigure(spec.lower);
         if (spec.reverb.type != old_type) reverb_.configure(spec.reverb, sr_);
         else reverb_.set_balance(spec.reverb.balance);
-        if (mode_changed) {
-            upper_.set_voice_limit(spec.key_mode == KeyMode::kWhole ? 16 : 8);
-            lower_.set_voice_limit(8);
-        }
+        if (mode_changed) apply_limits();
     }
 
     // Everything quiet, and the effect lines emptied (see Tone::silence).
     void silence() {
         upper_.silence();
         lower_.silence();
+        clear_lag();
         pend_head_ = pend_count_ = 0;
         reverb_.configure(spec_.reverb, sr_);
         solo_note_[0] = solo_note_[1] = -1;
@@ -376,11 +447,31 @@ public:
         upper_.configure(spec.upper, sample_rate);
         lower_.configure(spec.lower, sample_rate);
         reverb_.configure(spec.reverb, sample_rate);
-        // The sixteen-slot pool, cut the way the key mode cuts it: whole
-        // gives all of them to the upper tone (the D-50's sixteen-note
-        // polyphony), every other mode gives eight to each (its eight).
-        upper_.set_voice_limit(spec.key_mode == KeyMode::kWhole ? 16 : 8);
-        lower_.set_voice_limit(8);
+        clear_lag();
+        apply_limits();
+    }
+    // fm1-d50: nothing of the old sound waits for the effects (D5_FX_LAG)
+    void clear_lag() {
+#if D5_FX_LAG
+        for (int i = 0; i < kLagRing; ++i) lag_[0][i] = lag_[1][i] = 0.0f;
+#endif
+    }
+
+    // fm1-d50: a cap on each tone's voices under what the key mode grants (the CPU guard in the FM-1's d50.cpp); 16: none. New notes past
+    // it find no free slot; voices already sounding are not cut.
+    void cap_voices(int cap) {
+        cap_ = cap < 1 ? 1 : cap;
+        apply_limits();
+    }
+    int voice_cap() const { return cap_; }
+
+    // The sixteen-slot pool, cut the way the key mode cuts it: whole
+    // gives all of them to the upper tone (the D-50's sixteen-note
+    // polyphony), every other mode gives eight to each (its eight).
+    void apply_limits() {
+        const int up = spec_.key_mode == KeyMode::kWhole ? 16 : 8;
+        upper_.set_voice_limit(up < cap_ ? up : cap_);
+        lower_.set_voice_limit(8 < cap_ ? 8 : cap_);
     }
 
     void note_on(int note, float velocity) {
@@ -448,6 +539,146 @@ public:
     void D5_HOT(next_stereo)(float& l, float& r) {
         ++clock_;
         if (pend_count_ != 0 && pending_[pend_head_].due == clock_) service_lower();
+        float ul, ur, ll, lr;
+        upper_.next_stereo(ul, ur);
+        lower_.next_stereo(ll, lr);
+        mix(ul, ur, ll, lr, l, r);
+    }
+
+    // fm1-d50: how a block's voices reach another core. begin hands it a job (false: the job runs on this core instead), wait returns
+    // once the job is done. Without one, or with null functions, render_block renders every voice here.
+    struct Split {
+        bool (*begin)(void (*job)(void*), void* arg) = nullptr;
+        void (*wait)() = nullptr;
+        int share16 = 8;            // the other core's share of the sounding voices, in sixteenths (the caller may steer it)
+    };
+
+    // fm1-d50: n samples (up to Tone::kMaxBlock) into l and r, as n calls of next_stereo would make them, with every second sounding voice
+    // on the other core. The block is cut where a delayed lower note is due, as next_stereo services it before that sample.
+    void D5_HOT_GATE(render_block)(float* l, float* r, int n, const Split* split) {
+        const uint32_t c0 = clock_;
+        int s = 0;
+        while (s < n) {
+            if (pend_count_ != 0 && pending_[pend_head_].due == c0 + static_cast<uint32_t>(s) + 1U) {
+                clock_ = c0 + static_cast<uint32_t>(s) + 1U;
+                service_lower();
+            }
+            int m = n - s;
+            if (pend_count_ != 0) {
+                const uint32_t d = pending_[pend_head_].due - (c0 + static_cast<uint32_t>(s) + 1U);
+                if (d >= 1U && d < static_cast<uint32_t>(m)) m = static_cast<int>(d);
+            }
+#if D5_GATED
+            D5_FAR(part_entry)(this, l + s, r + s, m, split);
+#else
+            render_part(l + s, r + s, m, split);
+#endif
+            s += m;
+        }
+        clock_ = c0 + static_cast<uint32_t>(n);
+    }
+
+private:
+    struct SplitJob {
+        Patch* patch;
+        const uint8_t* voices;      // bit 7: the lower tone
+        int count;
+        float* upper;
+        float* lower;
+        int n;
+    };
+#if D5_GATED
+    // (the RAM side of render_block's gate, d5_hot.h D5_HOT_GATE; and the other core's job, called from the platform's XIP code)
+    static void D5_HOT(part_entry)(Patch* p, float* l, float* r, int n, const Split* split) { p->render_part(l, r, n, split); }
+    static void D5_HOT(run_job)(void* arg) {
+#else
+    static void run_job(void* arg) {
+#endif
+        const SplitJob& j = *static_cast<const SplitJob*>(arg);
+        D5_MARK(5);
+        j.patch->render_voices(j.voices, j.count, j.upper, j.lower, j.n);
+        D5_MARK(6);
+    }
+    void D5_HOT(render_voices)(const uint8_t* voices, int count, float* upper, float* lower, int n) {
+        for (int k = 0; k < count; ++k) {
+            if (voices[k] & 0x80U) lower_.render_voice(voices[k] & 0x7F, lower, n);
+            else upper_.render_voice(voices[k], upper, n);
+        }
+    }
+    void D5_HOT(render_part)(float* l, float* r, int n, const Split* split) {
+        D5_MARK(0);
+        upper_.begin_block(n);
+        lower_.begin_block(n);
+        D5_MARK(7);
+        uint8_t all[24], mine[24], theirs[24];
+        int count = upper_.active_voices(all);
+        const int lower_count = lower_.active_voices(all + count);
+        for (int i = 0; i < lower_count; ++i) all[count + i] = static_cast<uint8_t>(0x80U | all[count + i]);
+        count += lower_count;
+        // share16/16 of them to the other core, spread through the list (upper and lower alike)
+        const int s16 = split ? (split->share16 < 0 ? 0 : (split->share16 > 16 ? 16 : split->share16)) : 8;
+        const int want = (count * s16 + 8) / 16;
+        int nm = 0, nt = 0;
+        for (int i = 0; i < count; ++i) {
+            if (want && (i + 1) * want / count > i * want / count) theirs[nt++] = all[i];
+            else mine[nm++] = all[i];
+        }
+        for (int t = 0; t < n; ++t) acc_[0][t] = acc_[1][t] = acc_[2][t] = acc_[3][t] = 0.0f;
+        job_ = SplitJob{this, theirs, nt, acc_[2], acc_[3], n};
+        D5_MARK(1);
+        const bool handed = nt > 0 && split && split->begin && split->wait && split->begin(&run_job, &job_);
+        if (!handed) render_voices(theirs, nt, acc_[2], acc_[3], n);
+        float uw, lw;
+        int om;
+        mix_weights(uw, lw, om);
+#if D5_FX_LAG
+        // fm1-d50: the effects run D5_FX_LAG samples behind the voices, on sums already made, so this core runs them while the other core
+        // renders its voices (before, they waited for the other core and ran after it). The output is the same, that much later.
+        for (int t = 0; t < n; ++t) {
+            const int at = (lag_head_ + t) & (kLagRing - 1);
+            float ul, ur, ll, lr;
+            upper_.finish_sample(lag_[0][at], ul, ur);
+            lower_.finish_sample(lag_[1][at], ll, lr);
+            mix_with(uw, lw, om, ul, ur, ll, lr, l[t], r[t]);
+        }
+        D5_MARK(2);
+        render_voices(mine, nm, acc_[0], acc_[1], n);
+        if (handed) split->wait();
+        D5_MARK(3);
+        for (int t = 0; t < n; ++t) {
+            const int at = (lag_head_ + D5_FX_LAG + t) & (kLagRing - 1);
+            lag_[0][at] = acc_[0][t] + acc_[2][t];
+            lag_[1][at] = acc_[1][t] + acc_[3][t];
+        }
+        lag_head_ = (lag_head_ + n) & (kLagRing - 1);
+#else
+        render_voices(mine, nm, acc_[0], acc_[1], n);
+        D5_MARK(2);
+        if (handed) split->wait();
+        D5_MARK(3);
+        for (int t = 0; t < n; ++t) {
+            float ul, ur, ll, lr;
+            upper_.finish_sample(acc_[0][t] + acc_[2][t], ul, ur);
+            lower_.finish_sample(acc_[1][t] + acc_[3][t], ll, lr);
+            mix_with(uw, lw, om, ul, ur, ll, lr, l[t], r[t]);
+        }
+#endif
+        D5_MARK(4);
+    }
+#if D5_FX_LAG
+    static constexpr int kLagRing = 256;    // a power of two (the index is masked), at least D5_FX_LAG + a block
+    static_assert(D5_FX_LAG >= Tone<16>::kMaxBlock && D5_FX_LAG + Tone<16>::kMaxBlock <= kLagRing && (kLagRing & (kLagRing - 1)) == 0,
+                  "a part's reads and writes may not overlap");
+    float lag_[2][kLagRing]{};              // the voices' sums, upper and lower, waiting D5_FX_LAG samples for the effects
+    int lag_head_ = 0;
+#endif
+    SplitJob job_{};
+    int cap_ = 16;                          // fm1-d50: cap_voices
+    float acc_[4][Tone<16>::kMaxBlock]{};   // upper and lower sums: this core's, the other's
+
+public:
+    // The tones' outputs into the patch's two outputs (the rest of next_stereo, shared with render_block).
+    D5_INL void mix_weights(float& uw_out, float& lw_out, int& om_out) const {
         // Tone balance per the firmware's mixer (bank code 0xB397): each
         // tone's factor is min(4*b, 255)/200 of its side, so the center
         // is 1.0 each and a full tilt reaches +2.1 dB on the loud side --
@@ -461,9 +692,8 @@ public:
             uw = 2.0f * b; if (uw > 1.275f) uw = 1.275f;
             lw = 2.0f * (1.0f - b); if (lw > 1.275f) lw = 1.275f;
         }
-        float ul, ur, ll, lr;
-        upper_.next_stereo(ul, ur);
-        lower_.next_stereo(ll, lr);
+        uw_out = uw;
+        lw_out = lw;
         // Output mode gains, measured on Roland's D-50 VST with one tone at
         // a time (Stereo Polysynth and Arco Strings, dry): mode 1 puts each
         // tone at HALF amplitude on both outputs, modes 2 to 4 put each tone
@@ -472,7 +702,20 @@ public:
         // mode: both outputs, mode-1 level, in every mode. The reverb send
         // is both tones at half in modes 1 and 2 (rows 80 80) and one tone
         // at full in modes 3 and 4.
-        const int om = spec_.key_mode == KeyMode::kWhole ? 0 : spec_.output_mode;
+        om_out = spec_.key_mode == KeyMode::kWhole ? 0 : spec_.output_mode;
+    }
+    void D5_HOT(mix)(float ul, float ur, float ll, float lr, float& l, float& r) {
+        float uw, lw;
+        int om;
+        mix_weights(uw, lw, om);
+        mix_with(uw, lw, om, ul, ur, ll, lr, l, r);
+    }
+    void D5_HOT(mix_with)(float uw, float lw, int om, float ul, float ur, float ll, float lr, float& l, float& r) {
+        if (D5_SKIP(1)) {
+            l = saturate((ul * uw + ll * lw) * 0.5f * spec_.volume);
+            r = saturate((ur * uw + lr * lw) * 0.5f * spec_.volume);
+            return;
+        }
         if (om == 0) {
             const float xl = 0.5f * (ul * uw + ll * lw);
             const float xr = 0.5f * (ur * uw + lr * lw);
@@ -503,7 +746,7 @@ public:
     // a converter answers that with hard clipping. This stays linear below
     // -3 dB and bends smoothly above, so loud chords lose their peaks instead
     // of tearing.
-    static float saturate(float x) {
+    D5_INL static float saturate(float x) {
         constexpr float kKnee = 0.7f;
         const float a = x < 0.0f ? -x : x;
         if (a <= kKnee) return x;
