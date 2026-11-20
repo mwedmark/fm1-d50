@@ -3,8 +3,6 @@
 // it needs. Here and not in the platform's unity build, where their static names (decode, fixed, ...) would meet the platform's.
 extern "C" {
 #include "../fm1_open/app/d50/d50_inflate.c"
-#include "../fm1_open/app/d50/d50_math.c"
-// what the platform's libc (felucca-bsp chip/libc.c) does not have and the engine calls
-float fabsf(float x) { union { float f; uint32_t u; } v; v.f = x; v.u &= 0x7FFFFFFFu; return v.f; }
+// (d50_math.c and fabsf: inline, from inc/math.h)
 }
 #include "../fm1_open/app/d50/d50.cpp"

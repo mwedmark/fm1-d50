@@ -35,7 +35,7 @@
 #ifdef __not_in_flash
 #  define D5_IN_RAM __attribute__((section(".time_critical.d5_fastmath")))
 #elif defined(FM1_BASE)
-#  define D5_IN_RAM                      // fm1-d50 on fm1-base: plain .data, which is SRAM
+#  define D5_IN_RAM __attribute__((section(".data.d5_fastmath"), aligned(4)))   // fm1-d50 on fm1-base: initialised data, in the SRAM (const would be XIP)
 #elif defined(__GCC_PI32V2__)
 #  define D5_IN_RAM __attribute__((section(".volatile_ram.d5_fastmath"), aligned(4)))   // fm1-d50: initialised SRAM data (see d5_hot.h)
 #else
@@ -43,8 +43,17 @@
 #endif
 // fm1-d50: the JieLi clang does not inline a function into one in another section, so the small helpers that the RAM code (D5_HOT) calls
 // per sample stayed calls into the flash, through the XIP cache the sample blob thrashes. Forced inline there they are part of the RAM code.
+// fm1-d50 on fm1-base: the RAM code is more than a call's reach (+-4 MiB) from the XIP code, so the math the flash code also calls
+// (configure, note on) is inline everywhere instead of one copy in RAM: fm1-base has the room
+#if defined(FM1_BASE)
+#  define D5_MATH(f) __attribute__((always_inline)) f
+#else
+#  define D5_MATH(f) D5_HOT(f)
+#endif
+// fm1-d50: the bit copies as the compiler's own (a register move): fm1-base builds -fno-builtin, where std::memcpy stays a call into XIP
+#define D5_BITCOPY(d, s, n) __builtin_memcpy((d), (s), (n))
 #ifndef D5_INL
-#  if defined(__GCC_PI32V2__) && !defined(FM1_BASE)
+#  if defined(__GCC_PI32V2__) || defined(FM1_BASE)
 #    define D5_INL __attribute__((always_inline))
 #  else
 #    define D5_INL
@@ -111,7 +120,7 @@ inline const Exp2Table kExp2 D5_IN_RAM = Exp2Table{};
 }  // namespace detail
 
 // sin(2*pi*turns). Any real argument; the wrap is a floor and a subtract.
-inline float D5_HOT(fast_sin)(float turns) {
+inline float D5_MATH(fast_sin)(float turns) {
     const float f = turns - static_cast<float>(static_cast<int>(turns)) +
                     (turns < 0.0f ? 1.0f : 0.0f);
     const float x = f * kSinSize;
@@ -124,10 +133,10 @@ inline float D5_HOT(fast_sin)(float turns) {
     return a + (detail::kSin.v[i + 1] - a) * frac;
 }
 
-inline float D5_HOT(fast_cos)(float turns) { return fast_sin(turns + 0.25f); }
+inline float D5_MATH(fast_cos)(float turns) { return fast_sin(turns + 0.25f); }
 
 // 2^x, for x anywhere the audio path can produce it.
-inline float D5_HOT(fast_exp2)(float x) {
+inline float D5_MATH(fast_exp2)(float x) {
     if (x < -126.0f) return 0.0f;
     if (x > 127.0f) x = 127.0f;
     const int n = static_cast<int>(x) - (x < 0.0f ? 1 : 0);   // floor
@@ -139,25 +148,25 @@ inline float D5_HOT(fast_exp2)(float x) {
     const float m = a + (detail::kExp2.v[i + 1] - a) * frac;
     // scale by 2^n through the exponent field rather than a second table
     uint32_t bits;
-    std::memcpy(&bits, &m, sizeof bits);
+    D5_BITCOPY(&bits, &m, sizeof bits);
     const int e = static_cast<int>((bits >> 23) & 0xFF) + n;
     if (e <= 0) return 0.0f;
     if (e >= 255) return m * 1e30f;
     bits = (bits & 0x807FFFFFu) | (static_cast<uint32_t>(e) << 23);
     float out;
-    std::memcpy(&out, &bits, sizeof out);
+    D5_BITCOPY(&out, &bits, sizeof out);
     return out;
 }
 
 // log2(x) for x > 0 and normal (fm1-d50: a libm pow() per block per square partial cost the FM-1 a fifth of a core). The exponent comes
 // from the float's bits, the mantissa (folded into 0.7..1.41) through the atanh series: within 1e-7 of the true value.
-inline float D5_HOT(fast_log2)(float x) {
+inline float D5_MATH(fast_log2)(float x) {
     uint32_t bits;
-    std::memcpy(&bits, &x, sizeof bits);
+    D5_BITCOPY(&bits, &x, sizeof bits);
     int e = static_cast<int>((bits >> 23) & 0xFF) - 127;
     bits = (bits & 0x007FFFFFu) | 0x3F800000u;
     float m;
-    std::memcpy(&m, &bits, sizeof m);
+    D5_BITCOPY(&m, &bits, sizeof m);
     if (m > 1.41421356f) { m *= 0.5f; ++e; }
     const float t = (m - 1.0f) / (m + 1.0f);
     const float t2 = t * t;

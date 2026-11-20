@@ -555,7 +555,7 @@ public:
 
     // fm1-d50: n samples (up to Tone::kMaxBlock) into l and r, as n calls of next_stereo would make them, with every second sounding voice
     // on the other core. The block is cut where a delayed lower note is due, as next_stereo services it before that sample.
-    void D5_HOT(render_block)(float* l, float* r, int n, const Split* split) {
+    void D5_HOT_GATE(render_block)(float* l, float* r, int n, const Split* split) {
         const uint32_t c0 = clock_;
         int s = 0;
         while (s < n) {
@@ -568,7 +568,11 @@ public:
                 const uint32_t d = pending_[pend_head_].due - (c0 + static_cast<uint32_t>(s) + 1U);
                 if (d >= 1U && d < static_cast<uint32_t>(m)) m = static_cast<int>(d);
             }
+#if D5_GATED
+            D5_FAR(part_entry)(this, l + s, r + s, m, split);
+#else
             render_part(l + s, r + s, m, split);
+#endif
             s += m;
         }
         clock_ = c0 + static_cast<uint32_t>(n);
@@ -583,7 +587,13 @@ private:
         float* lower;
         int n;
     };
+#if D5_GATED
+    // (the RAM side of render_block's gate, d5_hot.h D5_HOT_GATE; and the other core's job, called from the platform's XIP code)
+    static void D5_HOT(part_entry)(Patch* p, float* l, float* r, int n, const Split* split) { p->render_part(l, r, n, split); }
+    static void D5_HOT(run_job)(void* arg) {
+#else
     static void run_job(void* arg) {
+#endif
         const SplitJob& j = *static_cast<const SplitJob*>(arg);
         D5_MARK(5);
         j.patch->render_voices(j.voices, j.count, j.upper, j.lower, j.n);

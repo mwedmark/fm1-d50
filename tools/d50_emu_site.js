@@ -1,6 +1,6 @@
 // A private D-50 emulator page (fm1-emu, MIT, with the D-50 firmware), and the save file with the D-50's data that one imports into it.
 //   node tools/d50_emu_site.js [firmware.fwsc] [data.fmd5] [at]     (build_d50.ps1 runs it with the one-core build, dist/d50_emu.fwsc)
-//   at: where the data goes in the flash (default 0x7C000, fm1_open's user flash; an fm1-base build with data_lo: its data_lo)
+//   at: where the data goes in the flash (default 0x7C000, fm1_open's user flash; an fm1-base build: fm1base/build/d50-res.bin at 0x5B000)
 // Writes roms/out/emu-site/ (the page: fm1-emu's files from emu/, which start_emu.ps1 fills, a catalog with only the D-50 firmware, and a page
 // of its own) and roms/out/d50.fm1save (the firmware, and the D-50's samples and patch bank as flash sectors at the user partition, 0x7C000, as
 // make_flash_overlay.js lays them). The page holds no Roland data: the save stays on the computer and is imported with the page's "Import...",
@@ -164,7 +164,9 @@ fs.writeFileSync(path.join(site, 'index.html'), page);
 
 // ---- the save: the firmware and the D-50's data as flash sectors
 const flash = fs.readFileSync(data);
-if (flash.toString('latin1', 0, 4) !== 'FMD5') throw new Error(`${data} is not D-50 data (tools/d50_pack.js)`);
+// (or fm1-base's resource region, build/d50-res.bin: its 32-byte head, RES1, then the data)
+const fmd5At = flash.toString('latin1', 0, 4) === 'RES1' ? 32 : 0;
+if (flash.toString('latin1', fmd5At, fmd5At + 4) !== 'FMD5') throw new Error(`${data} is not D-50 data (tools/d50_pack.js) or fm1-base's resource region`);
 const sectors = [];
 for (let at = 0; at < flash.length; at += SECTOR) {
   const s = Buffer.alloc(SECTOR, 0xff);

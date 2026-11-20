@@ -8,11 +8,17 @@
 #ifndef D50_MATH_PREFIX
 #define D50_MATH_PREFIX(name) name
 #endif
+/* fm1base/inc/math.h: all of them inline (forced) on fm1-base, so the RAM code calls none of them out of RAM */
+#ifndef D50_MATH_FN
+#define D50_MATH_FN
+#define D50_MATH_HELPER static inline
+#define D50_MATH_LOCAL static
+#endif
 
-static inline float bits_float(uint32_t u) { union { uint32_t u; float f; } v; v.u = u; return v.f; }
-static inline uint32_t float_bits(float f) { union { uint32_t u; float f; } v; v.f = f; return v.u; }
+D50_MATH_HELPER float bits_float(uint32_t u) { union { uint32_t u; float f; } v; v.u = u; return v.f; }
+D50_MATH_HELPER uint32_t float_bits(float f) { union { uint32_t u; float f; } v; v.f = f; return v.u; }
 
-float D50_MATH_PREFIX(exp2f)(float x)
+D50_MATH_FN float D50_MATH_PREFIX(exp2f)(float x)
 {
     if (x != x) return x;
     if (x > 127.99f) return bits_float(0x7F800000U);
@@ -25,7 +31,7 @@ float D50_MATH_PREFIX(exp2f)(float x)
     return p * bits_float((uint32_t)(e + 127) << 23);
 }
 
-static float log2_positive(float x)
+D50_MATH_LOCAL float log2_positive(float x)
 {
     uint32_t u = float_bits(x);
     int32_t e = (int32_t)(u >> 23) - 127;
@@ -40,7 +46,7 @@ static float log2_positive(float x)
     return (float)e + ln * 1.44269504089f;
 }
 
-float D50_MATH_PREFIX(log10f)(float x)
+D50_MATH_FN float D50_MATH_PREFIX(log10f)(float x)
 {
     if (x != x || x < 0.0f) return bits_float(0x7FC00000U);
     if (x == 0.0f) return -bits_float(0x7F800000U);
@@ -48,7 +54,7 @@ float D50_MATH_PREFIX(log10f)(float x)
     return log2_positive(x) * 0.30102999566f;
 }
 
-float D50_MATH_PREFIX(powf)(float a, float b)
+D50_MATH_FN float D50_MATH_PREFIX(powf)(float a, float b)
 {
     if (b == 0.0f) return 1.0f;
     if (a == 1.0f) return 1.0f;
@@ -62,7 +68,7 @@ float D50_MATH_PREFIX(powf)(float a, float b)
     return D50_MATH_PREFIX(exp2f)(b * log2_positive(a));
 }
 
-float D50_MATH_PREFIX(sinf)(float x)
+D50_MATH_FN float D50_MATH_PREFIX(sinf)(float x)
 {
     const float two_pi = 6.28318530718f, pi = 3.14159265359f, half_pi = 1.57079632679f;
     if (x != x || x > 1e7f || x < -1e7f) return x != x ? x : 0.0f;
@@ -75,7 +81,7 @@ float D50_MATH_PREFIX(sinf)(float x)
     return r * (1.0f - r2 * (1.0f / 6 - r2 * (1.0f / 120 - r2 * (1.0f / 5040 - r2 * (1.0f / 362880 - r2 * (1.0f / 39916800))))));
 }
 
-float D50_MATH_PREFIX(cosf)(float x)
+D50_MATH_FN float D50_MATH_PREFIX(cosf)(float x)
 {
     if (x != x || x > 1e7f || x < -1e7f) return x != x ? x : 1.0f;
     const float q = x * (1.0f / 6.28318530718f);         /* reduce first: x + pi/2 would round for the larger arguments */
@@ -83,4 +89,4 @@ float D50_MATH_PREFIX(cosf)(float x)
     return D50_MATH_PREFIX(sinf)(x - k * 6.28125f - k * 0.0019353071795f + 1.57079632679f);
 }
 
-float D50_MATH_PREFIX(tanf)(float x) { return D50_MATH_PREFIX(sinf)(x) / D50_MATH_PREFIX(cosf)(x); }
+D50_MATH_FN float D50_MATH_PREFIX(tanf)(float x) { return D50_MATH_PREFIX(sinf)(x) / D50_MATH_PREFIX(cosf)(x); }

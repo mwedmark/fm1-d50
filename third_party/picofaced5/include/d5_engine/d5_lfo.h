@@ -369,7 +369,7 @@ public:
     }
 
 private:
-    void D5_HOT(arm)(int seg, float target) {
+    void D5_HOT_SHARED(arm)(int seg, float target) {
         seg_ = seg;
         remaining_ = static_cast<int32_t>(t_[seg] * sr_);
         if (jump_[seg]) {

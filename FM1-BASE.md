@@ -97,29 +97,65 @@ The app area is [0x4000, 0x5B000): 348 KB, an app slot of 352 188 B.
 
 **The app** (`fm1base/`): `app.c` (keys, OCT, SELECT / PRESET for the patch, SAVE, MIDI in with notes, bend, program change
 and all-notes-off; the screen; the 32 kHz to 44.1 kHz resampler of `sf2out.c`; the CPU guard on `plat_cpu_pct`), and
-`d50_unit.cpp`, the one C++ unit at -O2: `fm1_open/app/d50/d50.cpp` with its new `FM1_BASE` part (the data through `plat_data`,
-the patch, the bank and the reverb's lines in the pool, the second core through `plat_cpu2_run` / `plat_cpu2_wait`) and the two C
-files it needs. `fm1base/inc` has the few libc headers fm1-base lacks; `fabsf` was the only function missing at the link.
-`D5_HOT` and `D5_IN_RAM` are plain under `FM1_BASE` for now (fm1-base's RAM code may call only RAM code).
+`d50_unit.cpp`, the one C++ unit at -O2: `fm1_open/app/d50/d50.cpp` with its `FM1_BASE` part (the data through `plat_res`,
+the patch, the bank and the reverb's lines in the pool, the second core through `plat_cpu2_run` / `plat_cpu2_wait`) and
+`d50_inflate.c`. `fm1base/inc` has the few libc headers fm1-base lacks; its `math.h` makes `d50_math.c` inline (below).
+
+**The data: the resource region.** fm1-base's `resources` (`device/res.c`, after Melodee's): `fm1.toml resources =
+"../roms/out/d50_pcm.fmd5"`, `app.h` `APP_RES_BASE 0x5B000`, `APP_RES_SECTORS 131`. The build writes the region (a 32-byte
+commit record, then the 534 088 bytes) into the package and beside it (`build/d50-res.bin`, 534 120 B); the update loader
+writes it after the app, from any host that serves the package, and keeps it when it is already this build's. `plat_res`
+answers only when the region checks (magic, length, CRC-32), so a torn install reads as NO D-50 DATA, never as noise.
+The resources need `backup = true` (the transfer is the restore's), so the settings are a backup of one object.
+**The package holds Roland's data: it is for our own FM-1 and is never published** (`build/` and `roms/` stay out of git).
+
+**The engine's audio code in RAM.** fm1-base's RAM code (`.app_ram`, 32 KB with the platform's) may call only RAM code
+(`tools/ramcode.py` checks the disassembly), and RAMTEXT (0x01C00000) is more than a direct call's reach (+-4 MiB) from the
+XIP code (0x02000120 on), in both directions. So under `FM1_BASE` (`d5_hot.h`):
+
+- `D5_HOT` puts a function in `.app_ram.d5_*` (a section for each, as on fm1_open);
+- `D5_HOT_SHARED` (the envelopes' `arm`, which a note's start calls too) and the math (`fast_sin` .. `fast_log2`, `d50_math.c`'s
+  `powf`, `log10f` .. through `inc/math.h` and `cxx/cmath`) are forced inline instead: one copy in each caller;
+- `D5_HOT_GATE`: `Patch::render_block` stays in XIP and enters the RAM code through `D5_FAR` (a pointer the compiler cannot
+  see through, as `PLAT_FAR`) to `part_entry`; the other core's `run_job` is RAM code;
+- `Patch::render_part` hands the other core its job through `split_begin` / `split_wait` (XIP, once a block):
+  `fm1.toml ram_code_allow` names it;
+- the bit copies in `d5_fastmath.h` are `__builtin_memcpy` (fm1-base builds `-fno-builtin`: `std::memcpy` was a call into XIP);
+- `D5_IN_RAM` (the sine and exp2 tables) is `.data`, in the SRAM.
+
+`app.c`'s resampler loop is `PLAT_RAM_CODE` too, called through `PLAT_FAR`. The effects one block behind the voices
+(`D5_FX_LAG 96`) and blocks of 96 samples are on as on fm1_open. Without `FM1_BASE` none of this changes
+fm1_open: its build is byte for byte the size it was (448 964 B).
+
+**The time per block over USB** (`APP_SYSEX`, `app.c app_sysex`): the same frames as fm1_open's `sf2_upload.c`, so the same
+scripts read both: `F0 7D 'S' 'F' 02 0B 00 F7` answers `F0 7D S F 02 4B` and eleven 5 x 7-bit values (v0..v8 `d50_prof_sum`,
+then from zero; v9 CPU average | peak << 12 | CPU1's share << 24; v10 voices | limit << 8 | cores << 16), and
+`F0 7D S F 02 0C bits F7` leaves out 1 the reverb, 2 the chorus, 4 the EQ. The CPU figure is `plat_cpu_pct`, the peak the
+highest the main loop saw since the last ask.
 
 | | fm1_open (now) | fm1-base fork |
 | --- | --- | --- |
-| Image | 450 188 B of 453 921 (3.7 KB to spare) | 150 932 B of 352 188 (**about 200 KB to spare**) |
-| RAM | heap 119.6 KB left | .data+.bss 34 KB of 96, pool 234 KB of 336 (patch, bank, reverb lines) |
-| D-50 data | user flash at 0x7C000 | data area at 0x5B000 .. 0xDD648 |
+| Image | 448 964 B of 453 921 (4.9 KB to spare) | 163 544 B of 352 188 (**about 188 KB to spare**) |
+| RAM | heap about 2.9 KB over its floor | RAM code 22.9 KB of 32 (the engine's 17.5 KB); .data+.bss 37.7 KB of 96; pool 238 KB of 336 |
+| D-50 data | user flash at 0x7C000, installed apart (`install.html`) | the resource region 0x5B000 .. 0xDE000, in the package |
+| CPU | 320 MHz, 360 MHz with EDIT on the D-50 page | 360 MHz |
 
-**In fm1-emu** (240 MHz, Fantasia, the eight-key chord, 16 voices; `node tools/d50_emu_site.js FIRMWARE roms/out/d50_pcm.fmd5 0x5B000`
-puts the data where data_lo says): the screen shows PATCH 11, Fantasia, VOICES 16, REVERB. The firmware's own load, one core:
-**78 %** on fm1-base, **79 %** (max 83 %) on fm1_open: the same engine, and the emulator counts instructions. With the second core
-on fm1-base: **50 %**. The sound comes out (RMS 0.032, peak 0.094 in an analyser on the page's output, silence before the chord);
-about 4 dB under fm1_open's at the same MASTER, from how app.c applies MASTER. (fm1-emu's idle share does not apply: fm1-base's
-main loop never idles. The page's own panel did not draw in the browser pane; `window.__lcd` was drawn to a canvas instead.)
+**In fm1-emu** (240 MHz, Fantasia, the eight-key chord, 16 voices; `node tools/d50_emu_site.js fm1base/build/d50.fwsc
+fm1base/build/d50-res.bin 0x5B000` puts the region where the loader would): the screen shows PATCH 11, Fantasia, VOICES 16,
+REVERB, 2 CORES. The firmware's own load with both cores: **39 to 41 %** (it was 47 to 50 % with the engine in XIP; the
+emulator counts instructions, so it does not show what the XIP cache costs on an FM-1, where that was the biggest part). The
+sound comes out (RMS 0.046, peak 0.157 in an analyser on the page's output), silence before the chord and after it.
+
+**Installing it, and the way back.** The update protocol stages the loader of the package being installed (felucca-bsp
+`chip/ota.c` step 1; the SPL runs it): from fm1_open, M-VAVE's firmware stages this fork's loader, which writes the app
+[0x4000, 0x5B000) and the resource region; back to fm1_open, fm1-base stages fm1_open's package's own loader, which writes
+its whole app area. fm1_open's D-50 data at 0x7C000 is overwritten by the region, so going back means installing it again
+(`install.html` does both). If a start fails twice the FM-1 enters UBOOT, and only felucca-bsp's `fm1_rescue` (macOS: the
+stock firmware) brings it back: someone has to be at the FM-1.
 
 **Not done or not known yet:**
 
-- On an FM-1: the loader with the smaller app area, the plain XIP window from 0x5B000 (fm1-emu does not check it), the speed with
-  the engine in flash and at fm1-base's 360 MHz.
-- Getting the data there on a device: fm1-base has no installer for a 534 KB block; an app's own USB command (`APP_USB_CMD`,
-  `plat_host_read`) writing the data area with `plat_data_write` would be the way, with a page that sends the `.fmd5`.
-- Bluetooth MIDI (`ble_stack = "own"`), velocity (`APP_TOUCH`), the engine's hot code in fm1-base's RAM code.
-
+- On an FM-1: the loader with the smaller app area, the plain XIP window from 0x5B000 (fm1-emu does not check it), the
+  loader writing the 131 sectors of the region, and the load at 360 MHz with the engine in RAM.
+- Installing: fm1-base's own installer (`tools/fm1_install.py`, its installer page) or `install.html` with this package.
+- Bluetooth MIDI (`ble_stack = "own"`), velocity (`APP_TOUCH`).

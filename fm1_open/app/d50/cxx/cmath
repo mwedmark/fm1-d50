@@ -3,14 +3,20 @@
 extern "C" {
 #include <math.h>
 }
+// (fm1-base: forced inline, as its math.h's functions, so that the RAM code calls none of them: fm1base/inc/math.h)
+#if defined(FM1_BASE)
+#define D50_STD_INL inline __attribute__((always_inline))
+#else
+#define D50_STD_INL inline
+#endif
 namespace std {
-inline float pow(float a, float b) { return ::powf(a, b); }
-inline float sin(float a) { return ::sinf(a); }
-inline float cos(float a) { return ::cosf(a); }
-inline float tan(float a) { return ::tanf(a); }
-inline float log10(float a) { return ::log10f(a); }
-inline float fabs(float a) { return ::fabsf(a); }
-inline float exp(float a) { return ::expf(a); }
-inline float sqrt(float a) { return ::sqrtf(a); }
-inline float floor(float a) { return ::floorf(a); }
+D50_STD_INL float pow(float a, float b) { return ::powf(a, b); }
+D50_STD_INL float sin(float a) { return ::sinf(a); }
+D50_STD_INL float cos(float a) { return ::cosf(a); }
+D50_STD_INL float tan(float a) { return ::tanf(a); }
+D50_STD_INL float log10(float a) { return ::log10f(a); }
+D50_STD_INL float fabs(float a) { return ::fabsf(a); }
+D50_STD_INL float exp(float a) { return ::expf(a); }
+D50_STD_INL float sqrt(float a) { return ::sqrtf(a); }
+D50_STD_INL float floor(float a) { return ::floorf(a); }
 }

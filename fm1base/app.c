@@ -28,7 +28,33 @@ static unsigned silent = RS_HISTORY;
 static volatile int32_t program_asked = -1;  /* a program change from MIDI, for the main loop (building a program takes a while) */
 static volatile uint32_t midi_count;
 
-static inline int32_t sat24(int32_t v) { return v > 8388607 ? 8388607 : v < -8388608 ? -8388608 : v; }
+static inline __attribute__((always_inline)) int32_t sat24(int32_t v) { return v > 8388607 ? 8388607 : v < -8388608 ? -8388608 : v; }
+
+/* the profiling (d50.cpp FM1_D50_PROF): [8] the conversion and resampling here; plat_ticks24 (TIMER4, 24 MHz, d50.cpp's clock) */
+extern volatile uint32_t d50_prof_sum[9];
+extern volatile unsigned d50_prof_skip;
+
+/* the 32 kHz frames to n output frames at 44.1 kHz from at, MASTER (Q12) applied: from RAM (PLAT_RAM_CODE), out of the way of the XIP
+ * cache that the waves keep busy */
+static PLAT_RAM_CODE uint32_t resample(int32_t *lr, uint32_t n, uint32_t at, int32_t gain)
+{
+    uint32_t j;
+    for (j = 0; j < n; j++, at += RS_STEP) {
+        const int16_t *c = resample_table[(at >> 16) & (RESAMPLE_PHASES - 1u)];
+        const unsigned from = (at >> 24) - (RESAMPLE_TAPS / 2 - 1);
+        const int16_t *xl = left_in + from, *xr = right_in + from;
+        int32_t sl = 0, sr = 0;
+        unsigned k;
+        for (k = 0; k < RESAMPLE_TAPS; k++) {   /* Q15 samples times Q14 taps: within 31 bits */
+            sl += xl[k] * c[k];
+            sr += xr[k] * c[k];
+        }
+        /* Q23, then MASTER (Q12) without leaving 32 bits: Q18 times Q12 */
+        lr[2 * j] = ((sat24(sl >> 6) >> 5) * gain) >> 7;
+        lr[2 * j + 1] = ((sat24(sr >> 6) >> 5) * gain) >> 7;
+    }
+    return at;
+}
 
 static void midi_in(void)                    /* audio interrupt: the packets that came in */
 {
@@ -62,6 +88,7 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
     for (i = 0; i < 2u * m; i++)
         stereo[i] = 0;
     d50_render(stereo, m);
+    const uint32_t resample_t0 = plat_ticks24();
     {
         int16_t *l = left_in + RS_HISTORY, *r = right_in + RS_HISTORY;
         for (i = 0; i < m; i++) {                /* Q23 (saturated) to Q15 */
@@ -72,20 +99,7 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
     }
     at = position;
     if (silent < RS_HISTORY + m) {
-        for (j = 0; j < n; j++, at += RS_STEP) {
-            const int16_t *c = resample_table[(at >> 16) & (RESAMPLE_PHASES - 1u)];
-            const unsigned from = (at >> 24) - (RESAMPLE_TAPS / 2 - 1);
-            const int16_t *xl = left_in + from, *xr = right_in + from;
-            int32_t sl = 0, sr = 0;
-            unsigned k;
-            for (k = 0; k < RESAMPLE_TAPS; k++) {   /* Q15 samples times Q14 taps: within 31 bits */
-                sl += xl[k] * c[k];
-                sr += xr[k] * c[k];
-            }
-            /* Q23, then MASTER (Q12) without leaving 32 bits: Q18 times Q12 */
-            lr[2 * j] = ((sat24(sl >> 6) >> 5) * gain) >> 7;
-            lr[2 * j + 1] = ((sat24(sr >> 6) >> 5) * gain) >> 7;
-        }
+        at = PLAT_FAR(resample)(lr, n, at, gain);
     } else {
         for (j = 0; j < 2u * n; j++)
             lr[j] = 0;
@@ -96,10 +110,64 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         left_in[i] = left_in[m + i];
         right_in[i] = right_in[m + i];
     }
+    d50_prof_sum[8] += plat_ticks24() - resample_t0;
     d50_guard(plat_cpu_pct());                   /* the CPU guard: sheds released voices, then caps them, over 85 / 92 % */
 }
 
 void app_panic(void) { d50_panic(); }
+
+/* ------------------------------------------------------- the time per block --- */
+/* fm1_open's sf2_upload.c cmd 11 and 12, the same frames (so its pages and scripts read both):
+ *   F0 7D S F 02 0B 00 F7  ->  F0 7D S F 02 4B v0..v10 F7, each 5 x 7 bits (least significant first): v0..v8 d50_prof_sum (then from zero),
+ *                              v9 CPU average | peak << 12 | CPU1's share << 24, v10 voices | limit << 8 | cores << 16
+ *   F0 7D S F 02 0C bits F7 ->  F0 7D S F 02 4C 00 F7: leave out 1 the reverb, 2 the chorus, 4 the EQ */
+static uint32_t cpu_peak;                        /* the highest plat_cpu_pct since the last cmd 11 (app_frame) */
+int app_sysex(const uint8_t *p, uint32_t n)
+{
+    if (n != 6u || p[0] != 0x7Du || p[1] != 'S' || p[2] != 'F' || p[3] != 2u)
+        return 0;
+    if (p[4] == 11u) {
+        uint8_t r[6 + 11 * 5 + 1] = {0xF0, 0x7D, 'S', 'F', 2, 0x4B}, *d = r + 6;
+        uint32_t v[11], i, k, f = plat_lock();
+        for (i = 0; i < 9u; i++) {
+            v[i] = d50_prof_sum[i];
+            d50_prof_sum[i] = 0;
+        }
+        plat_unlock(f);
+        v[9] = plat_cpu_pct() | cpu_peak << 12 | d50_split_share() << 24;
+        v[10] = d50_voices_sounding() | d50_voice_limit() << 8 | d50_cores() << 16;
+        cpu_peak = 0;
+        for (i = 0; i < 11u; i++)
+            for (k = 0; k < 5u; k++)
+                *d++ = (uint8_t)((v[i] >> (7u * k)) & 0x7Fu);
+        *d = 0xF7;
+        (void)plat_sysex_send(r, sizeof r);
+        return 1;
+    }
+    if (p[4] == 12u) {
+        static const uint8_t ok[] = {0xF0, 0x7D, 'S', 'F', 2, 0x4C, 0, 0xF7};
+        d50_prof_skip = p[5] & 7u;
+        (void)plat_sysex_send(ok, sizeof ok);
+        return 1;
+    }
+    return 0;
+}
+
+/* -------------------------------------------------------------------- backup --- */
+/* (the resource region's transfer is the restore's, so the backup is built: the settings are all it holds) */
+static void settings_load(void);
+int app_backup_playing(void) { return d50_voices_sounding() != 0u; }
+void app_backup_flush(void)
+{
+    if (set_dirty && plat_store_save(OBJ_SETTINGS, &set, sizeof set) == 0)
+        set_dirty = 0;
+}
+void app_backup_hold(int on) { (void)on; }       /* (only SAVE saves) */
+void app_backup_restored(void)
+{
+    settings_load();
+    d50_program(set.program);
+}
 
 /* ------------------------------------------------------------------ settings --- */
 static void settings_load(void)
@@ -296,6 +364,8 @@ void app_frame(void)
     static uint32_t last_ms, last_midi;
     uint32_t now = plat_ms();
     input();
+    if (plat_cpu_pct() > cpu_peak)
+        cpu_peak = plat_cpu_pct();
     if (now - last_ms >= 250u) {                 /* the voices and the load, four times a second */
         last_ms = now;
         ui.redraw = 1;

@@ -7,6 +7,10 @@ usb_product = "D-50 FM-1"
 # the app area [0x4000, 0x5B000) and the data area from 0x5B000: the D-50's data (534 088 bytes, tools/d50_pack.js) at its start, up to
 # 0xDD648; the panel's calibration in 0xDE000..0xDFFFF, the settings at 0xFC000 (app.h APP_STORE_MAP)
 data_lo = 0x5B000
+# the D-50's data as the resource region (app.h APP_RES_BASE): in the package, written by the update loader after the app
+resources = "../roms/out/d50_pcm.fmd5"
+resources_what = "the D-50's waves and patches"
+backup = true
 words = "words.tsv"
 ble = false
 cpu2 = true
@@ -15,6 +19,9 @@ cpu2_fallback = true
 o2 = ["d50_unit.cpp"]
 o2_cflags = ["-std=c++1z", "-fno-exceptions", "-fno-rtti", "-fno-threadsafe-statics", "-nostdinc++", "-fno-unroll-loops", "-fno-vectorize",
              "-fno-slp-vectorize", "-DD5_REVERB_INT16", "-DD5_REVERB_EXTERNAL_POOL", "-DFM1_BASE=1"]
+# the engine's audio code in RAM (d5_hot.h D5_HOT); Patch::render_part hands the other core its job through the platform (d50.cpp
+# split_begin, split_wait: once a block, XIP code by design)
+ram_code_allow = ["_ZN2d55Patch11render_partEPfS1_iPKNS0_5SplitE"]
 include = ["../fm1_open/app/d50", "../fm1_open/app/d50/cxx", "../third_party/picofaced5/include", "../roms/gen"]
 device_include = ["inc"]
 vendored = ["../third_party/"]

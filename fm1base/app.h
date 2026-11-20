@@ -13,6 +13,24 @@
 enum { OBJ_SETTINGS, OBJ_PANEL, OBJ_NOBJ };
 #define APP_STORE_MAP {0xFC000u, 0xDE000u}
 
+/* the D-50's data (roms/out/d50_pcm.fmd5, 534 088 B) as the resource region (fm1.toml resources): its 32-byte head and the data in 131
+ * sectors from the data area's start, 0x5B000 .. 0xDE000. The package carries it and the update loader writes it after the app */
+#define APP_RES_BASE 0x5B000u
+#define APP_RES_SECTORS 131u
+/* the resources need the backup (the transfer is the restore's): the settings are all there is to back up */
+#define APP_BACKUP_OBJS {OBJ_SETTINGS}
+#define APP_BACKUP_MAGIC 0x30354444u            /* "DD50" */
+#define APP_BACKUP_VERSION 1u
+#define APP_BACKUP_WHAT "replaces the settings"
+int app_backup_playing(void);
+void app_backup_flush(void);
+void app_backup_hold(int on);
+void app_backup_restored(void);
+
+/* the time per block (d50.cpp FM1_D50_PROF), as fm1_open's sf2_upload.c answers it: F0 7D S F 02 0B 00 F7 and 0C bits F7 */
+#define APP_SYSEX
+int app_sysex(const uint8_t *p, uint32_t n);
+
 void app_init(void);
 void app_render(int32_t *lr, uint32_t n, uint32_t master_q12);
 void app_panic(void);

@@ -8,7 +8,7 @@
 extern "C" {
 #include "d50_inflate.h"
 #include <string.h>
-const uint8_t *plat_data(uint32_t off);
+const uint8_t *plat_res(uint32_t *len);
 int plat_cpu2_on(void);
 int plat_cpu2_run(void (*fn)(uint32_t), uint32_t arg);
 int plat_cpu2_wait(void);
@@ -18,9 +18,12 @@ uint32_t plat_ticks24(void);
 #define FM1B_SPLIT 1
 #endif
 #define D50_POOL __attribute__((section(".pool")))
+// the data: the resource region (fm1.toml resources, app.h APP_RES_BASE), which the update loader writes from the package
 static const uint8_t *fm1_flash_map(uint32_t off, uint32_t n)
 {
-    return off <= D50_FLASH_BYTES && n <= D50_FLASH_BYTES - off ? plat_data(FM1B_DATA_LO + off) : nullptr;
+    uint32_t len;
+    const uint8_t *p = plat_res(&len);
+    return p && off <= len && n <= len - off ? p + off : nullptr;
 }
 #else
 extern "C" {
@@ -37,7 +40,7 @@ extern uint8_t fm1_fx_pool_end[] __attribute__((weak));
 
 // FM1_D50_PROF: where a block's time goes on the FM-1 (sf2_upload.c cmd 11 reads it, cmd 12 leaves stages out). TIMER4, 24 MHz, both cores.
 #ifndef FM1_D50_PROF
-#define FM1_D50_PROF (!FM1_BASE)
+#define FM1_D50_PROF 1                           // (fm1-base: app.c's APP_SYSEX answers the same cmd 11 and 12)
 #endif
 #if FM1_D50_PROF
 extern "C" {
@@ -68,7 +71,7 @@ static inline __attribute__((always_inline)) void d50_mark(int k)
 
 // Blocks of up to 96 samples (sf2out.c asks for 92..95), and the effects one such block (3 ms) behind the voices, so that CPU0 runs them
 // while CPU1 renders voices (d5_patch.h render_part)
-#if !FM1_BASE && !defined(D5_FX_LAG)
+#if !defined(D5_FX_LAG)
 #define D5_MAX_BLOCK 96
 #define D5_FX_LAG 96
 #endif

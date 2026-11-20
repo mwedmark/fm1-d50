@@ -389,7 +389,7 @@ public:
     }
 
 private:
-    void D5_HOT(arm)(int seg, float target) {
+    void D5_HOT_SHARED(arm)(int seg, float target) {
         seg_ = seg;
         remaining_ = static_cast<int32_t>(spec_.t[seg] * sr_);
         // Rate semantics OUTRANK the stored duration: a rate-constant
