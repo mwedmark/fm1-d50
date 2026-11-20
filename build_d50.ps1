@@ -11,9 +11,9 @@ $root = $PSScriptRoot
 Push-Location $root
 try {
     if (!(Test-Path $Data)) { throw "No D-50 data at $Data (tools\d50_pack.js makes it)" }
-    .\build_fw.ps1 -Name d50 -Rate 32000 -LiveCache:$false -DualCore on -Toolchain $Toolchain
+    .\build_fw.ps1 -Name d50 -Rate 32000 -LiveCache:$false -DualCore on -ClockSwitch -Toolchain $Toolchain
     Copy-Item fm1_open\build\dx7\build-identity.json dist\d50.identity.json -Force   # the install page's manifest needs the FM-1 build's id
-    .\build_fw.ps1 -Name d50_emu -Rate 32000 -LiveCache:$false -DualCore off -Toolchain $Toolchain
+    .\build_fw.ps1 -Name d50_emu -Rate 32000 -LiveCache:$false -DualCore off -ClockSwitch -Toolchain $Toolchain
     node make_install.js $Data --fwsc=dist\d50.fwsc --identity=dist\d50.identity.json
     if ($LASTEXITCODE) { throw 'make_install.js failed' }
     node tools\d50_emu_site.js dist\d50_emu.fwsc $Data

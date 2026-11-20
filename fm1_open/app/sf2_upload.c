@@ -36,6 +36,8 @@
  *   cmd 5 song data:  as cmd 2.     cmd 6 song end: CRC-32, as cmd 3; the song is checked and is ready for PLAY.
  *   cmd 7 play (from the start), cmd 8 stop: F0 7D S F 02 cmd 00 F7.
  *   status 2 also: too big (FM1_MIDIPLAY_MAX_BYTES); 4 also: not a song; 6 no RAM for it.
+ * With FM1_CLOCK_SWITCH in a D-50 build: cmd 10 clock: F0 7D S F 02 0A t F7, t 1 switches 320 <-> 360 MHz as EDIT on the D-50's page does, t 0 only asks;
+ *   status: bit 0 set at 360 MHz, bits 1..3 sf2clock_toggle's result (sf2clock.h).
  * The callback only copies the frame (no flash access from it); the control task does the work in sf2_upload_poll(). */
 enum { UPLOAD_FRAME = 640, UPLOAD_CHUNK = 448 };
 static struct { uint8_t bytes[UPLOAD_FRAME], source; volatile unsigned length; } upload_in;
@@ -183,6 +185,12 @@ void sf2_upload_poll(void)
                 status = 1;
         }
     }
+#if FM1_CLOCK_SWITCH && FM1_D50 && !defined(FM1_HOST_TEST)
+    else if (cmd == 10 && n == 8) {                              /* F0 7D S F 02 0A toggle F7: the D-50's 320 <-> 360 MHz (sf2player_d50_clock) */
+        unsigned sf2player_d50_clock(unsigned toggle);
+        status = sf2player_d50_clock(m[6] & 1U);
+    }
+#endif
 #if SONG_UPLOAD
     else if (cmd == 4 && n == 12)
         status = song_begin(read35(m + 6));
