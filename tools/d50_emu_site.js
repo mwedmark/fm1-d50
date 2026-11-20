@@ -1,5 +1,6 @@
 // A private D-50 emulator page (fm1-emu, MIT, with the D-50 firmware), and the save file with the D-50's data that one imports into it.
-//   node tools/d50_emu_site.js [firmware.fwsc] [data.fmd5]          (build_d50.ps1 runs it with the one-core build, dist/d50_emu.fwsc)
+//   node tools/d50_emu_site.js [firmware.fwsc] [data.fmd5] [at]     (build_d50.ps1 runs it with the one-core build, dist/d50_emu.fwsc)
+//   at: where the data goes in the flash (default 0x7C000, fm1_open's user flash; an fm1-base build with data_lo: its data_lo)
 // Writes roms/out/emu-site/ (the page: fm1-emu's files from emu/, which start_emu.ps1 fills, a catalog with only the D-50 firmware, and a page
 // of its own) and roms/out/d50.fm1save (the firmware, and the D-50's samples and patch bank as flash sectors at the user partition, 0x7C000, as
 // make_flash_overlay.js lays them). The page holds no Roland data: the save stays on the computer and is imported with the page's "Import...",
@@ -15,7 +16,7 @@ const fwsc = process.argv[2] || [path.join(root, 'dist/d50_emu.fwsc'), path.join
 const data = process.argv[3] || path.join(root, 'roms/out/d50_pcm.fmd5');
 const emu = path.join(root, 'emu');
 const site = path.join(root, 'roms/out/emu-site');
-const SECTOR = 4096, USER = 0x7C000;
+const SECTOR = 4096, USER = process.argv[4] ? Number(process.argv[4]) : 0x7C000;
 
 const pkg = fs.readFileSync(fwsc);
 const hash = crypto.createHash('sha256').update(pkg).digest('hex');

@@ -32,6 +32,8 @@
 #endif
 #ifdef __not_in_flash
 #  define D5_IN_RAM __attribute__((section(".time_critical.d5_fastmath")))
+#elif defined(FM1_BASE)
+#  define D5_IN_RAM                      // fm1-d50 on fm1-base: plain .data, which is SRAM
 #elif defined(__GCC_PI32V2__)
 #  define D5_IN_RAM __attribute__((section(".volatile_ram.d5_fastmath"), aligned(4)))   // fm1-d50: initialised SRAM data (see d5_hot.h)
 #else

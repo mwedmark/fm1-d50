@@ -20,6 +20,10 @@
 // the linker rejects mixing a template's comdat with a plain function there.
 // Functions that share a name across classes take a unique tag instead.
 #  define D5_HOT_TAG(tag, f) __attribute__((section(".time_critical." #tag))) f
+#elif defined(FM1_BASE)
+// fm1-d50 on fm1-base: its RAM code (.app_ram, plat.h PLAT_RAM_CODE) may call only RAM code (tools/ramcode.py); in the flash for now
+#  define D5_HOT(f) f
+#  define D5_HOT_TAG(tag, f) f
 #elif defined(__GCC_PI32V2__)
 // fm1-d50: the FM-1's JieLi toolchain (sdk/Build.ps1 defines __GCC_PI32V2__) has no pico.h, so until now none of this was in RAM: the engine ran
 // from flash through the XIP cache that the 512 KB sample blob also uses. The SDK's own audio code lives in .volatile_ram_code (app/synth/engine.h's

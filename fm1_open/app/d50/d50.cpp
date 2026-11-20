@@ -2,6 +2,27 @@
 // The glue between the FM-1 firmware and the PicoFaceD5 engine (third_party/picofaced5, GPL-3.0-or-later, Michi71). d50.h says what each call does.
 // Built for our own use: the engine's licence has no linking exception for the FM-1's SDK (RESEARCH.md section 3).
 #include "d50.h"
+#if FM1_BASE
+// On fm1-base (fm1base/, fm1.toml data_lo): the data at the start of the data area, the second core through plat_cpu2_*, the big buffers in the
+// platform's pool. plat.h is C; the few calls are declared here.
+extern "C" {
+#include "d50_inflate.h"
+#include <string.h>
+const uint8_t *plat_data(uint32_t off);
+int plat_cpu2_on(void);
+int plat_cpu2_run(void (*fn)(uint32_t), uint32_t arg);
+int plat_cpu2_wait(void);
+uint32_t plat_ticks24(void);
+}
+#if FM1_CPU1                                     // fm1.toml cpu2 = true
+#define FM1B_SPLIT 1
+#endif
+#define D50_POOL __attribute__((section(".pool")))
+static const uint8_t *fm1_flash_map(uint32_t off, uint32_t n)
+{
+    return off <= D50_FLASH_BYTES && n <= D50_FLASH_BYTES - off ? plat_data(FM1B_DATA_LO + off) : nullptr;
+}
+#else
 extern "C" {
 #include "fm1_device.h"
 #include "d50_inflate.h"
@@ -11,6 +32,8 @@ extern "C" {
 extern uint8_t fm1_fx_pool_begin[] __attribute__((weak));
 extern uint8_t fm1_fx_pool_end[] __attribute__((weak));
 }
+#define D50_POOL
+#endif
 
 #include "d5_engine/d5_patch.h"
 #include "d5_engine/d5_patch_map.h"
@@ -27,7 +50,33 @@ constexpr unsigned kBlock = static_cast<unsigned>(d5::Tone<16>::kMaxBlock);
 // by then the split is switched off for good, so that a stuck CPU1 costs one block and not every block.
 volatile bool split_on = true;
 volatile unsigned split_blocks, split_lost;
-#if FM1B_SPLIT
+#if FM1_BASE && FM1B_SPLIT
+d5::Patch::Split split;
+void (*split_job)(void *);
+void *split_arg;
+void split_run(uint32_t) { split_job(split_arg); }
+bool split_begin(void (*job)(void *), void *arg)
+{
+    split_job = job;
+    split_arg = arg;
+    if (!split_on || !plat_cpu2_run(&split_run, 0)) return false;   // (the platform holds it while the flash is written)
+    ++split_blocks;
+    return true;
+}
+void split_wait()
+{
+    const uint32_t t0 = plat_ticks24();
+    if (plat_cpu2_wait() < 0) {                  // given up (fm1.toml cpu2_fallback): the job was dropped, so it runs here
+        split_job(split_arg);
+        split_on = false;
+        ++split_lost;
+        return;
+    }
+    const uint32_t waited_us = (plat_ticks24() - t0) / 24U;
+    if (waited_us > 40U && split.share16 > 4) --split.share16;
+    else if (waited_us < 5U && split.share16 < 13) ++split.share16;
+}
+#elif FM1B_SPLIT && !FM1_BASE
 #define T4 (*(volatile uint32_t *)0x10804U)      /* TIMER4, 24 MHz, free running (board/device.c) */
 d5::Patch::Split split;
 bool split_begin(void (*job)(void *), void *arg)
@@ -51,7 +100,8 @@ void split_wait()
     split_on = false;
     ++split_lost;
 }
-#else
+#endif
+#if !FM1B_SPLIT
 d5::Patch::Split split;
 #endif
 
@@ -63,7 +113,7 @@ int guard_cap = 16;
 
 enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kQueue = 64 };
 
-alignas(8) unsigned char patch_memory[sizeof(d5::Patch)];
+alignas(8) unsigned char patch_memory[sizeof(d5::Patch)] D50_POOL;
 d5::Patch *patch;
 const int16_t *pcm;
 volatile unsigned ready;
@@ -72,7 +122,7 @@ volatile uint32_t queue[kQueue];
 volatile unsigned queue_head, queue_tail;        // head: written by the tasks, tail: by the interrupt
 
 // The patch bank, unpacked from the flash when it is bound: the D-50's own 448 bytes a patch, which patch_from_bytes reads.
-uint8_t bank[D50_BANK_PATCHES * D50_PATCH_BYTES];
+uint8_t bank[D50_BANK_PATCHES * D50_PATCH_BYTES] D50_POOL;
 unsigned bank_patches;                           // 0: no bank (d50_bind_flash then refuses the flash)
 
 // The program is built in the control task into one of two specs; the interrupt configures the patch from the newest one. Raw storage, as
@@ -93,6 +143,15 @@ uint32_t u32(const uint8_t *p) { return p[0] | static_cast<uint32_t>(p[1]) << 8 
 enum : unsigned { kFxUnit = 24416, kFxState = 24380, kFxUnits = 2 };
 bool reverb_attached;
 
+#if FM1_BASE
+// fm1-base: the lines in the pool, the same two segments as in the SDK's units
+d5::ReverbSample reverb_lines[kFxState / 2U + (kFxUnit - 4U) / 2U] D50_POOL;
+void attach_reverb()
+{
+    reverb_attached = true;
+    patch->attach_reverb(reverb_lines, static_cast<int>(kFxState / 2U), reverb_lines + kFxState / 2U, static_cast<int>((kFxUnit - 4U) / 2U));
+}
+#else
 void attach_reverb()
 {
     const uintptr_t begin = reinterpret_cast<uintptr_t>(fm1_fx_pool_begin), end = reinterpret_cast<uintptr_t>(fm1_fx_pool_end);
@@ -108,6 +167,7 @@ void attach_reverb()
     auto *seg1 = reinterpret_cast<d5::ReverbSample *>(fm1_fx_pool_begin + kFxState + 4U);
     patch->attach_reverb(seg0, static_cast<int>(kFxState / 2U), seg1, static_cast<int>((kFxUnit + kFxState - (kFxState + 4U)) / 2U));
 }
+#endif
 
 void push(uint32_t event)
 {
@@ -236,7 +296,9 @@ extern "C" void d50_guard(unsigned percent)
 }
 extern "C" unsigned d50_cores(void)
 {
-#if FM1B_SPLIT
+#if FM1_BASE && FM1B_SPLIT
+    return split_on && plat_cpu2_on() ? 2U : 1U;
+#elif FM1B_SPLIT && !FM1_BASE
     return split_on && fm1b_split_up() ? 2U : 1U;
 #else
     return 1U;
