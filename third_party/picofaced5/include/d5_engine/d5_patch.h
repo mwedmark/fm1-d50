@@ -535,6 +535,16 @@ public:
         lower_later(note, 0.0f, false, false);
     }
 
+    // fm1-d50: one tone's note on or off (0 Upper, 1 Lower), for the FM-1's Chase Play, which plays the tones apart (d50.cpp)
+    void tone_note_on(int tone, int note, float velocity) {
+        if (tone ? lower_.note_on(note, velocity) : upper_.note_on(note, velocity)) reverb_.note_activity();
+    }
+    void tone_note_off(int tone, int note) {
+        if (tone) lower_.note_off(note);
+        else upper_.note_off(note);
+    }
+    KeyMode key_mode() const { return spec_.key_mode; }
+
     // Mono fold is the L/MONO jack again: the left side as it ships. In the
     // split output modes the jack would carry only the Lower tone, so there
     // the fold sums both sides -- each tone is mono on its own side, nothing

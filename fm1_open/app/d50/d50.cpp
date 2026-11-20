@@ -155,6 +155,7 @@ unsigned guard_hold, guard_calm;
 int guard_cap = 16;
 
 enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kQueue = 64 };
+constexpr unsigned kChaseCc = 80;                // Chase Play on (>= 64) or off: ours, the D-50 has no CC for it (issue #18)
 
 // The controllers' state, the audio interrupt's (d50_render's events): what a program change keeps (the lever, the pressure, CC7: the
 // voices' and the patch's live controls) and what it resets to the new patch's (the bender range, the portamento). Issue #4.
@@ -166,10 +167,13 @@ struct Controls {
     bool porta_switch = false;
     int porta_time = 0;                          // 0..100
     bool hold = false;                           // CC64
+    bool chase = false;                          // Chase Play on (the D-50's CHASE button: the panel's ARP key, or CC80)
     uint32_t down[4] = {0, 0, 0, 0};             // the notes whose key is down, a bit each
     uint32_t held[4] = {0, 0, 0, 0};             // released while the pedal held them
 } ctl;
 void after_configure();                          // (below, with the other controls)
+void release_note(int note);                     // (below, with Chase Play: a key's note-off)
+void chase_clear();
 
 alignas(8) unsigned char patch_memory[sizeof(d5::Patch)] D50_POOL;
 d5::Patch *patch;
@@ -253,6 +257,8 @@ void patch_name(const uint8_t *p, char *out)
 // what sounds goes on) instead of a new program (configure).
 uint8_t temp_patch[D50_PATCH_BYTES];
 bool spec_live[2];
+// Chase Play's patch parameters (the patch block's bytes 34..36: mode 0 U-L, 1 U-L-L, 2 U-L-U; level 0..100; time 0..100), with the spec
+struct ChaseSpec { uint8_t mode, level, time; } chase_spec[2];
 bool temp_dirty;                                 // DT1 changed the temporary area since its spec was built (main loop)
 
 void build_spec(bool live)
@@ -261,6 +267,7 @@ void build_spec(bool live)
     new (spec_memory[slot]) d5::PatchSpec(d5::patch_from_bytes(temp_patch, pcm));   // (trivially destructible: nothing to end first)
     patch_name(temp_patch, names[slot]);
     spec_live[slot] = live;
+    chase_spec[slot] = ChaseSpec{temp_patch[6 * 64 + 34], temp_patch[6 * 64 + 35], temp_patch[6 * 64 + 36]};
     spec_serial = spec_serial + 1U;
 }
 
@@ -369,13 +376,14 @@ void after_configure()
     ctl.porta_switch = s.upper.voice.porta_switch;
     ctl.porta_time = s.upper.voice.porta_time;
     for (unsigned i = 0; i < 4; ++i) ctl.held[i] = 0;
+    chase_clear();
     apply_bend();
     apply_volume();
 }
 void hold_release()
 {
     for (int note = 0; note < 128; ++note)
-        if (bit_of(ctl.held, note)) patch->note_off(note);
+        if (bit_of(ctl.held, note)) release_note(note);
     for (unsigned i = 0; i < 4; ++i) ctl.held[i] = 0;
 }
 void control(unsigned cc, unsigned v)
@@ -391,6 +399,7 @@ void control(unsigned cc, unsigned v)
         patch->set_porta(ctl.porta_switch, ctl.porta_time);
         break;
     case 7: ctl.volume = v; apply_volume(); break;
+    case kChaseCc: ctl.chase = v >= 64U; break;
     case 64:
         ctl.hold = v >= 64U;
         if (!ctl.hold) hold_release();
@@ -404,6 +413,116 @@ void control(unsigned cc, unsigned v)
         }
         break;
     }
+}
+}  // namespace
+
+// ---- Chase Play (issue #18): the D-50 plays a key's note again after a delay, Upper then Lower (U-L), Upper then Lower repeated (U-L-L),
+// or the two alternating (U-L-U); in Whole mode the repeats are the Upper's. Only in Whole and Dual (and their solo forms). The owner's
+// manual gives no laws, so this is a model until the firmware's are read out: a step every 10 ms x 100^(time / 100) (time 0: 10 ms, 50:
+// 100 ms, 100: 1 s); each repeat at the last one's level x level / 100 (the manual: "depending on the Chase Level and Velocity, the number
+// of repeats differ"), the first at that factor too; it ends under a velocity of 0.05 or after 32 steps (U-L: one). Each repeat is a note
+// on in its tone, released when the next starts or a step after the last; a repeat in the Upper takes over from the held key's note. The
+// repeats go on after the key is lifted, as an echo. Timed to the audio block (3 ms). The audio interrupt's.
+namespace {
+struct ChaseNote {
+    bool on;                                     // the entry is in use
+    bool done;                                   // the repeats are over (the entry waits for the key, if it is still down)
+    bool upper_key;                              // the key's own Upper note still sounds (a repeat in the Upper ends it)
+    uint8_t note, step;
+    int8_t last_tone;                            // the tone of the last repeat still sounding, -1 none
+    float vel;                                   // the key's velocity, 0..1
+    uint32_t due;                                // the next step, in samples (chase_clock)
+};
+constexpr unsigned kChaseNotes = 16, kChaseSteps = 32;
+ChaseNote chase_notes[kChaseNotes];
+uint32_t chase_clock;                            // samples rendered
+
+const ChaseSpec &chase_now() { return chase_spec[spec_done & 1U]; }
+bool chase_applies()
+{
+    if (!ctl.chase) return false;
+    const d5::KeyMode m = patch->key_mode();
+    return m == d5::KeyMode::kWhole || m == d5::KeyMode::kDual;
+}
+uint32_t chase_interval()
+{
+    const float t = static_cast<float>(chase_now().time > 100 ? 100 : chase_now().time) / 100.0f;
+    const float ms = 10.0f * d5::fast_exp2(t * 6.6438561897747f);   // 10 ms x 100^t (log2(100))
+    return static_cast<uint32_t>(ms * static_cast<float>(D50_RATE) / 1000.0f) + 1U;
+}
+int chase_tone(unsigned step)                    // the tone of repeat step (1, 2, ..)
+{
+    if (patch->key_mode() == d5::KeyMode::kWhole) return 0;
+    if (chase_now().mode == 2U) return (step & 1U) ? 1 : 0;   // U-L-U: Lower, Upper, Lower, ..
+    return 1;                                    // U-L, U-L-L: the Lower
+}
+void chase_end(ChaseNote &c)                     // the repeats over: the last one released
+{
+    if (c.last_tone >= 0) patch->tone_note_off(c.last_tone, c.note);
+    c.last_tone = -1;
+    c.done = true;
+    if (!c.upper_key) c.on = false;
+}
+ChaseNote *chase_of(int note)
+{
+    for (ChaseNote &c : chase_notes)
+        if (c.on && c.note == note) return &c;
+    return nullptr;
+}
+void chase_start(int note, float vel)
+{
+    if (ChaseNote *old = chase_of(note)) {       // struck again: the old one's repeats end, its Upper note too
+        chase_end(*old);
+        if (old->upper_key) patch->tone_note_off(0, note);
+        old->on = false;
+    }
+    ChaseNote *c = nullptr;
+    for (ChaseNote &e : chase_notes)
+        if (!e.on) { c = &e; break; }
+    if (!c) {                                    // all in use: the one due last gives way (its repeats end)
+        c = &chase_notes[0];
+        for (ChaseNote &e : chase_notes)
+            if (static_cast<int32_t>(e.due - c->due) > 0) c = &e;
+        chase_end(*c);
+        if (c->upper_key) patch->tone_note_off(0, c->note);
+    }
+    *c = ChaseNote{true, false, true, static_cast<uint8_t>(note), 0, -1, vel, chase_clock + chase_interval()};
+    patch->tone_note_on(0, note, vel);
+}
+void chase_service()
+{
+    const float f = static_cast<float>(chase_now().level > 100 ? 100 : chase_now().level) / 100.0f;
+    const unsigned max = chase_now().mode == 0U ? 1U : kChaseSteps;
+    for (ChaseNote &c : chase_notes) {
+        if (!c.on || c.done || static_cast<int32_t>(chase_clock - c.due) < 0) continue;
+        const unsigned step = c.step + 1U;
+        float v = c.vel;
+        for (unsigned k = 0; k < step; ++k) v *= f;
+        if (step > max || v < 0.05f) { chase_end(c); continue; }
+        if (c.last_tone >= 0) patch->tone_note_off(c.last_tone, c.note);
+        const int tone = chase_tone(step);
+        if (tone == 0 && c.upper_key) {          // a repeat in the Upper takes over from the key's own note
+            patch->tone_note_off(0, c.note);
+            c.upper_key = false;
+        }
+        patch->tone_note_on(tone, c.note, v);
+        c.last_tone = static_cast<int8_t>(tone);
+        c.step = static_cast<uint8_t>(step);
+        c.due += chase_interval();
+    }
+}
+
+// a key's note-off (or the hold pedal's): a chased note ends only its own Upper note, the repeats go on
+void release_note(int note)
+{
+    ChaseNote *c = chase_of(note);
+    if (!c) { patch->note_off(note); return; }
+    if (c->upper_key) { patch->tone_note_off(0, note); c->upper_key = false; }
+    if (c->done) c->on = false;
+}
+void chase_clear()
+{
+    for (ChaseNote &c : chase_notes) c.on = false;
 }
 }  // namespace
 
@@ -498,6 +617,7 @@ extern "C" int d50_edit_poll(void)
     return 1;
 }
 
+extern "C" unsigned d50_chase_on(void) { return ctl.chase ? 1U : 0U; }
 extern "C" unsigned d50_programs(void) { return bank_patches ? bank_patches : 1U; }
 extern "C" unsigned d50_bank_patches(void) { return bank_patches; }
 extern "C" unsigned d50_current_program(void) { return program_now; }
@@ -580,11 +700,12 @@ extern "C" D50_RENDER_RAM void d50_render(int32_t *out, unsigned n)
             bit_set(ctl.down, note, velocity != 0);
             if (velocity) {
                 bit_set(ctl.held, note, false);  // (struck again under the pedal: the new note is the one held now)
-                patch->note_on(note, velocity / 127.0f);
+                if (chase_applies()) chase_start(note, velocity / 127.0f);
+                else patch->note_on(note, velocity / 127.0f);
             } else if (ctl.hold) {
                 bit_set(ctl.held, note, true);   // CC64: the note-off waits for the pedal
             } else {
-                patch->note_off(note);
+                release_note(note);
             }
             break;
         }
@@ -593,11 +714,13 @@ extern "C" D50_RENDER_RAM void d50_render(int32_t *out, unsigned n)
         case kEvPressure: patch->set_aftertouch(static_cast<float>(e & 127U) / 127.0f); break;
         case kEvPanic:
             patch->silence();
+            chase_clear();
             ctl.hold = false;
             for (unsigned i = 0; i < 4; ++i) ctl.held[i] = ctl.down[i] = 0;
             break;
         }
     }
+    chase_service();                             // Chase Play's repeats that are due (to the block: 3 ms)
     // A block at a time, every second sounding voice on the SDK's CPU1 (Patch::render_block; FM1B_SPLIT, app/cpu1_split.c)
     static float left[kBlock], right[kBlock];
     for (unsigned s = 0; s < n;) {
@@ -609,6 +732,7 @@ extern "C" D50_RENDER_RAM void d50_render(int32_t *out, unsigned n)
         }
         s += m;
     }
+    chase_clock += n;
     sounding = static_cast<unsigned>(patch->voices_sounding());
 #if FM1_D50_PROF
     d50_prof_sum[7] += D50_T4 - render_t0;
