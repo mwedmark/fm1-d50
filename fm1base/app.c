@@ -130,6 +130,8 @@ void app_panic(void) { d50_panic(); }
 static uint32_t cpu_peak;                        /* the highest plat_cpu_pct since the last cmd 11 (app_frame) */
 int app_sysex(const uint8_t *p, uint32_t n)
 {
+    if (d50_sysex(p, n))                         /* the D-50's own: DT1 and RQ1 (d50.h, issue #6); its answers go out in app_frame */
+        return 1;
     if (n != 6u || p[0] != 0x7Du || p[1] != 'S' || p[2] != 'F' || p[3] != 2u)
         return 0;
     if (p[4] == 11u) {
@@ -387,6 +389,15 @@ void app_frame(void)
     static uint32_t last_ms, last_midi;
     uint32_t now = plat_ms();
     input();
+    if (d50_edit_poll())                         /* a SysEx edit of the current patch: the sound, and its name on the screen */
+        ui.redraw = 1;
+    while (plat_sysex_room() >= D50_SYSEX_REPLY_MAX) {   /* an RQ1's answer, a DT1 at a time as the computer reads */
+        static uint8_t f[D50_SYSEX_REPLY_MAX];
+        uint32_t len = d50_sysex_reply(f);
+        if (!len)
+            break;
+        (void)plat_sysex_send(f, len);
+    }
     if (plat_cpu_pct() > cpu_peak)
         cpu_peak = plat_cpu_pct();
     if (now - last_ms >= 250u) {                 /* the voices and the load, four times a second */
