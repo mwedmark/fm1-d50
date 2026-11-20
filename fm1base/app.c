@@ -117,7 +117,15 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         right_in[i] = right_in[m + i];
     }
     d50_prof_sum[8] += plat_ticks24() - resample_t0;
-    d50_guard(plat_cpu_pct());                   /* the CPU guard: sheds released voices, then caps them, over 85 / 92 % */
+    {                                            /* the CPU guard (d50.cpp d50_guard): a block missed since the last counts as 100 % */
+        static uint32_t xruns_seen;
+        uint32_t x = plat_xruns(), pct = plat_cpu_pct();
+        if (x != xruns_seen) {
+            xruns_seen = x;
+            pct = 100u;
+        }
+        d50_guard(pct);
+    }
 }
 
 void app_panic(void) { d50_panic(); }
@@ -125,7 +133,8 @@ void app_panic(void) { d50_panic(); }
 /* ------------------------------------------------------- the time per block --- */
 /* fm1_open's sf2_upload.c cmd 11 and 12, the same frames (so its pages and scripts read both):
  *   F0 7D S F 02 0B 00 F7  ->  F0 7D S F 02 4B v0..v10 F7, each 5 x 7 bits (least significant first): v0..v8 d50_prof_sum (then from zero),
- *                              v9 CPU average | peak << 12 | CPU1's share << 24, v10 voices | limit << 8 | cores << 16
+ *                              v9 CPU average | peak << 12 | CPU1's share << 24, v10 voices | limit << 8 | cores << 16,
+ *                              v11 the audio blocks missed since the start (plat_xruns: a render past its half)
  *   F0 7D S F 02 0C bits F7 ->  F0 7D S F 02 4C 00 F7: leave out 1 the reverb, 2 the chorus, 4 the EQ */
 static uint32_t cpu_peak;                        /* the highest plat_cpu_pct since the last cmd 11 (app_frame) */
 int app_sysex(const uint8_t *p, uint32_t n)
@@ -135,8 +144,8 @@ int app_sysex(const uint8_t *p, uint32_t n)
     if (n != 6u || p[0] != 0x7Du || p[1] != 'S' || p[2] != 'F' || p[3] != 2u)
         return 0;
     if (p[4] == 11u) {
-        uint8_t r[6 + 11 * 5 + 1] = {0xF0, 0x7D, 'S', 'F', 2, 0x4B}, *d = r + 6;
-        uint32_t v[11], i, k, f = plat_lock();
+        uint8_t r[6 + 12 * 5 + 1] = {0xF0, 0x7D, 'S', 'F', 2, 0x4B}, *d = r + 6;
+        uint32_t v[12], i, k, f = plat_lock();
         for (i = 0; i < 9u; i++) {
             v[i] = d50_prof_sum[i];
             d50_prof_sum[i] = 0;
@@ -144,8 +153,9 @@ int app_sysex(const uint8_t *p, uint32_t n)
         plat_unlock(f);
         v[9] = plat_cpu_pct() | cpu_peak << 12 | d50_split_share() << 24;
         v[10] = d50_voices_sounding() | d50_voice_limit() << 8 | d50_cores() << 16;
+        v[11] = plat_xruns();
         cpu_peak = 0;
-        for (i = 0; i < 11u; i++)
+        for (i = 0; i < 12u; i++)
             for (k = 0; k < 5u; k++)
                 *d++ = (uint8_t)((v[i] >> (7u * k)) & 0x7Fu);
         *d = 0xF7;

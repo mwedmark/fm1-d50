@@ -145,9 +145,12 @@ void split_wait()
 d5::Patch::Split split;
 #endif
 
-// The CPU guard (sf2out_load, after each block): over 90 % of the block on CPU0 it retires the oldest released voice (a 20 ms fade,
-// PicoFaceD5's shed_voice); with none to retire and over 97 %, a lower cap on each tone's voices (new notes past it find no slot). Under 60 %
-// for a quarter of a second the cap comes back up a voice at a time. After a step it waits 8 blocks for the fade to show.
+// The CPU guard (sf2out_load / fm1-base app_render, after each block): over 90 % of the block on CPU0 it retires the oldest released voice
+// (a 20 ms fade, PicoFaceD5's shed_voice). With none to retire and over 93 % -- or a block missed (the caller says 100) -- it fades the voice
+// held longest (shed_held_voice) and caps each tone one voice under what it may have, so that no new note takes the room back: a voice
+// less is better than the audio dropping out (issue #13: Afterthought missed 190 blocks in 4 s with 16 voices held at 96 %). Under 60 %
+// for a quarter of a second the cap comes back up a voice at a time; a new program starts uncapped. After a step it waits 8 blocks for the
+// fade to show.
 unsigned guard_hold, guard_calm;
 int guard_cap = 16;
 
@@ -360,6 +363,9 @@ void after_configure()
 {
     const d5::PatchSpec &s = spec_at(spec_done & 1U);
     ctl.bend_range = -1;
+    guard_cap = 16;                              // (the CPU guard's cap was the last patch's)
+    guard_hold = guard_calm = 0;
+    patch->cap_voices(16);
     ctl.porta_switch = s.upper.voice.porta_switch;
     ctl.porta_time = s.upper.voice.porta_time;
     for (unsigned i = 0; i < 4; ++i) ctl.held[i] = 0;
@@ -511,7 +517,12 @@ extern "C" void d50_guard(unsigned percent)
     if (percent > 90U) {
         guard_calm = 0;
         if (patch->shed_voice()) { guard_hold = 8; return; }
-        if (percent > 97U && guard_cap > 4) { patch->cap_voices(--guard_cap); guard_hold = 8; }
+        if (percent > 93U && patch->shed_held_voice()) {
+            const int tone_max = spec_at(spec_done & 1U).key_mode == d5::KeyMode::kWhole ? 16 : 8;
+            if (guard_cap > tone_max) guard_cap = tone_max;
+            if (guard_cap > 4) patch->cap_voices(--guard_cap);
+            guard_hold = 8;
+        }
     } else if (percent < 60U && guard_cap < 16) {
         if (++guard_calm >= 86U) { patch->cap_voices(++guard_cap); guard_calm = 0; }
     } else {
