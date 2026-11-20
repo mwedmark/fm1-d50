@@ -202,6 +202,7 @@ static struct {
     char msg[2][24];
     uint32_t msg_until;
     uint32_t keys, btn;
+    uint8_t pressure;                            /* the aftertouch last sent from the keys (issue #5) */
     uint8_t redraw;
 } ui;
 
@@ -276,6 +277,19 @@ static void input(void)
             note(n, touch_vel(k));               /* (1..127; the top row's through the LED probe, else 100) */
         else if (!(keys & bit) && (ui.keys & bit))
             note(n, 0u);
+    }
+    {                                            /* the keys' pressure as the D-50's channel aftertouch: the hardest-pressed held key
+                                                  * (lib/touch.h touch_pressure, 0 at rest; the top row has none). Sent when it moves. */
+        uint32_t p = 0;
+        for (k = 0; k < NKEYS; k++)
+            if ((keys & 1u << k) && touch_pressure(k) > p)
+                p = touch_pressure(k);
+        if (p != ui.pressure) {
+            uint32_t f = plat_lock();
+            d50_pressure(p);
+            plat_unlock(f);
+            ui.pressure = (uint8_t)p;
+        }
     }
     for (k = 0; k < NB; k++) {
         uint32_t bit = 1u << k;
