@@ -75,8 +75,11 @@ volatile unsigned queue_head, queue_tail;        // head: written by the tasks, 
 uint8_t bank[D50_BANK_PATCHES * D50_PATCH_BYTES];
 unsigned bank_patches;                           // 0: no bank (d50_bind_flash then refuses the flash)
 
-// The program is built in the control task into one of two specs; the interrupt configures the patch from the newest one.
-d5::PatchSpec specs[2];
+// The program is built in the control task into one of two specs; the interrupt configures the patch from the newest one. Raw storage, as
+// patch_memory: a PatchSpec array has default values, which would put its 3.6 KB in the image's .data; a slot is built before it is read.
+alignas(d5::PatchSpec) unsigned char spec_memory[2][sizeof(d5::PatchSpec)];
+static_assert(__has_trivial_destructor(d5::PatchSpec), "a slot is rebuilt in place without ending the old spec");
+const d5::PatchSpec &spec_at(unsigned slot) { return *reinterpret_cast<const d5::PatchSpec *>(spec_memory[slot]); }
 char names[2][D50_NAME_CHARS + 1];
 volatile unsigned spec_serial, spec_done;        // spec_serial & 1 is the slot the newest one is in
 unsigned program_now;
@@ -131,7 +134,7 @@ void build_program(unsigned program)
 {
     const unsigned slot = (spec_serial + 1U) & 1U;
     const uint8_t *p = bank + program * D50_PATCH_BYTES;
-    specs[slot] = d5::patch_from_bytes(p, pcm);
+    new (spec_memory[slot]) d5::PatchSpec(d5::patch_from_bytes(p, pcm));   // (trivially destructible: nothing to end first)
     patch_name(p, names[slot]);
     program_now = program;
     spec_serial = spec_serial + 1U;
@@ -185,7 +188,7 @@ extern "C" int d50_bind_flash(void)
     guard_hold = guard_calm = 0;
     attach_reverb();                             // before configure, which binds the reverb's lines
     build_program(program_now);
-    patch->configure(specs[spec_serial & 1U], static_cast<float>(D50_RATE));
+    patch->configure(spec_at(spec_serial & 1U), static_cast<float>(D50_RATE));
     spec_done = spec_serial;
     queue_tail = queue_head;
     ready = 1;
@@ -252,7 +255,7 @@ extern "C" void d50_render(int32_t *out, unsigned n)
     if (!ready) return;
     if (spec_done != spec_serial) {               // a new program: configure stops what sounds
         const unsigned serial = spec_serial;
-        patch->configure(specs[serial & 1U], static_cast<float>(D50_RATE));
+        patch->configure(spec_at(serial & 1U), static_cast<float>(D50_RATE));
         spec_done = serial;
     }
     while (queue_tail != queue_head) {
