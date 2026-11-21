@@ -242,8 +242,25 @@ static struct {
     uint8_t lcd_msg;                             /* the message in the LCD (#25): 0 the panel's, LCD_MSG_COMPLETE, LCD_MSG_ERROR | its number */
     uint8_t home_long;                         /* HOME held long enough to have changed the LCD's colours (this press) */
     uint32_t home_ms;                            /* when HOME was pressed */
+    uint8_t page;                                /* the edit page (#31): d50_lcd.h LCD_PAGE_*, LCD_PAGE_PLAY none */
 } ui;
 #include "d50_lcd.h"
+/* A parameter of the patch block changed on an edit page (#31): a DT1 into the temporary area (d50_sysex, #6), so the sound follows */
+static void page_edit(uint32_t field, int32_t step)
+{
+    const lcd_page_t *g = &lcd_pages[ui.page];
+    const uint8_t *p = d50_patch_bytes();
+    uint8_t f[9] = {0x41, 0x10, 0x14, 0x12, 0, 3, 0, 0, 0};    /* 41 dev 14 12, address 00 03 nn (the patch block), the value, the sum */
+    int32_t v;
+    if (!p || field >= g->fields)
+        return;
+    v = clamp((int32_t)p[6u * 64u + g->f[field].byte] + step, g->f[field].lo, g->f[field].hi);
+    f[6] = g->f[field].byte;
+    f[7] = (uint8_t)v;
+    f[8] = (uint8_t)((128u - ((f[4] + f[5] + f[6] + f[7]) & 127u)) & 127u);
+    (void)d50_sysex(f, sizeof f);
+    ui.redraw = 1;
+}
 #define HOME_LONG_MS 3000u
 #define LCD_MSG_COMPLETE 1u
 #define LCD_MSG_ERROR 0x80u
@@ -357,6 +374,8 @@ static void input(void)
             d50_cc(D50_CHASE_CC, on ? 127u : 0u);
             plat_unlock(f);
             app_say("CHASE", on ? "ON" : "OFF");
+        } else if (k == B_EDIT && bound) {       /* the edit pages in turn, then the play screen (#31) */
+            ui.page = (uint8_t)((ui.page + 1u) % LCD_PAGES);
         } else if (k == B_HOME) {                /* (on its release, or after HOME_LONG_MS held: below) */
             ui.home_ms = plat_ms();
             ui.home_long = 0;
@@ -384,7 +403,12 @@ static void input(void)
         set_dirty = 1;
         ui.redraw = 1;
     }
-    if ((e = plat_enc(EN_K1)) != 0 && (set.lcd & LCD_TRUE)) {    /* K1: the true-size LCD's dot height, while it shows */
+    if (ui.page != LCD_PAGE_PLAY) {              /* K1..K4: an edit page's parameters, left to right */
+        static const uint8_t knob[4] = {EN_K1, EN_K2, EN_K3, EN_K4};
+        for (k = 0; k < 4u; k++)
+            if ((e = plat_enc(knob[k])) != 0)
+                page_edit(k, e);
+    } else if ((e = plat_enc(EN_K1)) != 0 && (set.lcd & LCD_TRUE)) {   /* K1: the true-size LCD's dot height, on the play screen */
         set.lcd = (uint8_t)((set.lcd & ~7u) | (uint32_t)clamp((int32_t)lcd_pitch() + (e > 0 ? 1 : -1), LCD_PITCH_MIN, LCD_PITCH_MAX));
         set_dirty = 1;
         ui.redraw = 1;
@@ -431,14 +455,17 @@ static void draw(void)
     cv_begin(240, 120, C_BLACK);
     if (!bound) {
         cv_text(10, 20, &FONT_M, "NO D-50 DATA", C_HI);
-    } else if (set.lcd & LCD_SHOWN) {            /* the D-50's play screen; bank 1 the internal memory, the others cards */
+    } else if ((set.lcd & LCD_SHOWN) || ui.page != LCD_PAGE_PLAY) {   /* the D-50's play screen or an edit page (the FM-1 view: folded);
+                                                                       * bank 1 the internal memory, the others cards */
         uint32_t pitch = lcd_pitch();
         const uint8_t *pb = d50_patch_bytes();
         lcd_scheme = lcd_scheme_of();
-        if (pb)
-            lcd_play_screen(set.bank ? 'C' : 'I', p, pb);
-        else
+        if (!pb)
             lcd_clear();
+        else if (ui.page != LCD_PAGE_PLAY)
+            lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb);
+        else
+            lcd_play_screen(set.bank ? 'C' : 'I', p, pb);
         if (now < ui.msg_until) {
             if (ui.lcd_msg & LCD_MSG_ERROR)
                 lcd_error_screen(ui.lcd_msg & ~LCD_MSG_ERROR);
