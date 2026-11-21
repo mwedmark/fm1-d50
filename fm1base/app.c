@@ -224,6 +224,19 @@ static uint32_t lcd_pitch(void)
  * data: issue #36) reads the region as it lies: the commit record a local build's package or fm1_resources.py wrote (device/res.c:
  * "RES1", the payload's length and CRC-32, the record's own CRC), and the payload checked against it once. d50.cpp then checks its own
  * header ("FMD5"). So an update from GitHub keeps the data the FM-1 has and plays it. */
+#if !FM1B_RES
+static uint32_t res_crc32(const void *p, uint32_t n)   /* zlib's CRC-32, a bit at a time (once, at the start) */
+{
+    const uint8_t *b = (const uint8_t *)p;
+    uint32_t c = 0xFFFFFFFFu, k;
+    while (n--) {
+        c ^= *b++;
+        for (k = 0; k < 8u; k++)
+            c = c >> 1 ^ (0xEDB88320u & (0u - (c & 1u)));
+    }
+    return ~c;
+}
+#endif
 const uint8_t *app_d50_data(uint32_t *len)
 {
 #if FM1B_RES
@@ -232,12 +245,13 @@ const uint8_t *app_d50_data(uint32_t *len)
     static uint8_t checked;
     static uint32_t found;
     if (!checked) {
+        const uint8_t *r = plat_data(APP_RES_BASE);   /* (read in place: plat_data on the device, the emulator's data area on the web) */
         uint32_t h[8];
         checked = 1;
-        if (!st_read(APP_RES_BASE, h, sizeof h) && h[0] == 0x31534552u && h[7] == st_crc32(h, 28u) && h[1] &&
-            h[1] <= APP_RES_SECTORS * 4096u - 32u) {
-            const uint8_t *p = plat_data(APP_RES_BASE + 32u);
-            if (p && st_crc32(p, h[1]) == h[2])
+        if (r) {
+            memcpy(h, r, sizeof h);
+            if (h[0] == 0x31534552u && h[7] == res_crc32(h, 28u) && h[1] && h[1] <= APP_RES_SECTORS * 4096u - 32u &&
+                res_crc32(r + 32, h[1]) == h[2])
                 found = h[1];
         }
     }
@@ -298,6 +312,13 @@ static uint32_t lcd_scheme_of(void)
     return s < LCD_SCHEMES ? s : 0u;
 }
 
+static uint32_t text_len(const char *s)       /* (the device's str_len is not in the host or web build) */
+{
+    uint32_t n = 0;
+    while (s[n])
+        n++;
+    return n;
+}
 static void text_cat(char *d, const char *s)
 {
     while (*d)
@@ -527,18 +548,18 @@ static void draw(void)
     text_cat(t, "VOICES ");
     uint_text(d50_voices_sounding(), t + 7);
     text_cat(t, "  CPU ");
-    uint_text(plat_cpu_pct(), t + str_len(t));
+    uint_text(plat_cpu_pct(), t + text_len(t));
     text_cat(t, "%  ");
-    uint_text(d50_cores(), t + str_len(t));
+    uint_text(d50_cores(), t + text_len(t));
     text_cat(t, d50_cores() > 1u ? " CORES" : " CORE");
     cv_text(10, 4, &FONT_XS, t, C_GRAY);
     t[0] = 0;
     text_cat(t, "OCT ");
     if (set.octave < 0)
         text_cat(t, "-");
-    uint_text((uint32_t)(set.octave < 0 ? -set.octave : set.octave), t + str_len(t));
+    uint_text((uint32_t)(set.octave < 0 ? -set.octave : set.octave), t + text_len(t));
     text_cat(t, "  LIMIT ");
-    uint_text(d50_voice_limit(), t + str_len(t));
+    uint_text(d50_voice_limit(), t + text_len(t));
     text_cat(t, d50_reverb() ? "  REVERB" : "");
     cv_text(10, 20, &FONT_XS, t, C_GRAY);
     cv_blit(0, 180);

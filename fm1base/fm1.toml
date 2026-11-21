@@ -12,6 +12,7 @@ data_lo = 0x4E000
 resources = "../roms/out/d50_fm1base.fmd5"
 resources_what = "the D-50's waves and patches"
 backup = true
+emu = ["data"]                   # the browser emulator keeps its data area (the D-50 data you load: web/emu/app.js, issue #40)
 words = "words.tsv"
 ble = false
 cpu2 = true
