@@ -678,6 +678,7 @@ extern "C" const char *d50_program_name(unsigned program)
 {
     return ready && program == program_now ? names[spec_serial & 1U] : "";
 }
+extern "C" const uint8_t *d50_patch_bytes(void) { return ready ? temp_patch : nullptr; }
 extern "C" unsigned d50_voices_sounding(void) { return sounding; }
 extern "C" unsigned d50_reverb(void) { return reverb_attached; }
 extern "C" unsigned d50_voice_limit(void) { return static_cast<unsigned>(guard_cap); }

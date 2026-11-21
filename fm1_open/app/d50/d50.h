@@ -44,6 +44,8 @@ int d50_bank(unsigned which);
 unsigned d50_bank_patches(void);                         /* 0 without a bank */
 unsigned d50_current_program(void);
 const char *d50_program_name(unsigned program);   /* the current program's; "" for another */
+/* The temporary area (the current patch, D50_PATCH_BYTES, with SysEx edits not yet sounding), for the screen; NULL without data. Main loop. */
+const uint8_t *d50_patch_bytes(void);
 /* MIDI pitch bend, 0..16383, 8192 = centre; over the patch's bender range (pb26, 0..12 semitones), or RPN 0's */
 void d50_bend(unsigned value);
 /* A control change, as the D-50 receives them: 1 modulation lever, 5 portamento time, 6 data entry (RPN 0: the bender range),

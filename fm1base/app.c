@@ -10,8 +10,12 @@ typedef struct {
     int8_t octave;                       /* -2 .. +2 */
     uint8_t program;                     /* 0 .. 63, in the bank */
     uint8_t bank;                        /* 0 .. d50_banks() - 1 (issue #7; was a reserved byte, 0) */
-    uint8_t rsv;
+    uint8_t lcd;                         /* the D-50's display (issue #23; was a reserved byte, 0): LCD_SHOWN on, the low bits its dot pitch */
 } settings_t;
+#define LCD_SHOWN 0x80u
+#define LCD_PITCH_MIN 1u                 /* (a dot's height in pixels; it is one pixel wide) */
+#define LCD_PITCH_MAX 6u
+#define LCD_PITCH_DEFAULT 1u             /* square dots, as the D-50's */
 static settings_t set;
 static uint8_t set_dirty;
 
@@ -201,7 +205,14 @@ static void settings_load(void)
         set.octave = 0;
         set.program = 0;
         set.bank = 0;
+        set.lcd = 0;
     }
+}
+
+static uint32_t lcd_pitch(void)
+{
+    uint32_t p = set.lcd & 7u;
+    return p < LCD_PITCH_MIN || p > LCD_PITCH_MAX ? LCD_PITCH_DEFAULT : p;
 }
 
 static int bound;                            /* the D-50's data found and the engine started */
@@ -225,6 +236,7 @@ static struct {
     uint8_t pressure;                            /* the aftertouch last sent from the keys (issue #5) */
     uint8_t redraw;
 } ui;
+#include "d50_lcd.h"
 
 static void text_cat(char *d, const char *s)
 {
@@ -329,6 +341,9 @@ static void input(void)
             d50_cc(D50_CHASE_CC, on ? 127u : 0u);
             plat_unlock(f);
             app_say("CHASE", on ? "ON" : "OFF");
+        } else if (k == B_HOME) {                /* the D-50's display, or this screen's (issue #23) */
+            set.lcd = (uint8_t)((set.lcd ^ LCD_SHOWN) & ~7u) | (uint8_t)lcd_pitch();
+            set_dirty = 1;
         } else if (k == B_SAVE) {
             if (plat_store_save(OBJ_SETTINGS, &set, sizeof set) == 0) {
                 set_dirty = 0;
@@ -337,6 +352,11 @@ static void input(void)
                 app_say("SAVE", "FAILED");
             }
         }
+        ui.redraw = 1;
+    }
+    if ((e = plat_enc(EN_K1)) != 0 && (set.lcd & LCD_SHOWN)) {   /* K1: the LCD's dot height, while it shows */
+        set.lcd = (uint8_t)((set.lcd & ~7u) | (uint32_t)clamp((int32_t)lcd_pitch() + (e > 0 ? 1 : -1), LCD_PITCH_MIN, LCD_PITCH_MAX));
+        set_dirty = 1;
         ui.redraw = 1;
     }
     if ((e = plat_enc(EN_SELECT)) != 0 || (e = plat_enc(EN_PRESET)) != 0)
@@ -369,6 +389,11 @@ static void draw(void)
     } else {
         cv_text(10, 6, &FONT_B, "D-50", C_WHITE);
         cv_text(70, 10, &FONT_XS, "fm1-base", C_DIM);
+        if ((set.lcd & LCD_SHOWN) && d50_banks() > 1u) {   /* (the LCD says I or C: which card is this screen's to say) */
+            char b[8] = "BANK  ";
+            b[5] = (char)('1' + set.bank);
+            cv_text(120, 10, &FONT_XS, b, C_GRAY);
+        }
         if (d50_chase_on())
             cv_text(180, 10, &FONT_XS, "CHASE", C_HI);
     }
@@ -376,6 +401,14 @@ static void draw(void)
     cv_begin(240, 120, C_BLACK);
     if (!bound) {
         cv_text(10, 20, &FONT_M, "NO D-50 DATA", C_HI);
+    } else if (set.lcd & LCD_SHOWN) {            /* the D-50's play screen; bank 1 the internal memory, the others cards */
+        uint32_t pitch = lcd_pitch();
+        const uint8_t *pb = d50_patch_bytes();
+        if (pb)
+            lcd_play_screen(set.bank ? 'C' : 'I', p, pb);
+        else
+            lcd_clear();
+        lcd_draw((int32_t)(120u - lcd_height(pitch)) / 2, pitch);
     } else {
         {                                    /* the D-50's 11..88; with several banks "2-37" (issue #7) */
             uint32_t j = 0;
