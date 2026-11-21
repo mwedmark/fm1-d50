@@ -46,6 +46,8 @@ jobs:
         # the fonts' OpenType features (fm1-base tools/gen_font.py): Pillow's raqm, which loads the system's FriBiDi
         sudo apt-get install -y -qq libfribidi0
         python3 -c "from PIL import features; assert features.check('raqm'), 'Pillow without raqm'"
+        # PicoFaceD5's sample table (fm1.toml includes roms/gen) from its committed JSON, without the ROM
+        python3 tools/ci/make_pcm_table.py roms/gen
         # no D-50 data: the build without the resource region
         sed -i '/^resources\(_what\)\? *=/d' fm1base/fm1.toml
         if grep -q '^resources' fm1base/fm1.toml; then echo 'fm1.toml still names resources'; exit 1; fi
