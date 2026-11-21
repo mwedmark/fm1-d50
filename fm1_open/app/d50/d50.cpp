@@ -451,12 +451,17 @@ void control(unsigned cc, unsigned v)
 }  // namespace
 
 // ---- Chase Play (issue #18): the D-50 plays a key's note again after a delay, Upper then Lower (U-L), Upper then Lower repeated (U-L-L),
-// or the two alternating (U-L-U); in Whole mode the repeats are the Upper's. Only in Whole and Dual (and their solo forms). The owner's
-// manual gives no laws, so this is a model until the firmware's are read out: a step every 10 ms x 100^(time / 100) (time 0: 10 ms, 50:
-// 100 ms, 100: 1 s); each repeat at the last one's level x level / 100 (the manual: "depending on the Chase Level and Velocity, the number
-// of repeats differ"), the first at that factor too; it ends under a velocity of 0.05 or after 32 steps (U-L: one). Each repeat is a note
-// on in its tone, released when the next starts or a step after the last; a repeat in the Upper takes over from the held key's note. The
-// repeats go on after the key is lifted, as an echo. Timed to the audio block (3 ms). The audio interrupt's.
+// or the two alternating (U-L-U); in Whole mode the repeats are the Upper's. Only in Whole and Dual (and their solo forms). The laws are the
+// D-50 v1.06 firmware's (issue #19, its code at 0x278F, 0x2E0A and 0x419A; the patch's chase bytes at RAM 0xC5A2..0xC5A4):
+//  - time: a timer tick adds (104 - time) x 64 to a 16-bit clock, and a repeat is due each time the clock has gone round once, so a step
+//    takes 1024 / (104 - time) ticks (time 0: 9.8, 50: 19.0, 100: 256). The tick is an interrupt the CPU's own timers do not make (timer
+//    0's modulus, 116 at 6 MHz, is far too fast), most likely the sound chips' clock: 32.768 MHz / 2^19 = 62.5 Hz, 16 ms. That is an
+//    assumption, which a recording of Living Calliope bears out (time 50: 0.25-0.30 s a step measured, 0.30 s with 16 ms). Steps then run
+//    from 0.16 s (time 0) to 4.1 s (time 100).
+//  - level: the factor 2 x level + (143 x level) / 256 (0..255), and each repeat's velocity (1..127) is the last one's x factor / 256, the
+//    first repeat's from the key's; the repeats end when it comes to 0. U-L plays one repeat.
+// Each repeat is a note on in its tone, released when the next starts or a step after the last; a repeat in the Upper takes over from the
+// held key's note. The repeats go on after the key is lifted, as an echo. Timed to the audio block (3 ms). The audio interrupt's.
 namespace {
 struct ChaseNote {
     bool on;                                     // the entry is in use
@@ -464,10 +469,11 @@ struct ChaseNote {
     bool upper_key;                              // the key's own Upper note still sounds (a repeat in the Upper ends it)
     uint8_t note, step;
     int8_t last_tone;                            // the tone of the last repeat still sounding, -1 none
-    float vel;                                   // the key's velocity, 0..1
+    uint8_t vel;                                 // the last repeat's velocity (the key's before the first), 1..127
     uint32_t due;                                // the next step, in samples (chase_clock)
 };
-constexpr unsigned kChaseNotes = 16, kChaseSteps = 32;
+constexpr unsigned kChaseNotes = 16;
+constexpr float kChaseTick = 524288.0f / 32768000.0f;   // seconds a firmware tick: 16 ms (assumed, above)
 ChaseNote chase_notes[kChaseNotes];
 uint32_t chase_clock;                            // samples rendered
 
@@ -480,9 +486,14 @@ bool chase_applies()
 }
 uint32_t chase_interval()
 {
-    const float t = static_cast<float>(chase_now().time > 100 ? 100 : chase_now().time) / 100.0f;
-    const float ms = 10.0f * d5::fast_exp2(t * 6.6438561897747f);   // 10 ms x 100^t (log2(100))
-    return static_cast<uint32_t>(ms * static_cast<float>(D50_RATE) / 1000.0f) + 1U;
+    const unsigned t = chase_now().time > 100 ? 100U : chase_now().time;
+    const float ticks = 1024.0f / static_cast<float>(104U - t);
+    return static_cast<uint32_t>(ticks * kChaseTick * static_cast<float>(D50_RATE)) + 1U;
+}
+unsigned chase_factor()                          // the firmware's level factor, 0..255 (0x419A)
+{
+    const unsigned l = chase_now().level > 100 ? 100U : chase_now().level;
+    return 2U * l + ((143U * l) >> 8);
 }
 int chase_tone(unsigned step)                    // the tone of repeat step (1, 2, ..)
 {
@@ -503,7 +514,7 @@ ChaseNote *chase_of(int note)
         if (c.on && c.note == note) return &c;
     return nullptr;
 }
-void chase_start(int note, float vel)
+void chase_start(int note, unsigned vel)
 {
     if (ChaseNote *old = chase_of(note)) {       // struck again: the old one's repeats end, its Upper note too
         chase_end(*old);
@@ -520,19 +531,20 @@ void chase_start(int note, float vel)
         chase_end(*c);
         if (c->upper_key) patch->tone_note_off(0, c->note);
     }
-    *c = ChaseNote{true, false, true, static_cast<uint8_t>(note), 0, -1, vel, chase_clock + chase_interval()};
-    patch->tone_note_on(0, note, vel);
+    *c = ChaseNote{true, false, true, static_cast<uint8_t>(note), 0, -1, static_cast<uint8_t>(vel), chase_clock + chase_interval()};
+    patch->tone_note_on(0, note, static_cast<float>(vel) / 127.0f);
 }
 void chase_service()
 {
-    const float f = static_cast<float>(chase_now().level > 100 ? 100 : chase_now().level) / 100.0f;
-    const unsigned max = chase_now().mode == 0U ? 1U : kChaseSteps;
+    const unsigned f = chase_factor();
+    const unsigned max = chase_now().mode == 0U ? 1U : 255U;
     for (ChaseNote &c : chase_notes) {
         if (!c.on || c.done || static_cast<int32_t>(chase_clock - c.due) < 0) continue;
         const unsigned step = c.step + 1U;
-        float v = c.vel;
-        for (unsigned k = 0; k < step; ++k) v *= f;
-        if (step > max || v < 0.05f) { chase_end(c); continue; }
+        const unsigned v7 = (c.vel * f) >> 8;    // the firmware's: the last velocity x factor / 256, 0 ends
+        if (step > max || v7 == 0U) { chase_end(c); continue; }
+        c.vel = static_cast<uint8_t>(v7);
+        const float v = static_cast<float>(v7) / 127.0f;
         if (c.last_tone >= 0) patch->tone_note_off(c.last_tone, c.note);
         const int tone = chase_tone(step);
         if (tone == 0 && c.upper_key) {          // a repeat in the Upper takes over from the key's own note
@@ -776,7 +788,7 @@ extern "C" D50_RENDER_RAM void d50_render(int32_t *out, unsigned n)
             bit_set(ctl.down, note, velocity != 0);
             if (velocity) {
                 bit_set(ctl.held, note, false);  // (struck again under the pedal: the new note is the one held now)
-                if (chase_applies()) chase_start(note, velocity / 127.0f);
+                if (chase_applies()) chase_start(note, static_cast<unsigned>(velocity));
                 else patch->note_on(note, velocity / 127.0f);
             } else if (ctl.hold) {
                 bit_set(ctl.held, note, true);   // CC64: the note-off waits for the pedal
