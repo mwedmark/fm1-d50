@@ -8,7 +8,7 @@
 extern "C" {
 #include "d50_inflate.h"
 #include <string.h>
-const uint8_t *plat_res(uint32_t *len);
+const uint8_t *app_d50_data(uint32_t *len);      // fm1base/app.c: the resource region's payload, or 0
 int plat_cpu2_on(void);
 int plat_cpu2_run(void (*fn)(uint32_t), uint32_t arg);
 int plat_cpu2_wait(void);
@@ -18,11 +18,12 @@ uint32_t plat_ticks24(void);
 #define FM1B_SPLIT 1
 #endif
 #define D50_POOL __attribute__((section(".pool")))
-// the data: the resource region (fm1.toml resources, app.h APP_RES_BASE), which the update loader writes from the package
+// the data: the resource region (fm1.toml resources, app.h APP_RES_BASE), which the update loader writes from the package; app.c finds it
+// (a build without the region, as GitHub's, reads it as it lies: issue #36)
 static const uint8_t *fm1_flash_map(uint32_t off, uint32_t n)
 {
     uint32_t len;
-    const uint8_t *p = plat_res(&len);
+    const uint8_t *p = app_d50_data(&len);
     return p && off <= len && n <= len - off ? p + off : nullptr;
 }
 #else

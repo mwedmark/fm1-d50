@@ -219,6 +219,34 @@ static uint32_t lcd_pitch(void)
     return p < LCD_PITCH_MIN || p > LCD_PITCH_MAX ? LCD_PITCH_DEFAULT : p;
 }
 
+/* The D-50's data (d50.cpp fm1_flash_map): the resource region's payload. A build with fm1.toml resources has plat_res, which takes only
+ * the payload that build was made from (its length and CRC are compiled in). A build without them (GitHub's, which never holds Roland's
+ * data: issue #36) reads the region as it lies: the commit record a local build's package or fm1_resources.py wrote (device/res.c:
+ * "RES1", the payload's length and CRC-32, the record's own CRC), and the payload checked against it once. d50.cpp then checks its own
+ * header ("FMD5"). So an update from GitHub keeps the data the FM-1 has and plays it. */
+const uint8_t *app_d50_data(uint32_t *len)
+{
+#if FM1B_RES
+    return plat_res(len);
+#else
+    static uint8_t checked;
+    static uint32_t found;
+    if (!checked) {
+        uint32_t h[8];
+        checked = 1;
+        if (!st_read(APP_RES_BASE, h, sizeof h) && h[0] == 0x31534552u && h[7] == st_crc32(h, 28u) && h[1] &&
+            h[1] <= APP_RES_SECTORS * 4096u - 32u) {
+            const uint8_t *p = plat_data(APP_RES_BASE + 32u);
+            if (p && st_crc32(p, h[1]) == h[2])
+                found = h[1];
+        }
+    }
+    if (len)
+        *len = found;
+    return found ? plat_data(APP_RES_BASE + 32u) : 0;
+#endif
+}
+
 static int bound;                            /* the D-50's data found and the engine started */
 void app_init(void)
 {
