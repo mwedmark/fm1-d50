@@ -36,4 +36,6 @@ test_emu/lan_cert.pem*
 node_modules/
 /test_fluid/cmp/
 fm1base/build/
-fm1base/web/
+fm1base/web/words/
+# the D-50 emulator page's own part (issue #40), despite emu/ above
+!fm1base/web/emu/
