@@ -720,7 +720,9 @@ public:
         } else {
             // Tapped delay: one line, two read positions, the left tap feeds
             // back so cross delays alternate sides.
-            tap_line_.buf_[tap_line_.i_] = x + tap_fb_ * tap_line_.at(tap_l_);
+            // fm1-d50: through reverb_store, as the other lines: with D5_REVERB_INT16 the plain assignment truncated the float to 0 and the
+            // delay types (11-14, 20-24, 28-30) were silent on the FM-1 (issue #9)
+            tap_line_.put(x + tap_fb_ * tap_line_.at(tap_l_));
             tap_line_.next();
             wl = echo_ * tap_line_.at(tap_l_);
             wr = tap_line_.at(tap_r_);
