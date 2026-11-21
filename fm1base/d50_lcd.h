@@ -61,11 +61,21 @@ static const uint8_t lcd_font[96][7] = {
     {0x00, 0x04, 0x02, 0x1F, 0x02, 0x04, 0x00}, {0x00, 0x04, 0x08, 0x1F, 0x08, 0x04, 0x00}, /* right arrow, left arrow */
 };
 
-/* The LCD's colours: dark dots on the yellow-green backlight, the dots that are off a shade darker than the glass between the characters.
- * (The dot rows touch: with a dark line between them as well the 1-pixel columns could not be read.) */
-#define LCD_GLASS RGB(156, 190, 44)
-#define LCD_OFF RGB(148, 182, 41)
-#define LCD_ON RGB(28, 40, 14)
+/* The LCD's colours (issue #26), chosen with a long press of HOME: the glass between the characters, a dot that is off, a dot that is on.
+ * The amber and the blue are from photographs of D-50s (light dots on a dark backlight, the dots that are off a shade lighter than the
+ * glass); the green (dark dots on a yellow-green backlight) is the usual LCD's, not seen on a D-50. (The dot rows touch: with a line
+ * between them as well the 1-pixel columns could not be read.) */
+enum { LCD_SCHEMES = 3 };
+static const char *const lcd_scheme_name[LCD_SCHEMES] = {"GREEN", "AMBER", "BLUE"};
+static const uint16_t lcd_colours[LCD_SCHEMES][3] = {
+    {RGB(156, 190, 44), RGB(148, 182, 41), RGB(28, 40, 14)},
+    {RGB(176, 70, 6), RGB(196, 86, 12), RGB(255, 214, 72)},
+    {RGB(52, 62, 178), RGB(76, 92, 210), RGB(236, 240, 255)},
+};
+static uint32_t lcd_scheme;                      /* 0 .. LCD_SCHEMES - 1 (app.c sets it from the settings) */
+#define LCD_GLASS lcd_colours[lcd_scheme][0]
+#define LCD_OFF lcd_colours[lcd_scheme][1]
+#define LCD_ON lcd_colours[lcd_scheme][2]
 
 static void lcd_clear(void)
 {
@@ -94,6 +104,8 @@ static void lcd_put_d50(uint32_t row, uint32_t col, const uint8_t *at, uint32_t 
 /* The play screen, the firmware's template (0x6EAC):
  *   "$-$$ $$$$$$$$$$$$$$$$$$    U: $$$$$$$$$$"   memory (I or C), the patch number, its name; the upper tone's name
  *   " $$$$$$  SP $$$  Bal=$$    L: $$$$$$$$$$"   the key mode, the split point, the tone balance; the lower tone's name
+ * as a real D-50 shows it (a photograph, issue #26): "SP C4" (the note, a sharp, the octave: "C#4"), and "Bal 50", the balance in the
+ * three columns from the template's '=' (so 100 fits).
  * memory: 'I' (internal) or 'C' (card); program 0..63; p the patch's 448 bytes. */
 static void lcd_play_screen(char memory, uint32_t program, const uint8_t *p)
 {
@@ -115,15 +127,20 @@ static void lcd_play_screen(char memory, uint32_t program, const uint8_t *p)
     lcd_put(1, 1, modes + 6u * v, 6);
     lcd_put(1, 9, "SP ", 3);
     v = 36u + (pb[19] <= 60u ? pb[19] : 60u);                                             /* C2 .. C7 */
-    lcd_put(1, 12, notes + 2u * (v % 12u), 2);
-    t[0] = (char)('0' + v / 12u - 1u);
-    lcd_put(1, 14, t, 1);
-    lcd_put(1, 17, "Bal=", 4);
-    v = pb[33] <= 100u ? pb[33] : 100u;                                                   /* 0 .. 100; (100 runs into the blank after it) */
-    t[0] = v >= 100u ? '1' : v >= 10u ? (char)('0' + v / 10u) : ' ';
-    t[1] = v >= 100u ? '0' : (char)('0' + v % 10u);
-    t[2] = '0';
-    lcd_put(1, 21, t, v >= 100u ? 3u : 2u);
+    {
+        uint32_t n = 0;
+        t[n++] = notes[2u * (v % 12u)];
+        if (notes[2u * (v % 12u) + 1u] == '#')
+            t[n++] = '#';
+        t[n++] = (char)('0' + v / 12u - 1u);
+        lcd_put(1, 12, t, n);
+    }
+    lcd_put(1, 17, "Bal", 3);
+    v = pb[33] <= 100u ? pb[33] : 100u;                                                   /* 0 .. 100, right-aligned in 20..22 */
+    t[0] = v >= 100u ? '1' : ' ';
+    t[1] = v >= 10u ? (char)('0' + v / 10u % 10u) : ' ';
+    t[2] = (char)('0' + v % 10u);
+    lcd_put(1, 20, t, 3);
     lcd_put(1, 27, "L: ", 3);
     lcd_put_d50(1, 30, p + 5u * 64u, 10);                                                 /* the lower common's name */
 }
@@ -146,6 +163,31 @@ static void lcd_draw(int32_t y, uint32_t pitch)
                 uint32_t bits = dy < 7u ? g[dy] : 0u;
                 for (dx = 0; dx < 5u; dx++)
                     cv_rect((int32_t)(c * 6u + dx), y + (int32_t)(dy * pitch), 1, (int32_t)pitch,
+                            bits >> (4u - dx) & 1u ? LCD_ON : LCD_OFF);
+            }
+        }
+}
+
+/* The folded view (issue #26): each 40-character line as two, columns 0..23 above 24..39, from the same buffer. Column 24 is where the play
+ * screen's two halves part (both lines are blank in 23..26: the patch and its key mode / the tones) and where the firmware's 8-character
+ * menu fields do. 10 pixels a character fill the 240 across: dots 2 x 2 pixels, the fifth 1 pixel wide, so a pixel parts the characters.
+ * The lines are 16 pixels high, 4 apart. */
+#define LCD_FOLD 24u
+#define LCD_FOLDED_HEIGHT (4u * 16u + 3u * 4u + 8u)
+static void lcd_draw_folded(int32_t y)
+{
+    uint32_t r, c, dy, dx;
+    cv_rect(0, y, 240, (int32_t)LCD_FOLDED_HEIGHT, LCD_GLASS);
+    y += 4;
+    for (r = 0; r < 2u * LCD_ROWS; r++, y += 20)
+        for (c = 0; c < LCD_FOLD; c++) {
+            uint32_t at = (r % 2u) * LCD_FOLD + c;
+            uint8_t ch = at < LCD_COLS ? (uint8_t)lcd_buf[r / 2u][at] : (uint8_t)' ';
+            const uint8_t *g = ch >= 0x20u && ch < 0x80u ? lcd_font[ch - 0x20u] : lcd_font[0];
+            for (dy = 0; dy < 8u; dy++) {
+                uint32_t bits = dy < 7u ? g[dy] : 0u;
+                for (dx = 0; dx < 5u; dx++)
+                    cv_rect((int32_t)(c * 10u + dx * 2u), y + (int32_t)(dy * 2u), dx < 4u ? 2 : 1, 2,
                             bits >> (4u - dx) & 1u ? LCD_ON : LCD_OFF);
             }
         }

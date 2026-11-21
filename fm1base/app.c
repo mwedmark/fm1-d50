@@ -10,9 +10,13 @@ typedef struct {
     int8_t octave;                       /* -2 .. +2 */
     uint8_t program;                     /* 0 .. 63, in the bank */
     uint8_t bank;                        /* 0 .. d50_banks() - 1 (issue #7; was a reserved byte, 0) */
-    uint8_t lcd;                         /* the D-50's display (issue #23; was a reserved byte, 0): LCD_SHOWN on, the low bits its dot pitch */
+    uint8_t lcd;                         /* the D-50's display (issues #23, #26; was a reserved byte, 0): the view, the low bits its dot pitch */
 } settings_t;
-#define LCD_SHOWN 0x80u
+#define LCD_TRUE 0x80u                   /* the LCD at true size, 2 x 40 (#23) */
+#define LCD_FOLDED 0x40u                 /* the LCD folded, 4 x 20 (#26) */
+#define LCD_SHOWN (LCD_TRUE | LCD_FOLDED)
+#define LCD_SCHEME_SHIFT 3u              /* the LCD's colours (#26): d50_lcd.h lcd_colours */
+#define LCD_SCHEME_MASK (3u << LCD_SCHEME_SHIFT)
 #define LCD_PITCH_MIN 1u                 /* (a dot's height in pixels; it is one pixel wide) */
 #define LCD_PITCH_MAX 6u
 #define LCD_PITCH_DEFAULT 1u             /* square dots, as the D-50's */
@@ -235,8 +239,16 @@ static struct {
     uint32_t keys, btn;
     uint8_t pressure;                            /* the aftertouch last sent from the keys (issue #5) */
     uint8_t redraw;
+    uint8_t home_long;                           /* HOME held long enough to have changed the LCD's colours (this press) */
+    uint32_t home_ms;                            /* when HOME was pressed */
 } ui;
 #include "d50_lcd.h"
+#define HOME_LONG_MS 3000u
+static uint32_t lcd_scheme_of(void)
+{
+    uint32_t s = (set.lcd & LCD_SCHEME_MASK) >> LCD_SCHEME_SHIFT;
+    return s < LCD_SCHEMES ? s : 0u;
+}
 
 static void text_cat(char *d, const char *s)
 {
@@ -341,9 +353,9 @@ static void input(void)
             d50_cc(D50_CHASE_CC, on ? 127u : 0u);
             plat_unlock(f);
             app_say("CHASE", on ? "ON" : "OFF");
-        } else if (k == B_HOME) {                /* the D-50's display, or this screen's (issue #23) */
-            set.lcd = (uint8_t)((set.lcd ^ LCD_SHOWN) & ~7u) | (uint8_t)lcd_pitch();
-            set_dirty = 1;
+        } else if (k == B_HOME) {                /* (on its release, or after HOME_LONG_MS held: below) */
+            ui.home_ms = plat_ms();
+            ui.home_long = 0;
         } else if (k == B_SAVE) {
             if (plat_store_save(OBJ_SETTINGS, &set, sizeof set) == 0) {
                 set_dirty = 0;
@@ -354,7 +366,20 @@ static void input(void)
         }
         ui.redraw = 1;
     }
-    if ((e = plat_enc(EN_K1)) != 0 && (set.lcd & LCD_SHOWN)) {   /* K1: the LCD's dot height, while it shows */
+    /* HOME (issues #23, #26): a press steps through the views, this screen's, the D-50's LCD at true size, folded; held HOME_LONG_MS it
+     * steps through the LCD's colours instead */
+    if ((btn & 1u << B_HOME) && !ui.home_long && plat_ms() - ui.home_ms >= HOME_LONG_MS) {
+        ui.home_long = 1;
+        set.lcd = (uint8_t)((set.lcd & ~LCD_SCHEME_MASK) | ((lcd_scheme_of() + 1u) % LCD_SCHEMES) << LCD_SCHEME_SHIFT);
+        set_dirty = 1;
+        app_say("LCD", lcd_scheme_name[lcd_scheme_of()]);
+    } else if (!(btn & 1u << B_HOME) && (ui.btn & 1u << B_HOME) && !ui.home_long) {
+        uint32_t v = set.lcd & LCD_TRUE ? LCD_FOLDED : set.lcd & LCD_FOLDED ? 0u : LCD_TRUE;
+        set.lcd = (uint8_t)((set.lcd & ~LCD_SHOWN) | v);
+        set_dirty = 1;
+        ui.redraw = 1;
+    }
+    if ((e = plat_enc(EN_K1)) != 0 && (set.lcd & LCD_TRUE)) {    /* K1: the true-size LCD's dot height, while it shows */
         set.lcd = (uint8_t)((set.lcd & ~7u) | (uint32_t)clamp((int32_t)lcd_pitch() + (e > 0 ? 1 : -1), LCD_PITCH_MIN, LCD_PITCH_MAX));
         set_dirty = 1;
         ui.redraw = 1;
@@ -404,11 +429,15 @@ static void draw(void)
     } else if (set.lcd & LCD_SHOWN) {            /* the D-50's play screen; bank 1 the internal memory, the others cards */
         uint32_t pitch = lcd_pitch();
         const uint8_t *pb = d50_patch_bytes();
+        lcd_scheme = lcd_scheme_of();
         if (pb)
             lcd_play_screen(set.bank ? 'C' : 'I', p, pb);
         else
             lcd_clear();
-        lcd_draw((int32_t)(120u - lcd_height(pitch)) / 2, pitch);
+        if (set.lcd & LCD_TRUE)
+            lcd_draw((int32_t)(120u - lcd_height(pitch)) / 2, pitch);
+        else
+            lcd_draw_folded((int32_t)(120u - LCD_FOLDED_HEIGHT) / 2);
     } else {
         {                                    /* the D-50's 11..88; with several banks "2-37" (issue #7) */
             uint32_t j = 0;
