@@ -82,11 +82,18 @@ grant rights in third-party code beyond its applicable license" (`fm1_open/LICEN
 | Munt | LGPL-2.1+ | yes (the LGPL allows linking with closed code, if it can be relinked) |
 | MAME's CPU cores | mostly BSD-3-Clause (check the file) | yes |
 | Nuked-MT32's LA32 | GPL-2.0+ | **no**, unless nukeykt grants the exception |
-| PicoFaceD5 | GPL-3.0+ | **no**, unless Michi71 grants the exception |
+| PicoFaceD5 | GPL-3.0+ | **no**, unless Michi71 grants the exception (see the fm1-base note below) |
 
 All of them may be used freely on a PC (a reference tool that is not linked with the SDK), and for a firmware nobody else gets. Facts, table
 addresses and descriptions in their documentation may be used for our own code (the way PicoFaceD5 itself was written from Munt's description).
 Not legal advice: when it matters, ask the authors.
+
+**fm1-base (2026-11-21, issue #38).** The table above is about fm1_open, whose firmware links M-VAVE's closed `libfm1_engine.a`. The D-50
+now runs on fm1-base (FM1-BASE.md), which links no closed library while Bluetooth is off (fm1.toml `ble = false`): the firmware there is
+GPL-3.0 throughout, our code, PicoFaceD5 and fm1-base's MPL-2.0 platform together, and may be published under the GPL. PicoFaceD5's
+author was asked and agreed: "Yes sure, do it. The code is GPL-3.0" ([Michi71/PicoVintageSynthCollection#194](https://github.com/Michi71/PicoVintageSynthCollection/issues/194)).
+Turning on JieLi's closed Bluetooth libraries (`ble = true`) would bring the question back. Roland's data (the ROMs, the banks, and any
+package built with them) is never published either way.
 
 ## 4. A or B
 
