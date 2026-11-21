@@ -1,0 +1,74 @@
+felucca-bsp (MPL-2.0, github.com/hugelton/felucca-bsp) at 2a5af3d, with fm1-d50's flash layout: the app area's end and the data area's start
+from the build (LDR_DATA_LO, FL_DATA_LO, FL_XDATA0_*), as fm1-base's fm1.toml data_lo (mwedmark/fm1-base d50-layout) needs. Applied by the
+release workflow (.github/workflows/release.yml) with git apply. Issue #36.
+
+diff --git a/chip/fm1_flash_policy.h b/chip/fm1_flash_policy.h
+index a7f311a..a1bac8b 100644
+--- a/chip/fm1_flash_policy.h
++++ b/chip/fm1_flash_policy.h
+@@ -35,8 +35,11 @@
+     (uint32_t)(off) >= (uint32_t)(lo) && (uint32_t)(off) <= (uint32_t)(hi) && \
+     (uint32_t)(n) <= (uint32_t)(hi) - (uint32_t)(off))
+ 
+-/* Compatibility names; new applications supply their own regions above. */
++/* Compatibility names; new applications supply their own regions above. FL_DATA_LO and the XDATA0 window may be
++ * set by the build (a data area that starts lower, at the end of a smaller app area; XDATA0 then empty) */
++#ifndef FL_DATA_LO
+ #define FL_DATA_LO 0x00097000u
++#endif
+ #define FL_DATA_HI 0x000E0000u
+ #define FL_GLOB_LO 0x000FC000u
+ #define FL_GLOB_HI 0x000FF000u
+@@ -44,8 +47,12 @@
+ #define FL_OTA_HI  0x000E5000u
+ #define FL_AUTO_LO 0x000E5000u
+ #define FL_AUTO_HI 0x000E7000u
++#ifndef FL_XDATA0_LO
+ #define FL_XDATA0_LO 0x00093000u
++#endif
++#ifndef FL_XDATA0_HI
+ #define FL_XDATA0_HI 0x00097000u
++#endif
+ #define FL_XDATA1_LO 0x000E7000u
+ #define FL_XDATA1_HI 0x000FC000u
+ #define FL_STORE_OK(off, n) (FL_IN(off, n, FL_DATA_LO, FL_DATA_HI) || \
+diff --git a/loader/ldr_core.c b/loader/ldr_core.c
+index 23f5309..bc0fabd 100644
+--- a/loader/ldr_core.c
++++ b/loader/ldr_core.c
+@@ -43,10 +43,16 @@
+  *                          closed again); the platform keeps the rest of the data area shut
+  * plus the ota.c hooks (frames, time, idle). */
+ #define LDR_APP_LO 0x4000u
++/* LDR_APP_HI and LDR_DATA_LO may come from the build (fm1-base fm1.toml data_lo: a smaller app area, the data area
++ * from its end: loader.c sets both); the defaults are Felucca's layout */
++#ifndef LDR_APP_HI
+ #define LDR_APP_HI 0x93000u
+-#define LDR_REC_LO 0x93000u                     /* update records live above the app ... */
++#endif
++#define LDR_REC_LO LDR_APP_HI                   /* update records live above the app ... */
+ #define LDR_REC_HI 0xFC000u                     /* ... and below Felucca's globals (Felucca's records: 0xE4F00, */
++#ifndef LDR_DATA_LO
+ #define LDR_DATA_LO 0x97000u                    /* the stock firmware's: 0xE8F00), never in Felucca's store, whose */
++#endif
+ #define LDR_DATA_HI 0xE0000u                    /* bytes (user samples) the host writes */
+ #define LDR_NSEC ((LDR_APP_HI - LDR_APP_LO) >> 12)
+ #define LDR_FL_MAX 0x100000u                    /* flash.bin: at most the 1 MiB part */
+diff --git a/loader/loader.c b/loader/loader.c
+index d89b741..fe7d3a7 100644
+--- a/loader/loader.c
++++ b/loader/loader.c
+@@ -23,7 +23,12 @@
+  * the head, nor Felucca's store [0x97000, 0xE0000) (user data, never a record: ldr_core.c), but for the sectors of an
+  * app's resource region while ldr_core.c writes them (ldr_res_window: in RAM, as the whole loader) */
+ static uint32_t ldr_res_lo, ldr_res_hi;
+-#define FL_RANGE_OK(off, n) (FL_IN(off, n, 0x4000u, 0x97000u) || FL_IN(off, n, 0xE0000u, 0xFC000u) || \
++#ifdef LDR_DATA_LO                     /* a data area from LDR_DATA_LO (fm1-base fm1.toml data_lo): the app area ends there */
++#define LDR_APP_HI LDR_DATA_LO
++#else
++#define LDR_DATA_LO 0x97000u
++#endif
++#define FL_RANGE_OK(off, n) (FL_IN(off, n, 0x4000u, LDR_DATA_LO) || FL_IN(off, n, 0xE0000u, 0xFC000u) || \
+                              (ldr_res_hi && FL_IN(off, n, ldr_res_lo, ldr_res_hi)))
+ #include "fm1_flash.h"
+ #include "../chip/libc.c"

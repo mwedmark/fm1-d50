@@ -1,0 +1,66 @@
+# The D-50 firmware built on GitHub (issue #36), by fm1-base's shared builder (zvenson/fm1-build: JieLi's toolchain, the AC79 SDK
+# and a signed build attestation). A pull request or a push to main builds it as a check, the package kept as the run's artifact;
+# a tag vX.Y builds the release X.Y and publishes it as that tag's GitHub release.
+#
+# No D-50 data is ever on GitHub (Roland's PCM ROM and the banks stay on the maintainer's computer). The runner builds without the
+# resource region (fm1.toml's resources line is left out), so the package carries no Roland data, and installing it keeps the data
+# already in the FM-1's flash. A user installs their own once with fm1-base's tools/fm1_resources.py (FM1-BASE.md, README.md).
+#
+# The platform: fm1-base at the fork's d50-layout (fm1.toml data_lo), and felucca-bsp upstream with tools/ci/felucca-bsp-d50-layout.patch.
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ['v[0-9]*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: d50-firmware-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  firmware:
+    uses: zvenson/fm1-build/.github/workflows/build.yml@v1
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    with:
+      sdk: true
+      build: |
+        set -euo pipefail
+        FM1_BASE_COMMIT=0615d335172a93be6393cd4637dd2a853def9509   # mwedmark/fm1-base d50-layout: fm1.toml data_lo
+        BSP_COMMIT=2a5af3dfc8bccb92e37d48a3e7e0bf9a5827e51f        # hugelton/felucca-bsp, before tools/ci/felucca-bsp-d50-layout.patch
+        base="$RUNNER_TEMP/fm1-base"
+        git clone -q https://github.com/mwedmark/fm1-base.git "$base"
+        git -C "$base" checkout -q "$FM1_BASE_COMMIT"
+        rm -rf "$base/bsp"
+        git clone -q https://github.com/hugelton/felucca-bsp.git "$base/bsp"
+        git -C "$base/bsp" checkout -q "$BSP_COMMIT"
+        git -C "$base/bsp" apply "$GITHUB_WORKSPACE/tools/ci/felucca-bsp-d50-layout.patch"
+        # the fonts' OpenType features (fm1-base tools/gen_font.py): Pillow's raqm, which loads the system's FriBiDi
+        sudo apt-get install -y -qq libfribidi0
+        python3 -c "from PIL import features; assert features.check('raqm'), 'Pillow without raqm'"
+        # no D-50 data: the build without the resource region
+        sed -i '/^resources\(_what\)\? *=/d' fm1base/fm1.toml
+        if grep -q '^resources' fm1base/fm1.toml; then echo 'fm1.toml still names resources'; exit 1; fi
+        mkdir -p build/release-assets
+        if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+          version=${GITHUB_REF_NAME#v}
+          python3 "$base/tools/build.py" fm1base --no-ble --release "$version"
+          cp "fm1base/build/d50-$version.fwsc" build/release-assets/
+          cp fm1base/build/d50.bin "build/release-assets/d50-$version-app.bin"
+        else
+          python3 "$base/tools/build.py" fm1base --no-ble
+          cp fm1base/build/d50.fwsc build/release-assets/
+          cp fm1base/build/d50.bin build/release-assets/d50-app.bin
+        fi
+        if ls fm1base/build/*-res.bin >/dev/null 2>&1; then echo 'a resource region was built'; exit 1; fi
+        cp fm1base/build/firmware.json build/release-assets/
+        ls -l build/release-assets
+      packages: build/release-assets/*
