@@ -92,6 +92,14 @@ node tools/d50_pack.js roms/gen/d5_pcm.bin roms/out/d50_fm1base.fmd5 --bank bank
 
 A firmware package built with the data is for your own use only.
 
+## Licence
+
+The firmware is GPL-3.0. The engine is [PicoFaceD5](https://github.com/Michi71/PicoVintageSynthCollection) by Michi71, GPL-3.0, used with
+its author's agreement ([Michi71/PicoVintageSynthCollection#194](https://github.com/Michi71/PicoVintageSynthCollection/issues/194)).
+The platform, [fm1-base](https://github.com/charlesvestal/fm1-base) with felucca-bsp, is MPL-2.0. The fm1-base build links no closed
+library: Bluetooth, which would need JieLi's closed libraries, is off. The D-50's data is Roland's and is never part of the firmware or
+of this repository.
+
 ## Building and installing
 
 The firmware is built with fm1-base's tools from the `fm1base/` folder and installed over USB with fm1-base's installer. The steps, the flash

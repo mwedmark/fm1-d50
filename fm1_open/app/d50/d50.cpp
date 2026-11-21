@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The glue between the FM-1 firmware and the PicoFaceD5 engine (third_party/picofaced5, GPL-3.0-or-later, Michi71). d50.h says what each call does.
-// Built for our own use: the engine's licence has no linking exception for the FM-1's SDK (RESEARCH.md section 3).
+// On fm1-base the firmware links no closed library and is GPL-3.0 throughout; the engine's author agreed to this use
+// (Michi71/PicoVintageSynthCollection#194). The fm1_open build links M-VAVE's closed SDK, which the engine's licence has no exception for:
+// that one is for our own use only (RESEARCH.md section 3).
 #include "d50.h"
 #if FM1_BASE
 // On fm1-base (fm1base/, fm1.toml data_lo): the data at the start of the data area, the second core through plat_cpu2_*, the big buffers in the
