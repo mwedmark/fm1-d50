@@ -64,6 +64,12 @@ unsigned d50_chase_on(void);
 int d50_sysex(const uint8_t *p, uint32_t n);
 unsigned d50_sysex_reply(uint8_t *frame);
 int d50_edit_poll(void);
+/* The fault of the last D-50 frame d50_sysex took, then 0 until the next (main loop). The numbers are the D-50 firmware's error lines'
+ * (v1.06, after "Error  Reject"): its screen shows them (issue #25). */
+#define D50_ERR_ADDRESS 4U                        /* Invalid Data Address: an RQ1 of nothing there */
+#define D50_ERR_FORMAT 6U                         /* Invalid Data Format: not a DT1 or RQ1 of the right length */
+#define D50_ERR_SUM 7U                            /* Sum Check Error */
+unsigned d50_sysex_error(void);
 void d50_panic(void);
 /* Add n frames at D50_RATE to out (interleaved stereo, Q23, saturated). Audio interrupt. */
 void d50_render(int32_t *out, unsigned n);
