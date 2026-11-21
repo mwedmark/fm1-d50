@@ -145,6 +145,39 @@ static void lcd_play_screen(char memory, uint32_t program, const uint8_t *p)
     lcd_put_d50(1, 30, p + 5u * 64u, 10);                                                 /* the lower common's name */
 }
 
+/* Messages (issue #25), the firmware's own 40-character lines (v1.06, 0x6C51 on, and 0x6E84). An error is two lines: "Error  Reject"
+ * above, the fault below (d50.h D50_ERR_* index the list). "Complete ." stands alone on the lower line, as after the D-50's WRITE. */
+static const char *const lcd_error_lines[8] = {
+    "Error  Reject",        "Invalid Patch Number", "Rx FIFO Overflow",    "Invalid Paramater(s)",
+    "Invalid Data Address", "Invalid Data Bytes",   "Invalid Data Format", "Sum Check Error",
+};
+static void lcd_error_screen(uint32_t fault)
+{
+    lcd_clear();
+    lcd_put(0, 0, lcd_error_lines[0], LCD_COLS);
+    if (fault < 8u)
+        lcd_put(1, 0, lcd_error_lines[fault], LCD_COLS);
+}
+static void lcd_complete_screen(void)
+{
+    lcd_clear();
+    lcd_put(1, 14, "Complete .", LCD_COLS);
+}
+/* The panel's own messages (the D-50 has none of them: CHASE ON, LCD AMBER and so on): the lower line, from where "Complete ." stands,
+ * over the screen that shows */
+static void lcd_message(const char *a, const char *b)
+{
+    uint32_t c;
+    for (c = 0; c < LCD_COLS; c++)
+        lcd_buf[1][c] = ' ';
+    for (c = 14; *a && c < LCD_COLS; )
+        lcd_buf[1][c++] = *a++;
+    if (*b && c + 1u < LCD_COLS) {
+        c++;
+        lcd_put(1, c, b, LCD_COLS);
+    }
+}
+
 /* The LCD's height in pixels for a dot pitch (a dot's height in pixels): a margin of glass, the two lines of 8 dot rows each with a pitch
  * between them */
 static uint32_t lcd_height(uint32_t pitch) { return 17u * pitch + 8u; }

@@ -591,13 +591,29 @@ struct Reply {
 } reply;
 }  // namespace
 
+static unsigned sysex_error;                     // the last frame's fault (d50.h D50_ERR_*), 0 none; d50_sysex_error reads and clears it
+
+extern "C" unsigned d50_sysex_error(void)
+{
+    const unsigned e = sysex_error;
+    sysex_error = 0;
+    return e;
+}
+
 extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
 {
     if (n < 4U || p[0] != kRoland || p[2] != kModel) return 0;
     if (!ready) return 1;                         // (ours, but nothing to edit yet)
-    if (p[3] == kDt1 && n >= 9U) {                // 41 dev 14 12 a a a data.. sum
+    if ((p[3] == kDt1 && n < 9U) || (p[3] == kRq1 && n != 11U) || (p[3] != kDt1 && p[3] != kRq1)) {
+        sysex_error = D50_ERR_FORMAT;             // (the handshake's WSD, ACK and so on are not taken: one-way DT1 and RQ1)
+        return 1;
+    }
+    if (p[3] == kDt1) {                           // 41 dev 14 12 a a a data.. sum
         const unsigned len = n - 8U;
-        if (roland_sum(p + 4, 3U + len) != p[n - 1]) return 1;
+        if (roland_sum(p + 4, 3U + len) != p[n - 1]) {
+            sysex_error = D50_ERR_SUM;
+            return 1;
+        }
         const uint32_t a = addr_of(p + 4);
         for (unsigned i = 0; i < len; ++i) {
             uint8_t *b = byte_at(a + i);
@@ -605,13 +621,19 @@ extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
             *b = p[7 + i] & 127U;
             if (a + i < D50_PATCH_BYTES) temp_dirty = true;
         }
-    } else if (p[3] == kRq1 && n == 11U) {        // 41 dev 14 11 a a a s s s sum
-        if (roland_sum(p + 4, 6U) != p[10]) return 1;
+    } else {                                      // RQ1: 41 dev 14 11 a a a s s s sum
+        if (roland_sum(p + 4, 6U) != p[10]) {
+            sysex_error = D50_ERR_SUM;
+            return 1;
+        }
         const uint32_t a = addr_of(p + 4);
         uint32_t size = addr_of(p + 7);
         // only what is there: the temporary area or the bank, cut at its end
         const uint32_t end = a < D50_PATCH_BYTES ? D50_PATCH_BYTES : kInternal + bank_patches * D50_PATCH_BYTES;
-        if (!byte_at(a)) return 1;
+        if (!byte_at(a)) {
+            sysex_error = D50_ERR_ADDRESS;
+            return 1;
+        }
         if (size > end - a) size = end - a;
         reply.dev = p[1];
         reply.at = a;

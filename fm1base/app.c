@@ -239,11 +239,14 @@ static struct {
     uint32_t keys, btn;
     uint8_t pressure;                            /* the aftertouch last sent from the keys (issue #5) */
     uint8_t redraw;
-    uint8_t home_long;                           /* HOME held long enough to have changed the LCD's colours (this press) */
+    uint8_t lcd_msg;                             /* the message in the LCD (#25): 0 the panel's, LCD_MSG_COMPLETE, LCD_MSG_ERROR | its number */
+    uint8_t home_long;                         /* HOME held long enough to have changed the LCD's colours (this press) */
     uint32_t home_ms;                            /* when HOME was pressed */
 } ui;
 #include "d50_lcd.h"
 #define HOME_LONG_MS 3000u
+#define LCD_MSG_COMPLETE 1u
+#define LCD_MSG_ERROR 0x80u
 static uint32_t lcd_scheme_of(void)
 {
     uint32_t s = (set.lcd & LCD_SCHEME_MASK) >> LCD_SCHEME_SHIFT;
@@ -280,6 +283,7 @@ void app_say(const char *a, const char *b)
         ui.msg[1][i] = b[i];
     ui.msg[1][i] = 0;
     ui.msg_until = plat_ms() + 1200u;
+    ui.lcd_msg = 0;
     ui.redraw = 1;
     if (ann_on()) {                          /* and to a screen reader (announce.c, fm1-reader) */
         char t[48];
@@ -360,6 +364,7 @@ static void input(void)
             if (plat_store_save(OBJ_SETTINGS, &set, sizeof set) == 0) {
                 set_dirty = 0;
                 app_say("SAVED", "");
+                ui.lcd_msg = LCD_MSG_COMPLETE;   /* (the LCD says it as the D-50 after WRITE) */
             } else {
                 app_say("SAVE", "FAILED");
             }
@@ -408,7 +413,7 @@ static void draw(void)
     char t[32];
     uint32_t now = plat_ms(), p = set.program;
     cv_begin(240, 32, C_BLACK);
-    if (now < ui.msg_until) {
+    if (now < ui.msg_until && !(bound && (set.lcd & LCD_SHOWN))) {   /* (with the LCD, the message is in it) */
         int32_t x = cv_text(10, 6, &FONT_B, ui.msg[0], C_WHITE);
         cv_text(x + 8, 6, &FONT_B, ui.msg[1], C_HI);
     } else {
@@ -434,6 +439,14 @@ static void draw(void)
             lcd_play_screen(set.bank ? 'C' : 'I', p, pb);
         else
             lcd_clear();
+        if (now < ui.msg_until) {
+            if (ui.lcd_msg & LCD_MSG_ERROR)
+                lcd_error_screen(ui.lcd_msg & ~LCD_MSG_ERROR);
+            else if (ui.lcd_msg == LCD_MSG_COMPLETE)
+                lcd_complete_screen();
+            else
+                lcd_message(ui.msg[0], ui.msg[1]);
+        }
         if (set.lcd & LCD_TRUE)
             lcd_draw((int32_t)(120u - lcd_height(pitch)) / 2, pitch);
         else
@@ -490,6 +503,14 @@ void app_frame(void)
     input();
     if (d50_edit_poll())                         /* a SysEx edit of the current patch: the sound, and its name on the screen */
         ui.redraw = 1;
+    {                                            /* a D-50 SysEx frame refused: the D-50's error on the screen (#25) */
+        uint32_t fault = d50_sysex_error();
+        if (fault) {
+            app_say("ERROR", lcd_error_lines[fault < 8u ? fault : 0u]);
+            ui.lcd_msg = (uint8_t)(LCD_MSG_ERROR | fault);
+            ui.msg_until = now + 2500u;
+        }
+    }
     while (plat_sysex_room() >= D50_SYSEX_REPLY_MAX) {   /* an RQ1's answer, a DT1 at a time as the computer reads */
         static uint8_t f[D50_SYSEX_REPLY_MAX];
         uint32_t len = d50_sysex_reply(f);
