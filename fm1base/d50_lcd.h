@@ -178,6 +178,55 @@ static void lcd_message(const char *a, const char *b)
     }
 }
 
+/* The edit pages (issue #31, the first of #8): the firmware's title (16 characters, 0xF940 on) above its parameters line, each value in the
+ * template's three $ columns from a byte of the patch block. The title line's layout (the patch number at the right) is ours. */
+enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGES };
+enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE };     /* the value; the value + 1; the chase mode's name */
+typedef struct {
+    uint8_t byte, lo, hi, col, show;                      /* the patch block's byte, its range, its column on the lower line, how shown */
+} lcd_field_t;
+typedef struct {
+    const char *title, *line;
+    uint8_t fields;
+    lcd_field_t f[4];
+} lcd_page_t;
+static const lcd_page_t lcd_pages[LCD_PAGES] = {
+    {"", "", 0, {{0}}},
+    {"Output Mode Edit", "Mode$$$  Rev$$$ Rbal$$$  Vol$$$", 4,           /* 0x6F9C */
+     {{29, 0, 3, 4, LCD_SHOW_NUM1}, {30, 0, 31, 12, LCD_SHOW_NUM1}, {31, 0, 100, 20, LCD_SHOW_NUM}, {32, 0, 100, 28, LCD_SHOW_NUM}}},
+    {"Chase Edit", "Mode$$$ Levl$$$ Time$$$", 3,                         /* 0x6FC4 */
+     {{34, 0, 2, 4, LCD_SHOW_CHASE}, {35, 0, 100, 12, LCD_SHOW_NUM}, {36, 0, 100, 20, LCD_SHOW_NUM}}},
+};
+static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p)
+{
+    static const char chase[] = " ULULLULU";                                         /* 3 each, mode 0..2 (0x7B98) */
+    const lcd_page_t *g = &lcd_pages[page];
+    const uint8_t *pb = p + 6u * 64u;
+    char t[4];
+    uint32_t i;
+    lcd_clear();
+    lcd_put(0, 0, g->title, 16);
+    t[0] = memory;
+    t[1] = '-';
+    t[2] = (char)('1' + program / 8u % 8u);
+    t[3] = (char)('1' + program % 8u);
+    lcd_put(0, 36, t, 4);
+    lcd_put(1, 0, g->line, LCD_COLS);
+    for (i = 0; i < g->fields; i++) {
+        const lcd_field_t *f = &g->f[i];
+        uint32_t v = pb[f->byte] < f->lo ? f->lo : pb[f->byte] > f->hi ? f->hi : pb[f->byte];
+        if (f->show == LCD_SHOW_CHASE) {
+            lcd_put(1, f->col, chase + 3u * v, 3);
+        } else {
+            v += f->show == LCD_SHOW_NUM1 ? 1u : 0u;
+            t[0] = v >= 100u ? (char)('0' + v / 100u) : ' ';
+            t[1] = v >= 10u ? (char)('0' + v / 10u % 10u) : ' ';
+            t[2] = (char)('0' + v % 10u);
+            lcd_put(1, f->col, t, 3);
+        }
+    }
+}
+
 /* The LCD's height in pixels for a dot pitch (a dot's height in pixels): a margin of glass, the two lines of 8 dot rows each with a pitch
  * between them */
 static uint32_t lcd_height(uint32_t pitch) { return 17u * pitch + 8u; }
