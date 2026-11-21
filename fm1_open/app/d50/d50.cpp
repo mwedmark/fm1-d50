@@ -279,19 +279,53 @@ void build_program(unsigned program)
     build_spec(false);
 }
 
-// The bank after the samples (version 2, tools/d50_pack.js): its raw size, then its raw deflate stream.
+// The banks after the samples (tools/d50_pack.js). Version 2: one, its raw size and its raw deflate stream. Version 3 (fm1-base, issue #7):
+// the header's last word is the bank section's bytes, the section the banks' count, then each bank's raw size, deflated size and stream.
+// One bank is unpacked into RAM at a time (bank[]); a SysEx edit of it (#6) lasts until another bank is chosen.
+unsigned bank_count, bank_now;
+unsigned unpack_bank(const uint8_t *header, unsigned which)
+{
+    const uint32_t at = D50_HEADER_BYTES + D50_PCM_BYTES, bytes = u32(header + 12);
+    if (bytes == 0) return 0;
+    const uint8_t *b;
+    uint32_t raw, deflated;
+    if (header[4] == 2U) {
+        if (which != 0 || at + 4U + bytes > D50_FLASH_BYTES) return 0;
+        b = fm1_flash_map(at, 4U + bytes);
+        if (!b) return 0;
+        raw = u32(b);
+        deflated = bytes;
+        b += 4;
+    } else if (header[4] == 3U) {
+        const uint8_t *sec = fm1_flash_map(at, bytes);
+        if (!sec || bytes < 4U || which >= u32(sec)) return 0;
+        uint32_t off = 4;
+        for (unsigned k = 0;; ++k) {
+            if (off + 8U > bytes) return 0;
+            raw = u32(sec + off);
+            deflated = u32(sec + off + 4);
+            if (deflated > bytes - off - 8U) return 0;
+            if (k == which) break;
+            off += 8U + deflated;
+        }
+        b = sec + off + 8;
+    } else {
+        return 0;
+    }
+    if (raw == 0 || raw % D50_PATCH_BYTES || raw > sizeof bank) return 0;
+    if (d50_inflate(bank, raw, b, deflated) != static_cast<int>(raw)) return 0;
+    return raw / D50_PATCH_BYTES;
+}
 unsigned bind_bank(const uint8_t *header)
 {
-    if (header[4] < 2U) return 0;
-    const uint32_t deflated = u32(header + 12);
-    const uint32_t at = D50_HEADER_BYTES + D50_PCM_BYTES;
-    if (deflated == 0 || at + 4U + deflated > D50_FLASH_BYTES) return 0;
-    const uint8_t *b = fm1_flash_map(at, 4U + deflated);
-    if (!b) return 0;
-    const uint32_t raw = u32(b);
-    if (raw == 0 || raw % D50_PATCH_BYTES || raw > sizeof bank) return 0;
-    if (d50_inflate(bank, raw, b + 4, deflated) != static_cast<int>(raw)) return 0;
-    return raw / D50_PATCH_BYTES;
+    bank_count = 0;
+    if (header[4] == 2U) bank_count = 1;
+    if (header[4] == 3U) {
+        const uint8_t *sec = fm1_flash_map(D50_HEADER_BYTES + D50_PCM_BYTES, 4);
+        bank_count = sec ? u32(sec) : 0U;
+    }
+    if (bank_now >= bank_count) bank_now = 0;
+    return bank_count ? unpack_bank(header, bank_now) : 0;
 }
 
 inline int32_t to_q23(float x)
@@ -309,7 +343,7 @@ inline int32_t sat24(int32_t v) { return v > 8388607 ? 8388607 : v < -8388608 ? 
 extern "C" int d50_bind_flash(void)
 {
     const uint8_t *header = fm1_flash_map(0, D50_HEADER_BYTES);
-    if (!header || memcmp(header, D50_FLASH_MAGIC, 4) || header[4] < 1U || header[4] > 2U) return 0;
+    if (!header || memcmp(header, D50_FLASH_MAGIC, 4) || header[4] < 1U || header[4] > 3U) return 0;
     if (u32(header + 8) != D50_PCM_BYTES) return 0;
     const uint8_t *image = fm1_flash_map(0, D50_HEADER_BYTES + D50_PCM_BYTES);
     if (!image) return 0;
@@ -618,6 +652,25 @@ extern "C" int d50_edit_poll(void)
 }
 
 extern "C" unsigned d50_chase_on(void) { return ctl.chase ? 1U : 0U; }
+extern "C" unsigned d50_banks(void) { return ready ? bank_count : 0U; }
+extern "C" unsigned d50_current_bank(void) { return bank_now; }
+extern "C" int d50_bank(unsigned which)
+{
+    if (!ready) { bank_now = which; return 1; }  // (before the data: kept for the bind, which checks it)
+    if (which >= bank_count) return 0;
+    if (which == bank_now) return 1;
+    const uint8_t *header = fm1_flash_map(0, D50_HEADER_BYTES);
+    if (!header) return 0;
+    const unsigned n = unpack_bank(header, which);
+    if (!n) {                                    // (a damaged bank: the one before, back)
+        bank_patches = unpack_bank(header, bank_now);
+        return 0;
+    }
+    bank_now = which;
+    bank_patches = n;
+    if (program_now >= n) program_now = 0;
+    return 1;                                    // (the caller then chooses the program: d50_program builds it)
+}
 extern "C" unsigned d50_programs(void) { return bank_patches ? bank_patches : 1U; }
 extern "C" unsigned d50_bank_patches(void) { return bank_patches; }
 extern "C" unsigned d50_current_program(void) { return program_now; }

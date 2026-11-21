@@ -2,7 +2,10 @@
 //   header, 16 bytes: "FMD5", version (1: samples only, 2: and a bank), three zero bytes, the sample bytes (u32 LE), the bank's deflated bytes (u32 LE, 0 for none)
 //   the 262 144 16-bit samples
 //   version 2: the bank's raw bytes (u32 LE, 448 a patch) and its raw deflate stream (app/d50/d50_inflate.c unpacks it into RAM)
-//   node tools/d50_pack.js roms/gen/d5_pcm.bin roms/out/d50_pcm.fmd5 [--bank "D50 files/syx files/PND50-00.syx"]
+//   version 3 (fm1-base, issue #7: several --bank): the header's last word is the whole bank section's bytes; the section is the banks'
+//     count (u32 LE), then each bank's raw bytes (u32 LE), deflated bytes (u32 LE) and raw deflate stream. The firmware unpacks one at a
+//     time. Not for fm1_open, whose user flash has no room past the first bank.
+//   node tools/d50_pack.js roms/gen/d5_pcm.bin roms/out/d50_pcm.fmd5 [--bank "D50 files/syx files/PND50-00.syx"] [--bank ...]
 // d5_pcm.bin comes from third_party/picofaced5/tools/d5_extract/d5_make_blob.py on your own PCM ROMs; the bank is a D-50 SysEx bulk dump (DT1 to
 // 02-00-00, 64 patches). Neither file, nor what this writes, is ever committed.
 'use strict';
@@ -11,10 +14,10 @@ const zlib = require('zlib');
 
 const USER_FLASH = 536576, PCM_BYTES = 524288, PATCH = 448, PATCHES = 64;
 const args = process.argv.slice(2);
-const bankAt = args.indexOf('--bank');
-const bankPath = bankAt >= 0 ? args.splice(bankAt, 2)[1] : null;
+const bankPaths = [];
+for (let at; (at = args.indexOf('--bank')) >= 0;) bankPaths.push(args.splice(at, 2)[1]);
 const [inPath, outPath] = args;
-if (!inPath || !outPath) { console.error('usage: node tools/d50_pack.js <d5_pcm.bin> <out.fmd5> [--bank <bulk dump.syx>]'); process.exit(2); }
+if (!inPath || !outPath) { console.error('usage: node tools/d50_pack.js <d5_pcm.bin> <out.fmd5> [--bank <bulk dump.syx>]...'); process.exit(2); }
 const pcm = fs.readFileSync(inPath);
 if (pcm.length !== PCM_BYTES) throw new Error(`${inPath}: ${pcm.length} bytes, ${PCM_BYTES} expected`);
 
@@ -49,19 +52,28 @@ const header = Buffer.alloc(16);
 header.write('FMD5', 0, 'latin1');
 header.writeUInt32LE(PCM_BYTES, 8);
 const parts = [header, pcm];
-if (bankPath) {
-  const bank = bankFromSyx(bankPath);
+const u32 = v => { const b = Buffer.alloc(4); b.writeUInt32LE(v, 0); return b; };
+const banks = bankPaths.map(path => {
+  const bank = bankFromSyx(path);
   const deflated = zlib.deflateRawSync(bank, { level: 9, memLevel: 9 });
-  header[4] = 2;
-  header.writeUInt32LE(deflated.length, 12);
-  const raw = Buffer.alloc(4);
-  raw.writeUInt32LE(bank.length, 0);
-  parts.push(raw, deflated);
   const names = [];
   for (let p = 0; p < PATCHES; p++) names.push(String.fromCharCode(...bank.subarray(p * PATCH + 384, p * PATCH + 402)).replace(/[\s\S]/g, c => CHARS[c.charCodeAt(0)] || '?').trimEnd());
-  console.log(`bank ${bankPath}: ${PATCHES} patches, ${bank.length} bytes, deflated ${deflated.length}; 11 ${names[0]}, 12 ${names[1]}, ... 88 ${names[63]}`);
+  console.log(`bank ${path}: ${PATCHES} patches, ${bank.length} bytes, deflated ${deflated.length}; 11 ${names[0]}, 12 ${names[1]}, ... 88 ${names[63]}`);
+  return { bank, deflated };
+});
+if (banks.length === 1) {
+  header[4] = 2;
+  header.writeUInt32LE(banks[0].deflated.length, 12);
+  parts.push(u32(banks[0].bank.length), banks[0].deflated);
+} else if (banks.length > 1) {
+  header[4] = 3;
+  const section = [u32(banks.length)];
+  for (const b of banks) section.push(u32(b.bank.length), u32(b.deflated.length), b.deflated);
+  const bytes = Buffer.concat(section);
+  header.writeUInt32LE(bytes.length, 12);
+  parts.push(bytes);
 } else header[4] = 1;
 const out = Buffer.concat(parts);
-if (out.length > USER_FLASH) throw new Error(`${out.length} bytes: over the ${USER_FLASH} bytes of the user flash`);
+if (banks.length <= 1 && out.length > USER_FLASH) throw new Error(`${out.length} bytes: over the ${USER_FLASH} bytes of the user flash`);
 fs.writeFileSync(outPath, out);
-console.log('wrote', outPath, out.length, 'bytes,', USER_FLASH - out.length, 'of the user flash left');
+console.log('wrote', outPath, out.length, 'bytes' + (banks.length <= 1 ? `, ${USER_FLASH - out.length} of the user flash left` : `, ${banks.length} banks (version 3)`));

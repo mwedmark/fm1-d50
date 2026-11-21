@@ -9,15 +9,16 @@
 #define APP_BLOCK 128u                   /* frames per audio block: 2.9 ms at 44.1 kHz, as the fm1_open build's */
 #define APP_TOUCH                        /* velocity from the keys (lib/touch.h; fm1.toml input_hz = 10000, as it was measured at) */
 
-/* the store: the settings (octave, program) and the panel's calibration (the platform's). The data area holds the D-50's data from
- * data_lo (fm1.toml) up to 0xDD648, so the panel's two sectors are 0xDE000 and 0xDF000; nothing may sit in 0xE0000..0xFBFFF */
+/* the store: the settings (octave, bank, program) and the panel's calibration (the platform's). The data area holds the D-50's data from
+ * data_lo (fm1.toml) up to 0xDE000, so the panel's two sectors are 0xDE000 and 0xDF000; nothing may sit in 0xE0000..0xFBFFF */
 enum { OBJ_SETTINGS, OBJ_PANEL, OBJ_NOBJ };
 #define APP_STORE_MAP {0xFC000u, 0xDE000u}
 
-/* the D-50's data (roms/out/d50_pcm.fmd5, 534 088 B) as the resource region (fm1.toml resources): its 32-byte head and the data in 131
- * sectors from the data area's start, 0x5B000 .. 0xDE000. The package carries it and the update loader writes it after the app */
-#define APP_RES_BASE 0x5B000u
-#define APP_RES_SECTORS 131u
+/* the D-50's data (roms/out/d50_fm1base.fmd5: the samples and six banks, 580 040 B, tools/d50_pack.js version 3) as the resource region
+ * (fm1.toml resources): its 32-byte head and the data in 144 sectors from the data area's start, 0x4E000 .. 0xDE000 (8.7 KB to spare).
+ * The package carries it and the update loader writes it after the app. Issue #7: 0x5B000 and 131 sectors held one bank */
+#define APP_RES_BASE 0x4E000u
+#define APP_RES_SECTORS 144u
 /* the resources need the backup (the transfer is the restore's): the settings are all there is to back up */
 #define APP_BACKUP_OBJS {OBJ_SETTINGS}
 #define APP_BACKUP_MAGIC 0x30354444u            /* "DD50" */
