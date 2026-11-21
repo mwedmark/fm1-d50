@@ -369,6 +369,8 @@ struct ReverbType {
     float echo = 1.0f;      // mode 3: gain of the left (delayed) tap, sign =
                             // its polarity; the right tap is the direct copy
     float pol_r = 1.0f;     // polarity of the right wet side (-1 inverts)
+    bool cross = false;     // fm1-d50 (#9): mode 3, a ping-pong: the echoes go left, right, left .. (a recording of a real D-50's
+                            // Cross Delay bounces between the sides); tap_l_ms the left line, tap_r_ms the right (0: as the left)
 };
 
 inline constexpr ReverbType kReverbTypes[32] = {
@@ -383,9 +385,9 @@ inline constexpr ReverbType kReverbTypes[32] = {
     {1, 2, 1.15f,   0,   0, 0.0f,   0.0f,   0.0f, 0.4000f}, //  9 Medium Large Room (VST late tail 2.0 s)
     {0, 3, 0.92f,   0,   0, 0.0f,   0.0f,   0.0f, 0.4450f, 1.0f, -1.0f}, // 10 Large Room (VST late tail 2.1 s, sides inverted, corr -0.95)
     {3, 0, 1.20f, 102,   0, 0.50f,  0.0f,   0.0f, 0.0000f, -0.5f}, // 11 Single Delay (102 ms; as 20)
-    {3, 0, 1.20f, 180,   0, 0.30f,  0.0f,   0.0f, 0.0000f,  0.35f}, // 12 Cross Delay (180 ms; VST: right direct, left 180, tail under the source)
-    {3, 0, 1.20f, 224,   0, 0.40f,  0.0f,   0.0f, 0.0000f,  0.40f}, // 13 Cross Delay (224 ms; as 23)
-    {3, 0, 1.20f, 148,   0, 0.40f,  0.0f,   0.0f, 0.0000f,  0.40f}, // 14 Cross Delay (148 ms; as 23)
+    {3, 0, 1.20f, 180,   0, 0.30f,  0.0f,   0.0f, 0.0000f,  0.35f, 1.0f, true}, // 12 Cross Delay (180 ms; VST: right direct, left 180, tail under the source)
+    {3, 0, 1.20f, 224,   0, 0.40f,  0.0f,   0.0f, 0.0000f,  0.40f, 1.0f, true}, // 13 Cross Delay (224 ms; as 23)
+    {3, 0, 1.20f, 148, 256, 0.40f,  0.0f,   0.0f, 0.0000f,  0.40f, 1.0f, true}, // 14 Cross Delay (148 ms; as 23)
     {1, 3, 1.05f,   0,   0, 0.0f, 200.0f,   0.0f, 0.0000f}, // 15 Short Gate (200 ms)
     {1, 3, 1.05f,   0,   0, 0.0f, 480.0f,   0.0f, 0.0000f}, // 16 Long Gate (480 ms)
     {1, 5, 0.89f,   0,   0, 0.0f,   0.0f,   0.0f, 0.5000f}, // 17 Bright Hall (2.7 s, easier damping)
@@ -393,9 +395,9 @@ inline constexpr ReverbType kReverbTypes[32] = {
     {2, 5, 0.77f,   0,   0, 0.0f,   0.0f,   0.0f, 0.0000f}, // 19 Steel Pan (plate, metallic)
     {3, 0, 1.20f, 248,   0, 0.53f,  0.0f,   0.0f, 0.0000f, -0.5f}, // 20 Delay (248 ms; VST: right direct, left inverted, T60 2.7)
     {3, 0, 1.20f, 338,   0, 0.53f,  0.0f,   0.0f, 0.0000f, -0.5f}, // 21 Delay (338 ms; as 20)
-    {3, 0, 1.20f, 157,   0, 0.40f,  0.0f,   0.0f, 0.0000f,  0.40f}, // 22 Cross Delay (157 ms; as 23)
-    {3, 0, 1.20f, 252,   0, 0.48f,  0.0f,   0.0f, 0.0000f,  0.45f}, // 23 Cross Delay (252 ms; VST: right direct, left 252 in phase, T60 2.4)
-    {3, 0, 1.20f, 274,   0, 0.40f,  0.0f,   0.0f, 0.0000f,  0.40f}, // 24 Cross Delay (274 ms; as 23)
+    {3, 0, 1.20f, 157,   0, 0.40f,  0.0f,   0.0f, 0.0000f,  0.40f, 1.0f, true}, // 22 Cross Delay (157 ms; as 23)
+    {3, 0, 1.20f, 252,   0, 0.48f,  0.0f,   0.0f, 0.0000f,  0.45f, 1.0f, true}, // 23 Cross Delay (252 ms; VST: right direct, left 252 in phase, T60 2.4)
+    {3, 0, 1.20f, 274, 137, 0.40f,  0.0f,   0.0f, 0.0000f,  0.40f, 1.0f, true}, // 24 Cross Delay (274 ms; as 23)
     {1, 4, 0.98f,   0,   0, 0.0f, 300.0f,   0.0f, 0.0000f}, // 25 Gate Reverb
     {1, 4, 0.98f,   0,   0, 0.0f,   0.0f, 360.0f, 0.0000f}, // 26 Reverse Gate (360 ms)
     {1, 4, 0.98f,   0,   0, 0.0f,   0.0f, 480.0f, 0.0000f}, // 27 Reverse Gate (480 ms)
@@ -605,6 +607,27 @@ public:
             tap_l_ = static_cast<int>(t.tap_l_ms * 0.001f * sr) + 1;
             tap_r_ = static_cast<int>(t.tap_r_ms * 0.001f * sr) + 1;
             tap_fb_ = t.fb;
+            cross_ = t.cross;
+            cross_r_ = 0.0f;
+            if (cross_) {
+                // two lines, one a side, each as long as its delay: the left in the first segment, the right in the second
+                tap_r_ = static_cast<int>((t.tap_r_ms > 0.0f ? t.tap_r_ms : t.tap_l_ms) * 0.001f * sr) + 1;
+#ifdef D5_REVERB_EXTERNAL_POOL
+                int nl = tap_l_ + 2, nr = tap_r_ + 2;
+                if (nl > seg_n_[0]) nl = seg_n_[0];
+                if (nr > seg_n_[1]) nr = seg_n_[1];
+                if (tap_l_ >= nl) tap_l_ = nl - 1;
+                if (tap_r_ >= nr) tap_r_ = nr - 1;
+                tap_line_.bind(seg_[0], nl);
+                tap_line2_.bind(seg_[1], nr);
+#else
+                tap_line_.bind(pool_, 10500);
+                tap_line2_.bind(pool_ + 10500, 10500);
+#endif
+                tap_line_.clear();
+                tap_line2_.clear();
+                return;
+            }
 #ifdef D5_REVERB_EXTERNAL_POOL
             // fm1-d50: only as long as the farthest tap needs (10 817 words for 338 ms at 32 kHz), which fits the first segment
             int need = (tap_l_ > tap_r_ ? tap_l_ : tap_r_) + 2;
@@ -717,6 +740,17 @@ public:
             // outputs (the VST's Large Room: L/R correlation -0.95); the
             // chip's own tap pairs are decorrelated and would stay so.
             if (pol_r_ < 0.0f) wr = wl;
+        } else if (cross_) {
+            // fm1-d50 (#9): the ping-pong. The left line takes the send and the right line's echo, the right line the left's: the echoes
+            // come left (T), right (2T), left (3T) .., each one fb under the last; the right side also passes the send direct, as before.
+            tap_line_.put(x + tap_fb_ * cross_r_);
+            tap_line_.next();
+            const float lo = tap_line_.at(tap_l_);
+            tap_line2_.put(tap_fb_ * lo);
+            tap_line2_.next();
+            cross_r_ = tap_line2_.at(tap_r_);
+            wl = echo_ * lo;
+            wr = x + echo_ * cross_r_;
         } else {
             // Tapped delay: one line, two read positions, the left tap feeds
             // back so cross delays alternate sides.
@@ -826,6 +860,9 @@ private:
     ReverbComb comb_[3];
     const BossMode* boss_ = &boss_mode(1);
     ReverbLine tap_line_;
+    ReverbLine tap_line2_;                // fm1-d50: the right line of a ping-pong (cross_)
+    bool cross_ = false;
+    float cross_r_ = 0.0f;              // the right line's last echo, fed back to the left
     int tap_entr_ = 0, tap_ol_[3] = {0, 0, 0}, tap_or_[3] = {0, 0, 0};
     int tap_l_ = 0, tap_r_ = 0;
     float tap_fb_ = 0.0f;
