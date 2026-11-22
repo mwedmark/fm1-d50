@@ -31,6 +31,7 @@ extern "C" {
 // (no libc++: the glue defines placement new itself, as on the FM-1; d50/cxx's headers)
 namespace {
 int fails = 0;
+uint8_t dev = 0x00;                               // the device ID the computer speaks to (d50_device: the D-50's basic channel less one)
 void check(bool ok, const char *what)
 {
     printf("  %s %s\n", ok ? "ok  " : "FAIL", what);
@@ -60,7 +61,7 @@ Bytes addr_size(uint32_t a, uint32_t s)
 Bytes msg(uint8_t cmd, const Bytes &body, bool with_sum)
 {
     Bytes m;
-    m.put(0x41).put(0x10).put(0x14).put(cmd);
+    m.put(0x41).put(dev).put(0x14).put(cmd);
     for (unsigned i = 0; i < body.n; ++i) m.put(body.b[i]);
     if (with_sum) m.put(sum7(body.b, body.n));
     return m;
@@ -76,12 +77,12 @@ Bytes next()
 }
 bool is_short(const Bytes &f, uint8_t cmd)
 {
-    return f.n == 6 && f.b[0] == 0xF0 && f.b[1] == 0x41 && f.b[2] == 0x10 && f.b[3] == 0x14 && f.b[4] == cmd && f.b[5] == 0xF7;
+    return f.n == 6 && f.b[0] == 0xF0 && f.b[1] == 0x41 && f.b[2] == dev && f.b[3] == 0x14 && f.b[4] == cmd && f.b[5] == 0xF7;
 }
 // a DT1 or DAT: its address, its length and its checksum right
 bool is_data(const Bytes &f, uint8_t cmd, uint32_t at, unsigned len)
 {
-    if (f.n != 10U + len || f.b[0] != 0xF0 || f.b[1] != 0x41 || f.b[2] != 0x10 || f.b[3] != 0x14 || f.b[4] != cmd || f.b[f.n - 1] != 0xF7)
+    if (f.n != 10U + len || f.b[0] != 0xF0 || f.b[1] != 0x41 || f.b[2] != dev || f.b[3] != 0x14 || f.b[4] != cmd || f.b[f.n - 1] != 0xF7)
         return false;
     if ((static_cast<uint32_t>(f.b[5]) << 14 | f.b[6] << 7 | f.b[7]) != at) return false;
     return sum7(&f.b[5], 3U + len) == f.b[8 + len];
@@ -213,6 +214,33 @@ int main(int argc, char **argv)
     {
         Bytes a = next(), b = next(), c = next();
         check(is_data(a, kDt1, 0, 256) && is_data(b, kDt1, 256, 192) && c.empty(), "DT1 256 + 192, then nothing");
+    }
+
+    printf("The device ID (issue #51): the basic channel less one\n");
+    {
+        d50_device(3);                            // basic channel 4
+        dev = 0x00;
+        send(msg(kRq1, addr_size(0, 448), true));
+        check(next().empty(), "an RQ1 to device 0 when the FM-1 is 3: not answered");
+        send(msg(kRqd, addr_size(0, 448), true));
+        check(next().empty(), "an RQD to device 0: not answered");
+        uint8_t before[448];
+        memcpy(before, temp, 448);
+        Bytes body;
+        body.put(0).put(0).put(0).put(0x7F);
+        send(msg(kDt1, body, true));
+        check(!memcmp(temp, before, 448), "a DT1 to device 0: not written");
+        check(d50_sysex_error() == 0, "and no error on the screen");
+        dev = 0x03;
+        send(msg(kRq1, addr_size(0, 448), true));
+        Bytes a = next(), b = next();
+        check(is_data(a, kDt1, 0, 256) && is_data(b, kDt1, 256, 192), "to device 3: answered, with ID 3");
+        send(msg(kWsd, addr_size(0, 16), true));
+        check(is_short(next(), kAck), "a WSD to device 3: ACK with ID 3");
+        send(msg(kEod, none(), false));
+        check(is_short(next(), kAck), "its EOD: ACK");
+        d50_device(0);
+        dev = 0x00;
     }
 
     printf("%s\n", fails ? "FAILED" : "all passed");

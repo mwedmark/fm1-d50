@@ -58,13 +58,18 @@ The view and the colour are saved with SAVE.
 | K1 | The joystick's tone balance: the Upper against the Lower tone (the LCD's Bal) |
 | K2 | The joystick's partial balance: partial 1 against partial 2, in both tones |
 | K3 | The LCD's dot height (true-size view) |
-| SAVE | Saves the patch, bank, octave, view and colour |
+| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel), then the play screen |
+| SAVE | Saves the patch, bank, octave, view, colour and the MIDI settings |
 
 The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.
 
 ## MIDI
 
-It receives on every channel, over USB.
+It receives over USB. The **MIDI Channel** page (EDIT) has the D-50's two settings, kept with SAVE:
+
+- **BasicCH** (K1), 1 to 16, default 1: the channel it plays on with omni off, and its SysEx device ID, as on a D-50 (the device ID is the
+  basic channel less one: channel 1 is `00`).
+- **Omni** (K2), default ON: ON plays every channel, as before; OFF only the basic channel.
 
 | Message | What it does |
 | --- | --- |
@@ -112,8 +117,9 @@ Without D-50 data on the FM-1, WSD and RQD are answered with RJC.
 | `02 00 00` | The internal memory: the bank in RAM, 448 bytes a patch (64 patches, up to `03 60 00`). A power cycle brings back the bank from the flash. |
 | Anything else | For example the reverb data at `03 60 00`: taken and ignored, so a whole bulk dump goes through. |
 
-A faulty message shows its error on the screen (wrong format, checksum or address). Not yet: the system area, the device ID (the FM-1
-answers any), memory protect ([issue 51](https://github.com/mwedmark/fm1-d50/issues/51)).
+The FM-1 takes and answers only the D-50 messages for its own device ID (the basic channel less one, the MIDI Channel page); it answers
+with that ID. A faulty message shows its error on the screen (wrong format, checksum or address). Not yet: the system area, memory
+protect ([issue 51](https://github.com/mwedmark/fm1-d50/issues/51)).
 
 **For measuring** (`F0 7D 'S' 'F' 02 ... F7`, six bytes):
 
