@@ -292,8 +292,8 @@ The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps,
   keys; the Upper at start). CC82 follows K1 and CC81 K2.
 - With Lowr or Uppr (on a play screen) the D-50's stick sets the balances absolutely and linearly over 0..100, as CC81/CC82 do (0..127 over 0..100): those two follow the D-50. K1 and K2 are
   encoders without a position, so they step the balances from where they are; that is ours. The D-50 ignores a jump in the reading (0x30E7); MIDI CCs are taken as they come.
-- The FM-1 has no Local: its keys, K1-K4 and touch controls always play the engine, and CC 122 is not taken (`d50.h` has no Local). A Local off would matter only with
-  the FM-1's own MIDI out, which it does not send; nothing to follow here for now.
+- The FM-1 has no Local: its keys, K1-K4 and touch controls always play the engine, and CC 122 is not taken (`d50.h` has no Local). A Local off would matter only if
+  the FM-1 sent its keys and controls on MIDI, which it does not (it sends only SysEx answers); nothing to follow here for now.
 - The D-50's stick moves the balances only after Lowr or Uppr, and leaves them on a screen change or a patch change; at power-on it is in Valu. The FM-1's K1/K2 move them on the play
   screen at any time, and K4's Upper at start matches the D-50's power-on P1.3 (set: 0x3EB4 would take the upper). Kept as ours: the FM-1 has no Lcal/Valu.
 - Master Tune is 0..100, not 0..126 as PR #56 first had it: corrected (`d50_tune` 0..100, 50 = 440.0 Hz). Key Transpose's -12..+12 is confirmed.
