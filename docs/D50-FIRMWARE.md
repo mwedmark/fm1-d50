@@ -79,7 +79,22 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
   | any other | 0x4DC9 | the two controller numbers set on the MIDI page (bytes 0xC5CF + 0x40 and 0xC5D0): they run the 0x4E54 and 0x4E6E tables (the assignable "Control" targets) |
 
   This is the whole table: **the D-50 takes no controller for the tone or partial balance**, which fits `d50.h`'s list of what the engine implements (issue #4). CC81 and CC82 (#58) are ours.
-  The mode messages 0x78-0x7F and the all-notes-off are in the 0x4D3F table (not decoded here; the app's `d50_panic()` covers 120 and 123).
+- **The channel mode messages, 0x4D3F** (verified 2026-11-22): taken only on the basic channel (0xFE31.3, set by the channel test at 0x4B85), the number less 0x7A indexes
+  the table at 0x4D4C. **CC 120 (All Sound Off) and 121 (Reset All Controllers) are not mode messages to the D-50** (they came later in the MIDI specification): below
+  0x7A they go to the table above and, not in it, to the assignable controllers. 0xFE34.0 is the mono mode, 0xFE34.1 "poly received", 0xC5CB bit 0 omni (system byte 11).
+
+  | CC | handler | what the D-50 does |
+  | --- | --- | --- |
+  | 122 Local Control | 0x4EA5 | Local (below) |
+  | 123 All Notes Off | 0x4E8A | only with value 0, **omni off** and not mono, and not while P0.1 is set (an input, not decoded): the voices' notes off (0x6108, 8 voices at 0xC300, and 0x60E6). **With omni on it is ignored**, as Roland's instruments of the time did |
+  | 124 Omni Off | 0x4F5A | value 0: omni off (0xC5CB = 0, which the MIDI-1 page shows); in mono 0x613B and 0x4F7E; then 0x4F92: all notes off (0x5CAD, 0x5CC1), the controllers again (0x327D), and the voices set up for the patch's key mode (0xC592: 0 and 4 one way, 0x60D5/0x613B/0x2396, the others 0x60F7, then 0x6119). Already off: only the notes off (0x4FBC) |
+  | 125 Omni On | 0x4F39 | value 0: omni on (0xC5CB = 1), then as 124; already on: the notes off |
+  | 126 Mono | 0x4EDF | ignored when system byte 14 bit 1 is set (0xC5CE); the value (0..16, checked by 0x4F15; how it becomes a channel count is not fully decoded) to 0xFE42, mono on; with omni on, notes off only |
+  | 127 Poly | 0x4EAC | value 0, not with system byte 14 bit 1; poly (0xFE34.1), mono off, with omni off 0xFE42 = 0; then as 124 |
+
+  Every mode message ends with the notes off, as the MIDI specification asks. System byte 14 (range 0..2) is not named yet: its bit 1 shuts out Mono and Poly, its bit 0
+  makes 0x4F7E set 0xFE60/0xFE62 to 0xFFFF.
+  The FM-1 (`app.c`) takes 120 and 123 as `d50_panic()` (all voices off, in any omni), and ignores 122 and 124-127; its omni is the MIDI page's setting (#51).
 
 ## The SysEx parser (verified in the listing, 2026-11-22)
 
@@ -303,7 +318,7 @@ The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps,
 First recursive descent from reset, the vectors and the two tables: 6 122 instructions in 367 functions, about 14.8 KB of the 56 KB above 0x2000/0x80 that are code and data
 together. The rest is reached by indirect jumps and by handlers installed into the RAM vectors at run time, which the descent does not follow. To do, in this order:
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
-2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122), the mode messages 123-127 (0x4D4C), the reverb data's
+2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 123-127 are done, mono's voice use and system byte 14 not), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
 3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) (Done: 0x3EB4 is parameter
    0x66's access routine, Lowr/Uppr choose X's tone; 0xFE47/0xFE3F are LCD refresh requests.) (Done: power-on is Valu, 01.)
