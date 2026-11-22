@@ -147,7 +147,7 @@ SysEx addresses as one number, `a2 << 14 | a1 << 7 | a0` (so 00 03 40 is 0x1C0),
   | 5 | 0x52CF | Bulk Dump.O (one-way) | DT1s of 256 bytes from 02 00 00, the whole memory, 0x545A between them (not decoded: a pause, by its place) |
   | 6 | 0x54DE | Bulk Load.O (one-way) | nothing: takes DT1s in order from 02 00 00 |
 
-  Both end on screen 0x2B (the message that it is done), or 0x29/0x2C for a fault. The templates after 0x6DE3 are ERR and RJC (`F0 41 dev 14 4E F7`, `4F F7`) and the
+  Both end on screen 0x2B (the message that it is done), or for a fault back on 0x29 (the Data Transfer menu, which the Tran key 0x1B shows: 0x4881) or 0x2C. The templates after 0x6DE3 are ERR and RJC (`F0 41 dev 14 4E F7`, `4F F7`) and the
   all-notes-off `B0 7B 00`.
 
 ### Against the engine's `d50_sysex` (issues #6, #51)
@@ -189,15 +189,32 @@ D-50 (#58): a byte of the temporary area above its maximum is skipped, wherever 
   | 0xC000 | 0x3248 | - | the data entry slider (by elimination: the eighth input, not on the test pages) |
 
 - **What the stick moves.** The firmware edits parameters through 6-byte descriptors: +0 the parameter number, +1 its stored value, +2 its maximum, +3 the current value, +5 the value the
-  stick moves from. **Stick-X uses the descriptor at 0xC0B6, Stick-Y the one at 0xC0BC.** On the play screens (0x496A and 0x49A1, taken when 0xFE45, the screen number, is below 0x28 except
-  3, 0x0A and 0x0B) they are given:
-  - **Stick-X: parameter 0x66 = tone common byte 47, the partial balance.** The tone is the one the panel has selected (0xFE54.6 picks 0xC400, the upper, or 0xC4C0, the lower: 0x3B9C).
+  stick moves from. **Stick-X uses the descriptor at 0xC0B6, Stick-Y the one at 0xC0BC.** What they point at is set by panel keys (below): with the balance on, they are given
+  - **Stick-X: parameter 0x66 = tone common byte 47, the partial balance.** The tone is the one the panel has selected (0xFE54.6 picks 0xC400, the upper, or 0xC4C0, the lower: 0x3B9C;
+    the partial-select keys set it, 0x4650: the first two the lower, the last two the upper).
   - **Stick-Y: parameter 0x8A = patch byte 33, the tone balance.**
-  Another screen (0x4865) points Stick-X at parameter 0xA3 (system byte 17, Key Transpose) and switches Stick-Y off (0xFF).
-- **How it moves them** (verified 2026-11-22; this corrects the first reading, which had the play screens' stick relative). Two ways, chosen per screen by P1.3 and P1.4, which
-  the firmware uses as two flag bits: 0x4AC5, 0x4AC9, 0x4AD0 and 0x4AD7 set them to 00, 01, 10, 11, and each screen's script calls one (the screen scripts are bytecode: `28 lo hi`
-  calls a routine, `0C F8 B6 C0 B9 66` gives the descriptor at 0xC0B6 parameter 0x66). **Both play screens' scripts (0x496A, 0x49A1) set P1.4** (0x4AD0 and 0x4AD7) before
-  pointing X at 0x66 and Y at 0x8A.
+  The key at 0x4865 points Stick-X at parameter 0xA3 (system byte 17, Key Transpose), shows screen 0x32 and switches Stick-Y off (0xFF).
+- **The keys, and P1.3/P1.4** (verified 2026-11-22). The panel's key codes are dispatched at 0x4590 by range: 0x00-0x07 0x460F, 0x08-0x0F 0x466C, 0x10-0x16 0x45D0, 0x18-0x1F and
+  0x2C-0x3A through the table at 0x6BFE (0x45C9: code less 0x18, or less 0x28), 0x20-0x23 0x4726, 0x24 0x45F5, 0x25-0x27 0x472D, 0x29-0x2B 0x4731. The test mode's key names
+  (a 4-character table from "Bnk1" at 0x6AC4, by code: "Hit any key") name them: 0x00-0x07 Bnk1-8, 0x08-0x0F Nmb1-8, 0x10 `<-`, 0x11 Keym, 0x12 Splt, 0x13 Bal, 0x14 Lton,
+  0x15 Uton, 0x16 `->`, 0x18 Dec, 0x19 Inc, 0x1A Writ, 0x1B Tran, 0x1C Exit, 0x1D Undo, 0x1E Copy, 0x1F Rcal, 0x20-0x2B the number pad (0..9, Entr, Sift), 0x30 Tune, 0x31 MIDI,
+  0x32 Intr, 0x33 Card, **0x34 Lcal, 0x35 Valu, 0x36 Lowr, 0x37 Uppr**, 0x38 Tran, 0x39 Case (Chase), 0x3A Prta.
+  **P1.3 and P1.4 hold which of the four keys 0x34-0x37 was pressed last**: 0x4AC5, 0x4AC9, 0x4AD0 and 0x4AD7 set them to 00, 01, 10, 11, and 0x43DD restores them by the
+  same table (0x43ED) from the last key (0xFE57). They are port pins, so they probably also light the four keys' indicators through a decoder (the boot code at 0x0237-0x042E
+  steps them through all four states during its tests); that is not established. What the code does with them:
+
+  | key | handler | P1.4 P1.3 | the stick |
+  | --- | --- | --- | --- |
+  | 0x34 Lcal | 0x4919 | 0 0 | relative (0x3083), both axes, on what the screen gave them; coming from Lowr/Uppr both are switched off (0xFF), from Valu the start is the current value |
+  | 0x35 Valu | 0x4949 | 0 1 | X absolute on what the screen gave it, Y off; coming from Lowr/Uppr both are switched off |
+  | 0x36 Lowr | 0x496A | 1 0 | the balances, absolute: X 0x66, Y 0x8A |
+  | 0x37 Uppr | 0x49A1 | 1 1 | the same, and 0xFE47 bits 6-7 and 0xFE3F (0xFF) set: not decoded |
+
+  Lowr and Uppr are taken only on the play screens (0x498A: screen 0xFE45 below 0x28, not 3, 0x0A or 0x0B). P1.3 is read once more, at 0x3EB4: a display routine that prints the
+  upper tone's partial balance (0xC4AF) with P1.3 set and the lower's (0xC56F) without, while the stick's write goes by 0xFE54.6: how the two meet is not established. (The
+  other P1 tests the first sweep listed, 0x1562, 0x4014 and 0x466D, are misaligned decodes inside other instructions.) The routines at 0x4919..0x49C4 are ordinary code; the
+  "screen scripts" the first reading saw were those bytes decoded from a wrong start.
+- **How it moves them** (verified 2026-11-22; this corrects the first reading, which had the play screens' stick relative). Two ways, by P1.3 and P1.4:
   - **Reading** (0x335A): the new average is averaged again with the last value taken, and a change of less than 2 (of 0..255) is ignored. 0x3346 then trims the ends: less 4
     (0 below), times 33/32, 255 at most, so the stick's full value is reached about 4 short of each end.
   - **Catching** (0x30E7): while the stick is not in use (0xFE54.3 clear, or 0xFE47.2 set) the reading is only tracked. In use, a first movement is taken only when it is small
@@ -213,8 +230,8 @@ D-50 (#58): a byte of the temporary area above its maximum is skipped, wherever 
     | 99 | 0x3159 | reading / 2, then 0x418C: v - v·57/256 (to 0..99) |
     | any other | 0x3120 | the reading in max + 1 equal steps of 256 / (max + 1), centred (less half the remainder), at most max; a change is taken only when it is more than half a step (a quarter for a step of 128 and up): hysteresis |
 
-    **So on the play screens the stick sets the balances directly and linearly: 0 at one end, about 50 in the middle, 100 at the other**, whatever the patch had.
-  - **Relative, 0x3083**: neither bit set and a maximum of 16 or more (the screen at 0x4918, P1 00: an edit screen). The max is halved, the reading quantised by 0x3120 into
+    **So with Lowr or Uppr the stick sets the balances directly and linearly: 0 at one end, about 50 in the middle, 100 at the other**, whatever the patch had.
+  - **Relative, 0x3083**: neither bit set (Lcal) and a maximum of 16 or more. The max is halved, the reading quantised by 0x3120 into
     max/2 + 1 steps, and the step less max/4 added to the descriptor's starting value (+5), clamped to 0..max: the stick moves the parameter by up to a quarter of its range
     either way from where it was. The start is set when the screen gives the descriptor (0x3FE8: +1, +3, +5 from the parameter), and, with P1.3 set and P1.4 not, from the
     current value (0x4930); after each store with either bit set (0x3B60).
@@ -239,7 +256,7 @@ Prog.C, Exclu, ...: 0xC5C3-0xC5CC, as the parser tests them), 13: 15 (the basic 
 - The D-50's stick: **X = partial balance (of the selected tone), Y = tone balance.** #43 had K1 as the tone balance and K2 as the partial balance of both tones; the
   maintainer chose to follow the D-50 (#58): **K1 is now X (the selected tone's partial balance), K2 Y (the tone balance), and K4 selects the tone** (the D-50's UPPER/LOWER
   keys; the Upper at start). CC82 follows K1 and CC81 K2.
-- On the play screens the D-50's stick sets the balances absolutely and linearly over 0..100, as CC81/CC82 do (0..127 over 0..100): those two follow the D-50. K1 and K2 are
+- With Lowr or Uppr (on a play screen) the D-50's stick sets the balances absolutely and linearly over 0..100, as CC81/CC82 do (0..127 over 0..100): those two follow the D-50. K1 and K2 are
   encoders without a position, so they step the balances from where they are; that is ours. The D-50 ignores a jump in the reading (0x30E7); MIDI CCs are taken as they come.
 - Master Tune is 0..100, not 0..126 as PR #56 first had it: corrected (`d50_tune` 0..100, 50 = 440.0 Hz). Key Transpose's -12..+12 is confirmed.
 
@@ -250,7 +267,8 @@ together. The rest is reached by indirect jumps and by handlers installed into t
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
 2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
-3. (Done: the A/D path, the stick's targets, the table at 0x3114 and P1.3/P1.4 as per-screen flags.) Still open: what else P1.3/P1.4 change (0x1562, 0x3EB7, 0x4014,
-   0x495F), the difference between the two play screens (P1 10 and 11), and decoding the screen scripts' bytecode as a whole.
+3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) Still open: what Uppr's
+   0xFE47/0xFE3F do, how 0x3EB4's P1.3 (upper or lower shown) meets 0xFE54.6 (upper or lower written), whether P1.3/P1.4 drive indicators, and what the four key names
+   mean on the real panel (to check against the owner's manual).
 4. The function menu and the tune/transpose parameters: ranges and steps (issue #57).
 5. Name things: write `tools/d50_dasm/names.txt` (address, name) and have analyze.py use it, so the listing becomes readable.
