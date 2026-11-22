@@ -180,7 +180,7 @@ static void lcd_message(const char *a, const char *b)
 
 /* The edit pages (issue #31, the first of #8): the firmware's title (16 characters, 0xF940 on) above its parameters line, each value in the
  * template's three $ columns from a byte of the patch block. The title line's layout (the patch number at the right) is ours. */
-enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGES };
+enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGES, LCD_PAGE_TUNE = LCD_PAGES };   /* (the tune page is SEL's, not EDIT's: #54) */
 enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE };     /* the value; the value + 1; the chase mode's name */
 typedef struct {
     uint8_t byte, lo, hi, col, show;                      /* the patch block's byte, its range, its column on the lower line, how shown */
@@ -225,6 +225,27 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
             lcd_put(1, f->col, t, 3);
         }
     }
+}
+
+/* The TUNE/FUNCTION page (issue #54, SEL): the firmware's Master Tune and Key Transpose lines (0x7515 on), the tune 0..126 as 427.5 .. 452.6 Hz */
+static void lcd_tune_screen(uint32_t tune, int32_t transpose)
+{
+    char t[8];
+    uint32_t hz = 4275u + tune * 251u / 126u, a = (uint32_t)(transpose < 0 ? -transpose : transpose);
+    lcd_clear();
+    lcd_put(0, 0, "Master Tune", LCD_COLS);
+    t[0] = (char)('0' + hz / 1000u);
+    t[1] = (char)('0' + hz / 100u % 10u);
+    t[2] = (char)('0' + hz / 10u % 10u);
+    t[3] = '.';
+    t[4] = (char)('0' + hz % 10u);
+    lcd_put(0, 16, t, 5);
+    lcd_put(0, 22, "Hz", 2);
+    lcd_put(1, 0, "Key Transpose =", LCD_COLS);
+    t[0] = transpose < 0 ? '-' : transpose > 0 ? '+' : ' ';
+    t[1] = a >= 10u ? (char)('0' + a / 10u) : ' ';
+    t[2] = (char)('0' + a % 10u);
+    lcd_put(1, 16, t, 3);
 }
 
 /* The LCD's height in pixels for a dot pitch (a dot's height in pixels): a margin of glass, the two lines of 8 dot rows each with a pitch

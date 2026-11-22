@@ -58,6 +58,7 @@ The view and the colour are saved with SAVE.
 | K1 | The joystick's tone balance: the Upper against the Lower tone (the LCD's Bal) |
 | K2 | The joystick's partial balance: partial 1 against partial 2, in both tones |
 | K3 | The LCD's dot height (true-size view) |
+| SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz, 440.0 at start), K2 Key Transpose (−12 to +12). Not kept over a power cycle |
 | SAVE | Saves the patch, bank, octave, view and colour |
 
 The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.

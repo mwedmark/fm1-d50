@@ -120,12 +120,15 @@ d5::Patch::Split split;
 unsigned guard_hold, guard_calm;
 int guard_cap = 16;
 
-enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kQueue = 64 };
+enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kEvTune = 6, kEvTranspose = 7, kQueue = 64 };
 constexpr unsigned kChaseCc = 80;                // Chase Play on (>= 64) or off: ours, the D-50 has no CC for it (issue #18)
 
 // The controllers' state, the audio interrupt's (d50_render's events): what a program change keeps (the lever, the pressure, CC7: the
 // voices' and the patch's live controls) and what it resets to the new patch's (the bender range, the portamento). Issue #4.
 struct Controls {
+    int tune = 63;                               // Master Tune, 0..126 (427.5 .. 452.6 Hz, 63 = 440.0), issue #54
+    int transpose = 0;                           // Key Transpose, -12..12 semitones (issue #54)
+    uint8_t sounded[128] = {};                   // the note a key's note-on sounded (its note-off ends that one, whatever the transpose is now)
     unsigned bend = 8192;                        // the last pitch bend, 0..16383
     int bend_range = -1;                         // RPN 0's semitones, -1: the patch's (pb26)
     unsigned rpn = 0x3FFF;                       // CC101 << 7 | CC100; 0x3FFF: none (RPN null)
@@ -319,6 +322,8 @@ extern "C" void d50_note(unsigned note, unsigned velocity) { push(kEvNote << 24 
 extern "C" void d50_bend(unsigned value) { push(kEvBend << 24 | (value & 16383U)); }
 extern "C" void d50_panic(void) { push(kEvPanic << 24); }
 extern "C" void d50_cc(unsigned cc, unsigned value) { push(kEvCc << 24 | (cc & 127U) << 8 | (value & 127U)); }
+extern "C" void d50_tune(unsigned value) { push(kEvTune << 24 | (value > 126U ? 126U : value)); }
+extern "C" void d50_transpose(int semitones) { push(kEvTranspose << 24 | static_cast<unsigned>(semitones < -12 ? -12 : semitones > 12 ? 12 : semitones) + 12U); }
 extern "C" void d50_pressure(unsigned value) { push(kEvPressure << 24 | (value & 127U)); }
 
 namespace {
@@ -331,7 +336,9 @@ void bit_set(uint32_t *set, int note, bool on)
 void apply_bend()
 {
     const int range = ctl.bend_range >= 0 ? ctl.bend_range : spec_at(spec_done & 1U).bend_range;
-    patch->set_bend_semis((static_cast<int>(ctl.bend) - 8192) * (static_cast<float>(range) / 8192.0f));
+    // (the master tune, 0.00795 semitone a step: 100.3 cents over the 126 steps)
+    patch->set_bend_semis((static_cast<int>(ctl.bend) - 8192) * (static_cast<float>(range) / 8192.0f) +
+                          static_cast<float>(ctl.tune - 63) * (1.0f / 126.0f) * 1.0029f);
 }
 void apply_volume() { patch->set_volume(spec_at(spec_done & 1U).volume * (static_cast<float>(ctl.volume) / 127.0f)); }
 // after configure (a new program, or the first): the new patch's own bender range and portamento; the volume, the bend and the
@@ -828,7 +835,13 @@ extern "C" void d50_render(int32_t *out, unsigned n)
         queue_tail = (queue_tail + 1U) % kQueue;
         switch (e >> 24) {
         case kEvNote: {
-            const int note = static_cast<int>((e >> 8) & 127U), velocity = static_cast<int>(e & 127U);
+            int note = static_cast<int>((e >> 8) & 127U);
+            const int velocity = static_cast<int>(e & 127U);
+            if (velocity) {                      // Key Transpose (issue #54): the note the key sounds, kept for its note-off
+                const int n = note + ctl.transpose;
+                ctl.sounded[note] = static_cast<uint8_t>(n < 0 ? 0 : n > 127 ? 127 : n);
+            }
+            note = ctl.sounded[note];
             bit_set(ctl.down, note, velocity != 0);
             if (velocity) {
                 bit_set(ctl.held, note, false);  // (struck again under the pedal: the new note is the one held now)
@@ -841,6 +854,8 @@ extern "C" void d50_render(int32_t *out, unsigned n)
             }
             break;
         }
+        case kEvTune: ctl.tune = static_cast<int>(e & 127U); apply_bend(); break;
+        case kEvTranspose: ctl.transpose = static_cast<int>(e & 127U) - 12; break;
         case kEvBend: ctl.bend = e & 16383U; apply_bend(); break;
         case kEvCc: control((e >> 8) & 127U, e & 127U); break;
         case kEvPressure: patch->set_aftertouch(static_cast<float>(e & 127U) / 127.0f); break;

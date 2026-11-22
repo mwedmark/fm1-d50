@@ -285,6 +285,7 @@ static int bound;                            /* the D-50's data found and the en
 void app_init(void)
 {
     settings_load();
+    ui.tune = 63;                            /* Master Tune 440.0 Hz, Key Transpose 0 (#54) */
 #if FM1_CPU1
     plat_cpu2_set(1);                        /* the second core renders every second sounding voice (d50.cpp split_begin); else one core */
 #endif
@@ -304,6 +305,8 @@ static struct {
     uint8_t lcd_msg;                             /* the message in the LCD (#25): 0 the panel's, LCD_MSG_COMPLETE, LCD_MSG_ERROR | its number */
     uint8_t home_long;                         /* HOME held long enough to have changed the LCD's colours (this press) */
     uint32_t home_ms;                            /* when HOME was pressed */
+    uint8_t tune;                                /* Master Tune 0..126 (#54), 63 = 440.0 Hz; not kept over a power cycle */
+    int8_t transpose;                            /* Key Transpose -12..12 (#54) */
     uint8_t page;                                /* the edit page (#31): d50_lcd.h LCD_PAGE_*, LCD_PAGE_PLAY none */
 } ui;
 #include "d50_lcd.h"
@@ -477,7 +480,9 @@ static void input(void)
             plat_unlock(f);
             app_say("CHASE", on ? "ON" : "OFF");
         } else if (k == B_EDIT && bound) {       /* the edit pages in turn, then the play screen (#31) */
-            ui.page = (uint8_t)((ui.page + 1u) % LCD_PAGES);
+            ui.page = ui.page == LCD_PAGE_TUNE ? LCD_PAGE_PLAY : (uint8_t)((ui.page + 1u) % LCD_PAGES);
+        } else if (k == B_SEL && bound) {        /* the TUNE/FUNCTION page, and back to the play screen (#54) */
+            ui.page = ui.page == LCD_PAGE_TUNE ? LCD_PAGE_PLAY : LCD_PAGE_TUNE;
         } else if (k == B_HOME) {                /* (on its release, or after HOME_LONG_MS held: below) */
             ui.home_ms = plat_ms();
             ui.home_long = 0;
@@ -505,7 +510,18 @@ static void input(void)
         set_dirty = 1;
         ui.redraw = 1;
     }
-    if (ui.page != LCD_PAGE_PLAY) {              /* K1..K4: an edit page's parameters, left to right */
+    if (ui.page == LCD_PAGE_TUNE) {              /* K1 Master Tune, K2 Key Transpose (#54) */
+        if ((e = plat_enc(EN_K1)) != 0) {
+            ui.tune = (uint8_t)clamp((int32_t)ui.tune + e, 0, 126);
+            d50_tune(ui.tune);
+            ui.redraw = 1;
+        }
+        if ((e = plat_enc(EN_K2)) != 0) {
+            ui.transpose = (int8_t)clamp((int32_t)ui.transpose + e, -12, 12);
+            d50_transpose(ui.transpose);
+            ui.redraw = 1;
+        }
+    } else if (ui.page != LCD_PAGE_PLAY) {       /* K1..K4: an edit page's parameters, left to right */
         static const uint8_t knob[4] = {EN_K1, EN_K2, EN_K3, EN_K4};
         for (k = 0; k < 4u; k++)
             if ((e = plat_enc(knob[k])) != 0)
@@ -570,6 +586,8 @@ static void draw(void)
         lcd_scheme = lcd_scheme_of();
         if (!pb)
             lcd_clear();
+        else if (ui.page == LCD_PAGE_TUNE)
+            lcd_tune_screen(ui.tune, ui.transpose);
         else if (ui.page != LCD_PAGE_PLAY)
             lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb);
         else
