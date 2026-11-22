@@ -197,12 +197,18 @@ D-50 (#58): a byte of the temporary area above its maximum is skipped, wherever 
   The key at 0x4865 points Stick-X at parameter 0xA3 (system byte 17, Key Transpose), shows screen 0x32 and switches Stick-Y off (0xFF).
 - **The keys, and P1.3/P1.4** (verified 2026-11-22). The panel's key codes are dispatched at 0x4590 by range: 0x00-0x07 0x460F, 0x08-0x0F 0x466C, 0x10-0x16 0x45D0, 0x18-0x1F and
   0x2C-0x3A through the table at 0x6BFE (0x45C9: code less 0x18, or less 0x28), 0x20-0x23 0x4726, 0x24 0x45F5, 0x25-0x27 0x472D, 0x29-0x2B 0x4731. The test mode's key names
-  (a 4-character table from "Bnk1" at 0x6AC4, by code: "Hit any key") name them: 0x00-0x07 Bnk1-8, 0x08-0x0F Nmb1-8, 0x10 `<-`, 0x11 Keym, 0x12 Splt, 0x13 Bal, 0x14 Lton,
+  (a 4-character table from "Bnk1" at 0x6AC5, by code: "Hit any key") name them: 0x00-0x07 Bnk1-8, 0x08-0x0F Nmb1-8, 0x10 `<-`, 0x11 Keym, 0x12 Splt, 0x13 Bal, 0x14 Lton,
   0x15 Uton, 0x16 `->`, 0x18 Dec, 0x19 Inc, 0x1A Writ, 0x1B Tran, 0x1C Exit, 0x1D Undo, 0x1E Copy, 0x1F Rcal, 0x20-0x2B the number pad (0..9, Entr, Sift), 0x30 Tune, 0x31 MIDI,
   0x32 Intr, 0x33 Card, **0x34 Lcal, 0x35 Valu, 0x36 Lowr, 0x37 Uppr**, 0x38 Tran, 0x39 Case (Chase), 0x3A Prta.
-  **P1.3 and P1.4 hold which of the four keys 0x34-0x37 was pressed last**: 0x4AC5, 0x4AC9, 0x4AD0 and 0x4AD7 set them to 00, 01, 10, 11, and 0x43DD restores them by the
-  same table (0x43ED) from the last key (0xFE57). They are port pins, so they probably also light the four keys' indicators through a decoder (the boot code at 0x0237-0x042E
-  steps them through all four states during its tests); that is not established. What the code does with them:
+  **P1.3 and P1.4 hold which of the four keys 0x34-0x37 was pressed last**: 0x4AC5, 0x4AC9, 0x4AD0 and 0x4AD7 set them to 00, 01, 10, 11. They are
+  outputs (start-up's `MOV PM1,#60H` at 0x221F makes only P1.5 and P1.6 inputs), and they very likely light the four keys' indicators through a decoder: the test mode's
+  "Hit any key" (0x43C5, screen 0x3C) prints the pressed key's name and, for 0x34-0x37, sets P1.3/P1.4 by the same table (0x43ED: code less 0x34), and the boot code at
+  0x0237-0x042E steps them through all four states during its tests. The schematic would settle it.
+  **At power-on they are 01, Valu**: start-up's 0x22A7 (from 0x20EC) clears the run-time state and writes `MOV P1,#08H` (0x22C0), every start, whatever was set before.
+  No stick descriptor is given a parameter then, and a screen change (0x345C) clears 0xFE54.3, so **after power-on the stick does nothing on the play screen until Lowr or Uppr
+  is pressed**; on a screen that gives the descriptor a parameter it sets that value (Valu). Two more paths leave Lowr/Uppr: every screen change runs 0x495F (with P1.4 set:
+  P1 to 01, Valu), so leaving the play screen ends the balance mode, and the key at 0x4737 (Copy, 0x1E, by the table) calls Valu's handler. (Whether a patch change counts as a screen change here, ending the balance mode, is
+  not checked.) What the code does with them:
 
   | key | handler | P1.4 P1.3 | the stick |
   | --- | --- | --- | --- |
@@ -272,6 +278,8 @@ Prog.C, Exclu, ...: 0xC5C3-0xC5CC, as the parser tests them), 13: 15 (the basic 
   keys; the Upper at start). CC82 follows K1 and CC81 K2.
 - With Lowr or Uppr (on a play screen) the D-50's stick sets the balances absolutely and linearly over 0..100, as CC81/CC82 do (0..127 over 0..100): those two follow the D-50. K1 and K2 are
   encoders without a position, so they step the balances from where they are; that is ours. The D-50 ignores a jump in the reading (0x30E7); MIDI CCs are taken as they come.
+- The D-50's stick moves the balances only after Lowr or Uppr, and leaves them on a screen change; at power-on it is in Valu. The FM-1's K1/K2 move them on the play
+  screen at any time, and K4's Upper at start matches the D-50's power-on P1.3 (set: 0x3EB4 would take the upper). Kept as ours: the FM-1 has no Lcal/Valu.
 - Master Tune is 0..100, not 0..126 as PR #56 first had it: corrected (`d50_tune` 0..100, 50 = 440.0 Hz). Key Transpose's -12..+12 is confirmed.
 
 ## Coverage and what is next
@@ -282,7 +290,7 @@ together. The rest is reached by indirect jumps and by handlers installed into t
 2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
 3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) (Done: 0x3EB4 is parameter
-   0x66's access routine, Lowr/Uppr choose X's tone; 0xFE47/0xFE3F are LCD refresh requests.) Still open: whether P1.3/P1.4 drive indicators, which state they start in after
-   power-on, and what the four key names mean on the real panel (to check against the owner's manual).
+   0x66's access routine, Lowr/Uppr choose X's tone; 0xFE47/0xFE3F are LCD refresh requests.) (Done: power-on is Valu, 01.)
+   Still open: whether P1.3/P1.4 drive indicators (the schematic), and what the four key names mean on the real panel (to check against the owner's manual).
 4. The function menu and the tune/transpose parameters: ranges and steps (issue #57).
 5. Name things: write `tools/d50_dasm/names.txt` (address, name) and have analyze.py use it, so the listing becomes readable.
