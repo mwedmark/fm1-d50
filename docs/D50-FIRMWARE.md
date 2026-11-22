@@ -190,8 +190,9 @@ D-50 (#58): a byte of the temporary area above its maximum is skipped, wherever 
 
 - **What the stick moves.** The firmware edits parameters through 6-byte descriptors: +0 the parameter number, +1 its stored value, +2 its maximum, +3 the current value, +5 the value the
   stick moves from. **Stick-X uses the descriptor at 0xC0B6, Stick-Y the one at 0xC0BC.** What they point at is set by panel keys (below): with the balance on, they are given
-  - **Stick-X: parameter 0x66 = tone common byte 47, the partial balance.** The tone is the one the panel has selected (0xFE54.6 picks 0xC400, the upper, or 0xC4C0, the lower: 0x3B9C;
-    the partial-select keys set it, 0x4650: the first two the lower, the last two the upper).
+  - **Stick-X: parameter 0x66 = tone common byte 47, the partial balance, of the tone the Lowr or Uppr key chose** (P1.3: 0x3EB4, below). A tone common parameter's
+    RAM is otherwise the edited tone's (0xFE54.6 picks 0xC400, the upper, or 0xC4C0, the lower: 0x3B9C; the partial-select keys set it, 0x4650: the first two the lower, the
+    last two the upper), but 0x66 has its own access routine that overrides it.
   - **Stick-Y: parameter 0x8A = patch byte 33, the tone balance.**
   The key at 0x4865 points Stick-X at parameter 0xA3 (system byte 17, Key Transpose), shows screen 0x32 and switches Stick-Y off (0xFF).
 - **The keys, and P1.3/P1.4** (verified 2026-11-22). The panel's key codes are dispatched at 0x4590 by range: 0x00-0x07 0x460F, 0x08-0x0F 0x466C, 0x10-0x16 0x45D0, 0x18-0x1F and
@@ -207,17 +208,30 @@ D-50 (#58): a byte of the temporary area above its maximum is skipped, wherever 
   | --- | --- | --- | --- |
   | 0x34 Lcal | 0x4919 | 0 0 | relative (0x3083), both axes, on what the screen gave them; coming from Lowr/Uppr both are switched off (0xFF), from Valu the start is the current value |
   | 0x35 Valu | 0x4949 | 0 1 | X absolute on what the screen gave it, Y off; coming from Lowr/Uppr both are switched off |
-  | 0x36 Lowr | 0x496A | 1 0 | the balances, absolute: X 0x66, Y 0x8A |
-  | 0x37 Uppr | 0x49A1 | 1 1 | the same, and 0xFE47 bits 6-7 and 0xFE3F (0xFF) set: not decoded |
+  | 0x36 Lowr | 0x496A | 1 0 | the balances, absolute: X the **lower** tone's partial balance, Y the tone balance |
+  | 0x37 Uppr | 0x49A1 | 1 1 | the same with X the **upper** tone's partial balance |
 
-  Lowr and Uppr are taken only on the play screens (0x498A: screen 0xFE45 below 0x28, not 3, 0x0A or 0x0B). P1.3 is read once more, at 0x3EB4: a display routine that prints the
-  upper tone's partial balance (0xC4AF) with P1.3 set and the lower's (0xC56F) without, while the stick's write goes by 0xFE54.6: how the two meet is not established. (The
+  Lowr and Uppr are taken only on the play screens (0x498A: screen 0xFE45 below 0x28, not 3, 0x0A or 0x0B), and both end at 0x49BE (Lowr branches there): `OR 0FE47H,#0C0H`,
+  `MOV 0FE3FH,#0FFH`, which redraw both LCD lines and drop the field position (0xFE47 below). They differ only in P1.3.
+- **Each parameter's access routine** (0x3C4F). A table at 0x79BC gives every parameter number a type (+4 of the descriptor). Below 0x3C the type picks a routine from
+  the table at 0x3C7C; 0x3C-0x4F go to 0x3CAA (a second table by type, at 0x3CC8), 0x50 and up to 0x3D42. Each routine finds the parameter's RAM byte (DE) and either loads
+  the descriptor from it (0x3FE8, when 0xFE54.5 is clear) or stores the descriptor's value into it and sends it on (0x3C9A, 0xFE54.5 set: 0x5595). Two have a type of their own:
+  - **0x66, type 6, 0x3EB4: the upper tone's common byte 47 (0xC4AF) when P1.3 is set, the lower's (0xC56F) when clear.** So the stick's X moves the partial balance of
+    the tone the last of Lowr/Uppr chose, whatever tone is being edited.
+  - 0x8A, type 7, 0x3EC1: patch byte 33 (0xC5A1); on screen 0 it also redraws the play screen's balance (0x41E6, at column 0x3C: the `Bal` field).
+  Types 0x00 (parameters 0x10, 0x25, 0x36, 0x65, 0x67, 0x68, 0x90, 0x91, 0xA4-0xA7) and the rest are not decoded here.
+- **0xFE47, the LCD's refresh requests**, served by 0x2619 in the main loop (when 0xFE36.2 is set): bit 7 writes the upper line from the screen buffer (0xC030, 40
+  characters, LCD address 0x80), bit 6 the lower (0xC058, 0xC0); bits 4 and 3 write a message's two lines (pointers 0xFE26 and 0xFE28: 0x4104 sets bits 4, 3, 2), bit 2 keeps it
+  up until 0xFE55's low nibble reaches 0x0F (a timer, by its use) and then redraws both lines; bit 1 rewrites one field at buffer position **0xFE3F** (0..0x27 the upper line,
+  0x28..0x4F the lower; 0xFF none); bit 5 0x26C5 (not decoded). **While a message is up (bit 2) the stick is only tracked** (0x30EB).
+
+  (The
   other P1 tests the first sweep listed, 0x1562, 0x4014 and 0x466D, are misaligned decodes inside other instructions.) The routines at 0x4919..0x49C4 are ordinary code; the
   "screen scripts" the first reading saw were those bytes decoded from a wrong start.
 - **How it moves them** (verified 2026-11-22; this corrects the first reading, which had the play screens' stick relative). Two ways, by P1.3 and P1.4:
   - **Reading** (0x335A): the new average is averaged again with the last value taken, and a change of less than 2 (of 0..255) is ignored. 0x3346 then trims the ends: less 4
     (0 below), times 33/32, 255 at most, so the stick's full value is reached about 4 short of each end.
-  - **Catching** (0x30E7): while the stick is not in use (0xFE54.3 clear, or 0xFE47.2 set) the reading is only tracked. In use, a first movement is taken only when it is small
+  - **Catching** (0x30E7): while the stick is not in use (0xFE54.3 clear, or 0xFE47.2 set: a message on the LCD) the reading is only tracked. In use, a first movement is taken only when it is small
     (less than 4) or at an end (below 8 or 0xF7 and up); once a value has changed (0xFE55.5) every movement is taken. A jump in the reading does not move the parameter.
   - **Absolute, 0x30BD**: X with P1.3 or P1.4 set, Y with P1.4 set (Y is off with only P1.3), or any parameter with a maximum below 16. The value is the stick's position over
     the parameter's range, through **the table at 0x3114**, which is not a curve but a dispatch: `03 7F 64 63` (3 keys: the maxima 127, 100, 99) and four routines, found by
@@ -267,8 +281,8 @@ together. The rest is reached by indirect jumps and by handlers installed into t
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
 2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
-3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) Still open: what Uppr's
-   0xFE47/0xFE3F do, how 0x3EB4's P1.3 (upper or lower shown) meets 0xFE54.6 (upper or lower written), whether P1.3/P1.4 drive indicators, and what the four key names
-   mean on the real panel (to check against the owner's manual).
+3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) (Done: 0x3EB4 is parameter
+   0x66's access routine, Lowr/Uppr choose X's tone; 0xFE47/0xFE3F are LCD refresh requests.) Still open: whether P1.3/P1.4 drive indicators, which state they start in after
+   power-on, and what the four key names mean on the real panel (to check against the owner's manual).
 4. The function menu and the tune/transpose parameters: ranges and steps (issue #57).
 5. Name things: write `tools/d50_dasm/names.txt` (address, name) and have analyze.py use it, so the listing becomes readable.
