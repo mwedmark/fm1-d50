@@ -6,7 +6,7 @@
 
 #define APP_NAME "D-50"
 #define APP_SPLASH_RGB RGB(40, 90, 200)
-#define APP_BLOCK 128u                   /* frames per audio block: 2.9 ms at 44.1 kHz, as the fm1_open build's */
+#define APP_BLOCK 128u                   /* frames per audio block: 2.9 ms at 44.1 kHz */
 #define APP_TOUCH                        /* velocity from the keys (lib/touch.h; fm1.toml input_hz = 10000, as it was measured at) */
 
 /* the store: the settings (octave, bank, program) and the panel's calibration (the platform's). The data area holds the D-50's data from
@@ -29,7 +29,7 @@ void app_backup_flush(void);
 void app_backup_hold(int on);
 void app_backup_restored(void);
 
-/* the time per block (d50.cpp FM1_D50_PROF), as fm1_open's sf2_upload.c answers it: F0 7D S F 02 0B 00 F7 and 0C bits F7 */
+/* the time per block (d50.cpp FM1_D50_PROF), app.c app_sysex: F0 7D S F 02 0B 00 F7 and 0C bits F7 */
 #define APP_SYSEX
 int app_sysex(const uint8_t *p, uint32_t n);
 

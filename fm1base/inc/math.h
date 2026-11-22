@@ -11,7 +11,7 @@ extern "C" {
 #define D50_MATH_FN static inline __attribute__((always_inline))
 #define D50_MATH_HELPER static inline __attribute__((always_inline))
 #define D50_MATH_LOCAL static inline __attribute__((always_inline))
-#include "../../fm1_open/app/d50/d50_math.c"
+#include "../../d50/d50_math.c"
 static inline __attribute__((always_inline)) float fabsf(float x) { union { float f; uint32_t u; } v; v.f = x; v.u &= 0x7FFFFFFFu; return v.f; }
 #else
 float exp2f(float x);

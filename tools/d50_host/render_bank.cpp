@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Renders patches of the bank in an .fmd5 file (tools/d50_pack.js --bank) through the PicoFaceD5 engine to one WAV, the way the FM-1 plays them:
-// the same unpacking (fm1_open/app/d50/d50_inflate.c) and patch_from_bytes. Each patch: a C major chord, 2.5 s held and 1.5 s of release, at 32 kHz.
+// the same unpacking (d50/d50_inflate.c) and patch_from_bytes. Each patch: a C major chord, 2.5 s held and 1.5 s of release, at 32 kHz.
 //
 //   render_bank <file.fmd5> <out.wav> [patch index 0..63 ...]     (no indices: all 64)
 //
@@ -57,7 +57,7 @@ int main(int argc, char **argv)
     static d5::Patch patch;
     static d5::PatchSpec spec;
 #ifdef D5_REVERB_EXTERNAL_POOL
-    // the two segments the FM-1 gives the reverb: the SDK's effect units around their state words (fm1_open/app/d50/d50.cpp)
+    // the two segments the FM-1 gives the reverb: the sizes of d50/d50.cpp's two segments
     static d5::ReverbSample seg0[12190], seg1[12206];
     patch.attach_reverb(seg0, 12190, seg1, 12206);
 #endif

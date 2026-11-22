@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* The D-50 on fm1-base: the panel, MIDI in, and the engine's 32 kHz stereo resampled to the platform's 44.1 kHz. The engine itself is
- * fm1_open/app/d50 (d50.h, d50.cpp's FM1_BASE part), compiled in d50_unit.cpp. Part of the platform's unity build (device/unity.c), after
+ * d50/ (d50.h, d50.cpp), compiled in d50_unit.cpp. Part of the platform's unity build (device/unity.c), after
  * the platform: gfx.c and announce.c are in scope. FM1-BASE.md. */
-#include "../fm1_open/app/d50/d50.h"
+#include "../d50/d50.h"
 
 #define SET_MAGIC 0x44353031u            /* "D501": the settings record */
 typedef struct {
@@ -24,10 +24,10 @@ static settings_t set;
 static uint8_t set_dirty;
 
 /* ------------------------------------------------------------------ the sound --- */
-/* The engine renders at 32 kHz; a block of APP_BLOCK output frames takes 92 or 93 of its frames, resampled here as fm1_open's sf2out.c does
- * (the same filter, resample_table.inc from tools/make_resampler.js): 16-bit samples, one array a channel, after the last RESAMPLE_TAPS
+/* The engine renders at 32 kHz; a block of APP_BLOCK output frames takes 92 or 93 of its frames, resampled here
+ * (d50/resample_table.inc from tools/make_resampler.js): 16-bit samples, one array a channel, after the last RESAMPLE_TAPS
  * frames before them; position is where output frame 0 of the next block sits, in frames, Q24. Silence skips the filter. */
-#include "../fm1_open/app/resample_table.inc"
+#include "../d50/resample_table.inc"
 enum { RS_HISTORY = RESAMPLE_TAPS, PLAYER_FRAMES = APP_BLOCK * D50_RATE / 44100u + 3u };
 #define RS_STEP ((uint32_t)((((uint64_t)D50_RATE << 24) + 22050u) / 44100u))
 static int32_t stereo[PLAYER_FRAMES * 2];
@@ -143,7 +143,7 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
 void app_panic(void) { d50_panic(); }
 
 /* ------------------------------------------------------- the time per block --- */
-/* fm1_open's sf2_upload.c cmd 11 and 12, the same frames (so its pages and scripts read both):
+/* cmd 11 and 12 (the frames of the first build, on M-VAVE's SDK):
  *   F0 7D S F 02 0B 00 F7  ->  F0 7D S F 02 4B v0..v10 F7, each 5 x 7 bits (least significant first): v0..v8 d50_prof_sum (then from zero),
  *                              v9 CPU average | peak << 12 | CPU1's share << 24, v10 voices | limit << 8 | cores << 16,
  *                              v11 the audio blocks missed since the start (plat_xruns: a render past its half)
