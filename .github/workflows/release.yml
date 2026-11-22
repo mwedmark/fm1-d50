@@ -101,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           # fm1-base's web installer with this run's firmware package (no D-50 data in it), at /install/ beside the emulator
-          pkg=$(ls packages/d50*.fwsc | head -1)
+          pkg=$(ls packages/build/release-assets/d50*.fwsc | head -1)
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then version=${GITHUB_REF_NAME#v}; else version="main-${GITHUB_SHA::7}"; fi
           python3 tools/ci/make_install_page.py "$RUNNER_TEMP/fm1-base" fm1base "$pkg" "$version" fm1base/build/emu
           if find fm1base/build/emu -name '*-res.bin' -o -name '*.fmd5' -o -name '*.syx' | grep -q .; then echo 'D-50 data in the page'; exit 1; fi
