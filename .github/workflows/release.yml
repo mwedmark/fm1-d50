@@ -65,6 +65,7 @@ jobs:
       packages: build/release-assets/*
 
   emulator:
+    needs: firmware        # the install page (issue #45) takes this run's firmware package
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683   # v4.2.2
@@ -93,6 +94,19 @@ jobs:
           rm -rf fm1base/build/emu/o2 fm1base/build/emu/web
           if find fm1base/build/emu -name '*.fmd5' -o -name '*.syx' | grep -q .; then echo 'D-50 data in the page'; exit 1; fi
           ls -l fm1base/build/emu
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4.3.0
+        with:
+          name: packages
+          path: packages
+      - name: The install page (issue #45)
+        run: |
+          set -euo pipefail
+          # fm1-base's web installer with this run's firmware package (no D-50 data in it), at /install/ beside the emulator
+          pkg=$(ls packages/build/release-assets/d50*.fwsc | head -1)
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then version=${GITHUB_REF_NAME#v}; else version="main-${GITHUB_SHA::7}"; fi
+          python3 tools/ci/make_install_page.py "$RUNNER_TEMP/fm1-base" fm1base "$pkg" "$version" fm1base/build/emu
+          if find fm1base/build/emu -name '*-res.bin' -o -name '*.fmd5' -o -name '*.syx' | grep -q .; then echo 'D-50 data in the page'; exit 1; fi
+          ls -l fm1base/build/emu/install fm1base/build/emu/firmware
       - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa   # v3.0.1
         with:
           path: fm1base/build/emu

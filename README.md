@@ -106,6 +106,9 @@ of this repository.
 
 ## Building and installing
 
+**[INSTALL.md](INSTALL.md) is the guide for anyone else:** the emulator in the browser, the firmware from the
+[install page](https://mwedmark.github.io/fm1-d50/install/), and the firmware with your own D-50 data.
+
 The firmware is built with fm1-base's tools from the `fm1base/` folder and installed over USB with fm1-base's installer. The steps, the flash
 layout and the measurements are in [FM1-BASE.md](FM1-BASE.md).
 
