@@ -80,7 +80,34 @@ It receives on every channel, over USB.
 | CC80 | Chase Play on (64 and up) or off |
 | CC100, CC101, CC6 | RPN 0: the bender range |
 | CC120, CC123 | All sound off, all notes off |
-| SysEx DT1, RQ1 | Roland, model 14h: the temporary area at 00 00 00 and the internal memory at 02 00 00 |
+| SysEx DT1, RQ1 | Roland, model 14h: the temporary area at 00 00 00 and the internal memory at 02 00 00 (below) |
+
+## SysEx
+
+**The D-50's own** (`F0 41 dev 14 ...`, Roland, model 14h), one-way:
+
+| Message | What it does |
+| --- | --- |
+| DT1 (`12`) | Writes data at an address; the checksum is checked. |
+| RQ1 (`11`) | Reads data from an address; the FM-1 answers with DT1s of up to 256 bytes, one at a time as the computer reads. |
+
+| Address | What it is |
+| --- | --- |
+| `00 00 00` | The temporary area: the current patch's 448 bytes (upper partial 1 and 2, common, lower partial 1 and 2, common, patch; 64 bytes each). A DT1 here changes the sound at once. |
+| `02 00 00` | The internal memory: the bank in RAM, 448 bytes a patch. A power cycle brings back the bank from the flash. |
+| Anything else | For example the reverb data at `03 60 00`: taken and ignored. |
+
+Not supported: the D-50's handshake (WSD, ACK and so on). A faulty message shows its error on the screen (wrong format, checksum or address).
+
+**For measuring** (`F0 7D 'S' 'F' 02 ... F7`, six bytes):
+
+| Command | What it does |
+| --- | --- |
+| `0B` | Reads the load: where the time goes, the CPU load and its peak, the voices, the cores and the missed audio blocks. |
+| `0C bits` | Leaves out the reverb (1), the chorus (2) or the EQ (4), to see what each costs. |
+
+**From the platform** ([fm1-base](https://github.com/charlesvestal/fm1-base)): the update of the firmware and of the D-50 data, backup and restore, and the companion's services. The
+[install page](https://mwedmark.github.io/fm1-d50/install/) and fm1-base's tools use them; music software does not need them.
 
 ## The D-50 data
 
