@@ -1,10 +1,10 @@
-// The D-50's sample data, and a patch bank, as the firmware reads them from the start of the user flash (fm1_open/app/d50/d50.h):
+// The D-50's sample data, and a patch bank, as the firmware reads them from the start of the data area (d50/d50.h):
 //   header, 16 bytes: "FMD5", version (1: samples only, 2: and a bank), three zero bytes, the sample bytes (u32 LE), the bank's deflated bytes (u32 LE, 0 for none)
 //   the 262 144 16-bit samples
-//   version 2: the bank's raw bytes (u32 LE, 448 a patch) and its raw deflate stream (app/d50/d50_inflate.c unpacks it into RAM)
+//   version 2: the bank's raw bytes (u32 LE, 448 a patch) and its raw deflate stream (d50/d50_inflate.c unpacks it into RAM)
 //   version 3 (fm1-base, issue #7: several --bank): the header's last word is the whole bank section's bytes; the section is the banks'
 //     count (u32 LE), then each bank's raw bytes (u32 LE), deflated bytes (u32 LE) and raw deflate stream. The firmware unpacks one at a
-//     time. Not for fm1_open, whose user flash has no room past the first bank.
+//     time.
 //   node tools/d50_pack.js roms/gen/d5_pcm.bin roms/out/d50_pcm.fmd5 [--bank "D50 files/syx files/PND50-00.syx"] [--bank ...]
 // d5_pcm.bin comes from third_party/picofaced5/tools/d5_extract/d5_make_blob.py on your own PCM ROMs; the bank is a D-50 SysEx bulk dump (DT1 to
 // 02-00-00, 64 patches). Neither file, nor what this writes, is ever committed.

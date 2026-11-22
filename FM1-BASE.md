@@ -1,5 +1,8 @@
 # The D-50 on fm1-base? (study, 2026-11-20)
 
+> fm1-base is now the D-50's only platform. The fm1_open build this compares against has been removed from the repository; where this
+> file names `fm1_open/app/d50/` and `fm1_open/app/resample_table.inc`, they are now `d50/`. `tools/d50_emu_site.js` is gone with it.
+
 Could fm1-d50 run on [fm1-base](https://github.com/charlesvestal/fm1-base) (MPL-2.0, on felucca-bsp) instead of M-VAVE's
 fm1_open SDK? Read from fm1-base at 7337375 and felucca-bsp at its pinned commit. The first part below is the study from
 reading; **"The fork, built and run"** at the end is what came of trying it.

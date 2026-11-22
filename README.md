@@ -112,5 +112,15 @@ layout and the measurements are in [FM1-BASE.md](FM1-BASE.md).
 - [FM1-BASE.md](FM1-BASE.md): fm1-base, the build, and the load of every patch
 - [Issues](https://github.com/mwedmark/fm1-d50/issues): what is being worked on
 
-The repository began as a copy of [fm1-sf2](https://github.com/mwedmark/fm1-sf2), the FM-1's SoundFont player. Its other files and pages
-(the SF2 converter, the install page, `DEVELOPING.md` and so on) are fm1-sf2's and are not part of the D-50.
+## What is where
+
+- `fm1base/`: the app on fm1-base (the panel, the screen, MIDI, the resampler), its `fm1.toml` and the emulator page (`web/emu/`).
+- `d50/`: the glue between the firmware and the engine (`d50.h`, `d50.cpp`), the bank's unpacking, the libm and std headers the toolchain
+  lacks, and the 32 to 44.1 kHz resampling filter (`tools/make_resampler.js` writes it).
+- `third_party/picofaced5/`: the engine.
+- `tools/`: `d50_pack.js` (the data), `d50_host/` (the engine on a PC: renders and tests), `ci/` (the GitHub build).
+- `rescue_tools/`: stock firmware back onto an FM-1 that does not start (`fm1_rescue.py`, with M-VAVE's V15, `FM-1_015.fwsc`).
+
+The repository began as a copy of [fm1-sf2](https://github.com/mwedmark/fm1-sf2), the FM-1's SoundFont player, and the D-50 first ran on
+M-VAVE's fm1_open SDK there. That build, the SF2 player and its pages and tools were removed when the D-50 moved to fm1-base; `D50.md` and
+`FM1-BASE.md` still describe them where they tell the history.

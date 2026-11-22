@@ -1,6 +1,6 @@
 /* Checks app/d50/d50_math.c against the WASI libm: the largest relative error of each function over its range. */
 #define D50_MATH_PREFIX(name) d50_##name
-#include "../../fm1_open/app/d50/d50_math.c"
+#include "../../d50/d50_math.c"
 #include <stdio.h>
 static double worst(const char *name, float (*a)(float), float (*b)(float), float lo, float hi, int abs_err)
 {

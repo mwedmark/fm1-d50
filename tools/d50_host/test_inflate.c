@@ -1,6 +1,6 @@
 /* Checks app/d50/d50_inflate.c against zlib: tools/d50_host/test_inflate.js writes deflate streams (stored, fixed, dynamic blocks, the
  * real bank) beside their raw bytes, this unpacks each and compares. */
-#include "../../fm1_open/app/d50/d50_inflate.c"
+#include "../../d50/d50_inflate.c"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

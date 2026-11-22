@@ -6,10 +6,10 @@ $ErrorActionPreference = "Continue"
 $repo = Resolve-Path "$PSScriptRoot\..\.."
 $out = Join-Path $repo 'roms\out'
 $c = Join-Path $out 'd50_inflate.o'
-& "$WasiSdk\bin\clang.exe" --target=wasm32-wasip1 --sysroot="$WasiSdk\share\wasi-sysroot" -O2 -c "$repo\fm1_open\app\d50\d50_inflate.c" -o $c
+& "$WasiSdk\bin\clang.exe" --target=wasm32-wasip1 --sysroot="$WasiSdk\share\wasi-sysroot" -O2 -c "$repo\d50\d50_inflate.c" -o $c
 $wasm = Join-Path $out 'bench.wasm'
 & "$WasiSdk\bin\clang++.exe" --target=wasm32-wasip1 --sysroot="$WasiSdk\share\wasi-sysroot" -std=c++17 "-$Opt" -fno-exceptions -DD5_REVERB_INT16 -DD5_REVERB_EXTERNAL_POOL `
-    -I"$repo\third_party\picofaced5\include" -I"$repo\roms\gen" -I"$repo\fm1_open\app\d50" "$PSScriptRoot\bench.cpp" $c -o $wasm
+    -I"$repo\third_party\picofaced5\include" -I"$repo\roms\gen" -I"$repo\d50" "$PSScriptRoot\bench.cpp" $c -o $wasm
 if ($LASTEXITCODE) { throw 'compile failed' }
 Push-Location $repo
 try { node "$PSScriptRoot\run.js" $wasm ($File -replace '\\', '/') $Patches } finally { Pop-Location }
