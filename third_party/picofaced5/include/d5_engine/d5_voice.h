@@ -626,6 +626,15 @@ private:
         w1_ = bal < 0.5f ? fmax : fmin;
         w2_ = bal < 0.5f ? fmin : fmax;
     }
+public:
+    // fm1-d50: the partial balance of a note that already sounds (a live edit of the patch's common byte 47, the panel's joystick):
+    // the weights prepare_mix works out once for a note, worked out again from the new value.
+    void set_partial_balance(float balance) {
+        if (spec_.balance == balance) return;
+        spec_.balance = balance;
+        prepare_mix(structure());
+    }
+private:
     bool p1_pcm_ = false, p2_pcm_ = false, ring_ = false;
     float ring_gain_ = 1.0f, w1_ = 1.0f, w2_ = 1.0f;
 

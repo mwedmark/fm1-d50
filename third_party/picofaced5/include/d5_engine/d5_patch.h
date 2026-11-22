@@ -70,6 +70,7 @@ public:
     // click on every one of them.
     void reconfigure(const ToneSpec& spec) {
         spec_ = spec;
+        for (int i = 0; i < kVoices; ++i) voices_[i].set_partial_balance(spec.voice.balance);   // fm1-d50: the sounding notes too
         update_lfo_mask();
         eq_.retune(spec.eq, sr_);
         chorus_.set_type(spec.chorus.type);

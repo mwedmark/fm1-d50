@@ -32,7 +32,7 @@ It is a work in progress. This README describes what works now and will grow wit
 HOME steps through three views:
 
 1. **The FM-1 screen**, with the patch, its name and the load. Later this becomes a view that uses the FM-1's screen for the D-50 in its own way.
-2. **The LCD at true size:** 2 lines of 40 characters, one pixel a dot. K1 sets the dot height.
+2. **The LCD at true size:** 2 lines of 40 characters, one pixel a dot. K3 sets the dot height.
 3. **The LCD folded:** each line split in two at column 24, at a size that is easy to read.
 
 ![The folded view](docs/img/lcd_folded_green.png)
@@ -55,8 +55,12 @@ The view and the colour are saved with SAVE.
 | SELECT / PRESET encoders | The patch, through all banks: 1-11 to 6-88 |
 | ARP | The D-50's CHASE button: Chase Play on or off |
 | HOME | The view; held 3 s, the LCD's colour |
-| K1 | The LCD's dot height (true-size view) |
+| K1 | The joystick's tone balance: the Upper against the Lower tone (the LCD's Bal) |
+| K2 | The joystick's partial balance: partial 1 against partial 2, in both tones |
+| K3 | The LCD's dot height (true-size view) |
 | SAVE | Saves the patch, bank, octave, view and colour |
+
+The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.
 
 ## MIDI
 
