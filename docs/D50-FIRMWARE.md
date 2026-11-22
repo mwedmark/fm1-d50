@@ -60,7 +60,7 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). The 
 - **0x4ADF, the serial receive interrupt** (register bank 4): reads `RXB`. Real-time bytes are sorted here: 0xF1..0xF7 and 0xFE are handled or flagged (0xFE, active sensing, sets a flag in 0xFE31.1);
   everything else is queued by 0x527F into a ring buffer at 0xC100 (write index 0xFEAD, read index 0xFEAC). The `RXB` reads at 0x531F and 0x5492 are the SysEx side (to follow).
 - **0x4B09, the main loop's parser**: takes bytes from the ring buffer (0x4B22). A status byte (bit 7) goes to 0x4B30, a data byte to 0x4B9F. The running status is 0xFEAB (0 for none), the first data byte 0xFEA4, the second 0xFEA5;
-  0xFE45 holds the receive mode (compared with 0x2A: a mode in which the channel is not tested) and 0xFE42 the basic channel (the channel test at 0x4C72 compares the status's low nibble with it, rejecting a higher one).
+  0xFE45 holds the screen number (0x2A: the Data Transfer screen while it runs, where channel messages are ignored and SysEx takes the handshake: below) and 0xFE42 the basic channel (the channel test at 0x4C72 compares the status's low nibble with it, rejecting a higher one).
 - **Status 0x80-0xEF** (0x4C3B): 0xE0 and up the pitch bender (0x4C65: 14 bits, stored at 0xD315/0xD316 and, per tone, 0xD3D2..), 0xB0 and up the control change (0x4D00), 0xA0 and up (polyphonic key pressure) ignored,
   0x90 and up note (0x4CE5), below that note off. Program change (0xC0) and channel pressure (0xD0) are one data byte (0x4BB8, 0x4BCC); program change is only taken when the MIDI page's Prog.C switch (0xC5C9 bit 0) is on.
 - **Control change, 0x4D00**: a number of 0x7A and up is a channel mode message (table dispatch at 0x4D3F). Below that the number is looked up in a table by routine 0x4039 (compare-and-find, then call through the address table):
@@ -81,7 +81,91 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). The 
   This is the whole table: **the D-50 takes no controller for the tone or partial balance**, which fits `d50.h`'s list of what the engine implements (issue #4). CC81 and CC82 (#58) are ours.
   The mode messages 0x78-0x7F and the all-notes-off are in the 0x4D3F table (not decoded here; the app's `d50_panic()` covers 120 and 123).
 
-Open: the SysEx parser (0x4FC6 for status 0xF0's data bytes).
+## The SysEx parser (verified in the listing, 2026-11-22)
+
+The registers of the running bank are memory here: 0xFEF0 is X (R0, the byte being parsed), 0xFEF1 A, 0xFEF2 C, 0xFEF3 B, 0xFEF4 E, 0xFEFE/0xFEFF HL. The addresses below are
+SysEx addresses as one number, `a2 << 14 | a1 << 7 | a0` (so 00 03 40 is 0x1C0), as `d50.cpp`'s `addr_of` has them.
+
+- **F0, 0x4B53.** Taken only when the MIDI page's **Exclu** switch is on (0xC5CA bit 0, system byte 10); off, the running status is cleared and the message is ignored to its F7.
+  On: status 0xF0, 0xFE31.7 (header done) clear, 0xFE34.6/.7 clear, the previous byte 0xFF.
+- **Each data byte, 0x4FC6**: added to the checksum 0xFEA6, then, until the header is done, dispatched by its index 0xFEAA through the table at 0x4FDD (routine 0x4056). Any fault sets
+  the running status to 0: the rest of the message is ignored, nothing is answered.
+
+  | index | routine | what it takes |
+  | --- | --- | --- |
+  | 0 | 0x4FF1 | 0x41 (Roland) |
+  | 1 | 0x4FFA | the device ID: **exactly the basic channel** (0xC5CD, system byte 13; 0 = channel 1). Omni does not widen it |
+  | 2 | 0x5006 | 0x14 (the D-50) |
+  | 3 | 0x500F | the command. Outside Data Transfer only **0x11 RQ1 and 0x12 DT1**; on the Data Transfer screen (0xFE45 = 0x2A) the table at 0x504B: 12, 42 DAT, 40 WSD, 41 RQD go on to an address; 43 ACK, 45 EOD, 4E ERR, 4F RJC are complete (0xFE34.6); **11 RQ1 is refused there** (0xFE3B.7, the error flag). The command goes to 0xFEA4 and the checksum restarts at 0 |
+  | 4 | 0x5068 | address byte 2. Outside Data Transfer **0 or 1**; on it **2 to 4** (stored less 2: internal memory starts at 0). ACK, EOD, ERR and RJC may not have one |
+  | 5, 6 | 0x5090, 0x5094 | address bytes 1 and 0: the address goes to 0xFE24 |
+  | | | DT1 then starts its data; on the Data Transfer screen only when the menu item is Bulk Load.O (0xFE53 = 6) and the address is the one expected next (0xFE20). DAT: only when the item is Bulk Load (0xFE53 = 1) and the address is the expected one |
+  | 7..9 | 0x50DA, 0x50EA, 0x50EE | (RQ1, WSD, RQD) the size, byte 2 below 4: to 0xFE2C |
+
+- **Data, 0x51B3.** Bytes are written one behind (the previous one, 0xFEF2), so the last byte, the checksum, is never stored. More than 256 data bytes in one message is a fault
+  (0xFE34.7). Data after any command other than DT1 and DAT is a fault.
+  - **Outside Data Transfer (0x51FA), byte by byte through the address map 0x5620:**
+
+    | address | SysEx | where | parameter numbers (for 0x5727) |
+    | --- | --- | --- | --- |
+    | 0x000-0x0BF | 00 00 00 - 00 01 3F | the upper tone, RAM 0xC400: partial 1, partial 2 (bytes 0x00-0x3F of each), common (0x80-0xBF) | 0x00-0x35, 0x37-0x66 |
+    | 0x0C0-0x17F | 00 01 40 - 00 02 7F | the lower tone, RAM 0xC4C0 | the same |
+    | 0x180-0x1BF | 00 03 00 - 00 03 3F | the patch block, RAM 0xC580 | 0x69-0x8F |
+    | 0x1C0-0x1FFF | | nothing: the rest of the message is ignored | |
+    | 0x2000-0x22FF | 00 40 00 - 00 45 7F | RAM 0xDC00-0xDEFF (where the vector trampolines are), two nibbles a byte (low first), and only on screen 0x05 | |
+
+    **A value above the parameter's maximum (the range tables at 0x7D20) is skipped, not clamped**: the byte keeps its old value and the address moves on. A stored patch-block
+    byte with a parameter number of 0x7B and up calls its handler (the table at 0x5735: 0x7B, 0x7C, 0x83, 0x85, 0x87, 0x8B, 0x8E, 0x8F: key mode and the other bytes that need more
+    than a store); the tones' bytes are read where they are.
+  - **On the Data Transfer screen (0x5247)**, in order from the expected address, counting down the size the WSD gave, through the internal memory's map (0x56C5):
+    0x0000-0x3EFF (02 00 00 -) to 0x8040 in one RAM bank, 0x3F00-0x6FFF to 0x8000 in the other (0x39E1, 0x39E5 select them): **64 patches of 448 bytes, as sent**; then
+    0x7000-0x877F (**03 60 00 - 04 0E 7F**) two SysEx bytes a RAM byte, a nibble each (0xFE: the reverb data); 0x8780 and on nothing.
+- **F7, 0x50FB**, dispatched by the command (table at 0x5112):
+
+  | command | routine | what it does |
+  | --- | --- | --- |
+  | 12 DT1, 42 DAT | 0x512F | checksum: wrong sets the error flag, right 0xFE3B.5 (taken). **The data are already written: a wrong checksum does not undo them** |
+  | 11 RQ1 | 0x513B | right checksum: answers (0x5474) |
+  | 40 WSD | 0x514A | only in Bulk Load (0xFE53 = 1): 0x5164 |
+  | 41 RQD | 0x5157 | only in Bulk Dump (0xFE53 = 0): 0x5164 |
+  | 43 ACK | 0x5189 | only in Bulk Dump: 0xFE3B.3 and .4 (the next DAT may go) |
+  | 45 EOD | 0x5197 | only in Bulk Load, with a transfer under way and all its bytes taken: 0xFE3B.2 (done) |
+  | 4E ERR | 0x51AD | the error flag |
+  | 4F RJC | 0x51B0 | 0xFE3B.0 (the other side gave up) |
+
+  0x5164 (WSD, RQD): not while a transfer is under way, right checksum, an address in the map: the transfer starts at that address with that size (0xFE20, 0xFE22). A size of 0 starts
+  nothing; the test (`CMP 0FE2CH,#00H`) reads only the size's low byte, so a size that is a multiple of 256 starts nothing either (the D-50's own 02 0F 00 is 0x8780: not one).
+- **RQ1's answer, 0x5474**: only from the temporary area (below 0x1C0) and only a size above 0. DT1s (the template at 0x6DD0: `F0 41 dev 14 12`, the device ID filled in from
+  the basic channel) of **up to 256 data bytes** each (0x533C: the count in C from 0), cut at 0x1C0 (the map gives nothing there).
+- **The Data Transfer menu**, the table at 0x3822 by the item 0xFE53 (run from 0x3816):
+
+  | 0xFE53 | routine | the D-50's item | what it sends |
+  | --- | --- | --- | --- |
+  | 0 | 0x5299 | Bulk Dump (handshake) | WSD 02 00 00, size 02 0F 00 (0x8780 bytes: the whole memory, the template at 0x6DB4), then on each ACK a DAT of 256 bytes, then EOD (0x6DE3) |
+  | 1 | 0x5497 | Bulk Load (handshake) | RQD 02 00 00, size 02 0F 00 (0x6DC2), then ACK (0x6DDC) to each DAT |
+  | 2, 3, 4 | 0x391F, 0x38E2, 0x3967 | the card (load, save; P0.7 is the card's write line) | |
+  | 5 | 0x52CF | Bulk Dump.O (one-way) | DT1s of 256 bytes from 02 00 00, the whole memory, 0x545A between them (not decoded: a pause, by its place) |
+  | 6 | 0x54DE | Bulk Load.O (one-way) | nothing: takes DT1s in order from 02 00 00 |
+
+  Both end on screen 0x2B (the message that it is done), or 0x29/0x2C for a fault. The templates after 0x6DE3 are ERR and RJC (`F0 41 dev 14 4E F7`, `4F F7`) and the
+  all-notes-off `B0 7B 00`.
+
+### Against the engine's `d50_sysex` (issues #6, #51)
+
+| | the D-50 | `d50.cpp` |
+| --- | --- | --- |
+| device ID | the basic channel exactly | the same (#51) |
+| the Exclu switch | off ignores all SysEx | none: always on |
+| DT1 to the temporary area | byte by byte; a value above the parameter's maximum skipped | any 0..127 stored |
+| DT1 with a wrong checksum | already written; only flagged | nothing written (`D50_ERR_SUM`) |
+| more than 256 data bytes | a fault | taken |
+| DT1 / RQ1 to internal memory (02 00 00) | only on the Data Transfer screen (Bulk Load.O: DT1 in order); RQ1 never | any time, also RQ1 |
+| the handshake | only on the Data Transfer screen, in the item's direction | any time, both directions |
+| internal memory's map | 64 × 448 bytes as sent, then the reverb data at 03 60 00 - 04 0E 7F as nibbles | the bank; 03 60 00 and on taken and ignored |
+| RQ1's answer | DT1s of up to 256 bytes, the temporary area only | the same chunk, cut at the area's end |
+
+The engine takes more than the D-50 does, and where it differs on what it takes (a value above a maximum, a wrong checksum) it is stricter. Whether to follow the D-50 on the
+value check (skip a byte above the parameter's maximum, the tables at 0x7D20) is a choice for the maintainer: the patch bank's own bytes are always in range.
 
 ## The analogue controls and the joystick (verified in the listing, 2026-11-22)
 
@@ -140,7 +224,8 @@ Prog.C, Exclu, ...: 0xC5C3-0xC5CC, as the parser tests them), 13: 15 (the basic 
 First recursive descent from reset, the vectors and the two tables: 6 122 instructions in 367 functions, about 14.8 KB of the 56 KB above 0x2000/0x80 that are code and data
 together. The rest is reached by indirect jumps and by handlers installed into the RAM vectors at run time, which the descent does not follow. To do, in this order:
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
-2. SysEx (0x4FC6) and the channel and omni logic (the MIDI page's bytes at 0xC5C0..0xC5D0).
+2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0), the reverb data's
+   layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
 3. (Done: the A/D path and the stick's targets.) Still open: the shaping table at 0x3114, and the joystick mode bits P1.3/P1.4 (which panel key sets them).
 4. The function menu and the tune/transpose parameters: ranges and steps (issue #57).
 5. Name things: write `tools/d50_dasm/names.txt` (address, name) and have analyze.py use it, so the listing becomes readable.
