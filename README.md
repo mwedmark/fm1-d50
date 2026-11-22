@@ -117,7 +117,7 @@ Without D-50 data on the FM-1, WSD and RQD are answered with RJC.
 
 | Address | What it is |
 | --- | --- |
-| `00 00 00` | The temporary area: the current patch's 448 bytes (upper partial 1 and 2, common, lower partial 1 and 2, common, patch; 64 bytes each). A DT1 or DAT here changes the sound at once. |
+| `00 00 00` | The temporary area: the current patch's 448 bytes (upper partial 1 and 2, common, lower partial 1 and 2, common, patch; 64 bytes each). A DT1 or DAT here changes the sound at once. A byte above its parameter's maximum is skipped, as on a D-50 (the rest of the message is written). |
 | `02 00 00` | The internal memory: the bank in RAM, 448 bytes a patch (64 patches, up to `03 60 00`). A power cycle brings back the bank from the flash. |
 | Anything else | For example the reverb data at `03 60 00`: taken and ignored, so a whole bulk dump goes through. |
 

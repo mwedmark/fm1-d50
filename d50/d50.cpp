@@ -548,14 +548,35 @@ uint8_t roland_sum(const uint8_t *p, unsigned n)
     for (unsigned i = 0; i < n; ++i) s += p[i];
     return static_cast<uint8_t>((128U - (s & 127U)) & 127U);
 }
-// a DT1's or DAT's data bytes into the areas (nothing where nothing is)
+// The temporary area's maxima (0 the minimum), byte by byte: a partial's 64, a tone common's 64, the patch block's 64, as the D-50 v1.06
+// firmware's range tables (0x7D20, 0x7D60, 0x7DA0) have them; the bytes past the parameters take only 0. The D-50 skips a DT1 byte above
+// its maximum (0x521A: the byte keeps its value, the address moves on), and so does write_at (#58, docs/D50-FIRMWARE.md).
+constexpr uint8_t kPartialMax[64] = {
+    72, 100, 16, 3, 2, 2, 1, 99, 100, 14, 5, 100, 14, 100, 30, 14, 127, 14, 100, 100, 4, 4, 100, 100, 100, 100, 100, 100, 100, 100, 100, 1,
+    5, 100, 14, 100, 100, 127, 12, 100, 100, 100, 100, 100, 100, 100, 100, 100, 1, 4, 4, 5, 100, 14};
+constexpr uint8_t kCommonMax[64] = {
+    63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 6, 2, 4, 50, 50, 50, 50, 100, 100, 100, 100, 100, 100, 100, 100, 3, 100, 100, 2, 3, 100, 100,
+    1, 3, 100, 100, 1, 15, 24, 21, 8, 24, 7, 100, 100, 100, 3, 100};
+constexpr uint8_t kPatchMax[64] = {
+    63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 8, 60, 2, 2, 48, 48, 100, 100, 12, 24, 100, 3, 31, 100,
+    100, 100, 2, 100, 100, 16, 16};
+// the maximum of a byte of the temporary area (its 7 blocks: the upper's partial 1, partial 2, common, the lower's, the patch block)
+uint8_t temp_max(uint32_t a)
+{
+    const uint32_t block = a / 64U, i = a % 64U;
+    return block == 6U ? kPatchMax[i] : block % 3U == 2U ? kCommonMax[i] : kPartialMax[i];
+}
+// a DT1's or DAT's data bytes into the areas (nothing where nothing is; in the temporary area, nothing above the byte's maximum)
 void write_at(uint32_t a, const uint8_t *d, unsigned len)
 {
     for (unsigned i = 0; i < len; ++i) {
         uint8_t *b = byte_at(a + i);
         if (!b) continue;
+        if (a + i < D50_PATCH_BYTES) {
+            if ((d[i] & 127U) > temp_max(a + i)) continue;
+            temp_dirty = true;
+        }
         *b = d[i] & 127U;
-        if (a + i < D50_PATCH_BYTES) temp_dirty = true;
     }
 }
 

@@ -189,6 +189,24 @@ int main(int argc, char **argv)
         check(next().empty(), "done");
     }
 
+    printf("DT1: a byte above its parameter's maximum skipped, as the D-50 does (#58)\n");
+    {
+        const uint32_t at = 6U * 64U + 32U;       // the patch block's bytes 32 and 33 (maxima 100: the firmware's 0x7DA0)
+        const uint8_t was = temp[at], to = temp[at + 1] == 40U ? 41U : 40U;
+        Bytes body;
+        body.put(at >> 14 & 127U).put(at >> 7 & 127U).put(at & 127U).put(101).put(to);
+        send(msg(kDt1, body, true));
+        check(temp[at] == was, "101 to a byte of 0..100: not written");
+        check(temp[at + 1] == to, "the next byte of the same DT1: written");
+        check(d50_sysex_error() == 0, "and no error on the screen");
+        Bytes zero;
+        const uint32_t past = 54U;                // partial 1's byte 54: past its parameters, only 0
+        const uint8_t old = temp[past];
+        zero.put(0).put(0).put(past).put(1);
+        send(msg(kDt1, zero, true));
+        check(temp[past] == old, "1 to a byte past the parameters: not written");
+    }
+
     printf("WSD, DAT, EOD: the reverb data of a whole bulk dump, taken and ignored\n");
     {
         const uint32_t reverb = 3U << 14 | 0x60U << 7;   // 03 60 00, just after the bank (64 x 448 bytes from 02 00 00)

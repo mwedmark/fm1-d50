@@ -156,7 +156,7 @@ SysEx addresses as one number, `a2 << 14 | a1 << 7 | a0` (so 00 03 40 is 0x1C0),
 | --- | --- | --- |
 | device ID | the basic channel exactly | the same (#51) |
 | the Exclu switch | off ignores all SysEx | none: always on |
-| DT1 to the temporary area | byte by byte; a value above the parameter's maximum skipped | any 0..127 stored |
+| DT1 to the temporary area | byte by byte; a value above the parameter's maximum skipped | the same since #58 (`temp_max`: the three range tables); before, any 0..127 stored |
 | DT1 with a wrong checksum | already written; only flagged | nothing written (`D50_ERR_SUM`) |
 | more than 256 data bytes | a fault | taken |
 | DT1 / RQ1 to internal memory (02 00 00) | only on the Data Transfer screen (Bulk Load.O: DT1 in order); RQ1 never | any time, also RQ1 |
@@ -164,8 +164,9 @@ SysEx addresses as one number, `a2 << 14 | a1 << 7 | a0` (so 00 03 40 is 0x1C0),
 | internal memory's map | 64 × 448 bytes as sent, then the reverb data at 03 60 00 - 04 0E 7F as nibbles | the bank; 03 60 00 and on taken and ignored |
 | RQ1's answer | DT1s of up to 256 bytes, the temporary area only | the same chunk, cut at the area's end |
 
-The engine takes more than the D-50 does, and where it differs on what it takes (a value above a maximum, a wrong checksum) it is stricter. Whether to follow the D-50 on the
-value check (skip a byte above the parameter's maximum, the tables at 0x7D20) is a choice for the maintainer: the patch bank's own bytes are always in range.
+The engine takes more than the D-50 does (the switch, the screen and the direction it does not ask for), and on a wrong checksum it is stricter. On the values it follows the
+D-50 (#58): a byte of the temporary area above its maximum is skipped, wherever it comes from (DT1, or a DAT the D-50 would not take there), and the address moves on;
+`test_sysex` checks it. The bank's bytes (02 00 00) are stored as sent, as the D-50's Bulk Load stores them.
 
 ## The analogue controls and the joystick (verified in the listing, 2026-11-22)
 
