@@ -287,21 +287,54 @@ static struct {
     uint8_t page;                                /* the edit page (#31): d50_lcd.h LCD_PAGE_*, LCD_PAGE_PLAY none */
 } ui;
 #include "d50_lcd.h"
-/* A parameter of the patch block changed on an edit page (#31): a DT1 into the temporary area (d50_sysex, #6), so the sound follows */
-static void page_edit(uint32_t field, int32_t step)
+/* A byte of the temporary area (the current patch, 7 blocks of 64: the upper's partial 1, partial 2 and common, the lower's, the patch block)
+ * changed by step within lo..hi: a DT1 (d50_sysex, #6), so the sound follows. Returns the new value, -1 where there is no patch. */
+static int32_t patch_edit(uint32_t at, int32_t step, int32_t lo, int32_t hi)
 {
-    const lcd_page_t *g = &lcd_pages[ui.page];
     const uint8_t *p = d50_patch_bytes();
-    uint8_t f[9] = {0x41, 0x10, 0x14, 0x12, 0, 3, 0, 0, 0};    /* 41 dev 14 12, address 00 03 nn (the patch block), the value, the sum */
+    uint8_t f[9] = {0x41, 0x10, 0x14, 0x12, 0, 0, 0, 0, 0};    /* 41 dev 14 12, the address (three 7-bit bytes), the value, the sum */
     int32_t v;
-    if (!p || field >= g->fields)
-        return;
-    v = clamp((int32_t)p[6u * 64u + g->f[field].byte] + step, g->f[field].lo, g->f[field].hi);
-    f[6] = g->f[field].byte;
+    if (!p)
+        return -1;
+    v = clamp((int32_t)p[at] + step, lo, hi);
+    f[4] = (uint8_t)(at >> 14 & 127u);
+    f[5] = (uint8_t)(at >> 7 & 127u);
+    f[6] = (uint8_t)(at & 127u);
     f[7] = (uint8_t)v;
     f[8] = (uint8_t)((128u - ((f[4] + f[5] + f[6] + f[7]) & 127u)) & 127u);
     (void)d50_sysex(f, sizeof f);
     ui.redraw = 1;
+    return v;
+}
+/* A parameter of the patch block changed on an edit page (#31) */
+static void page_edit(uint32_t field, int32_t step)
+{
+    const lcd_page_t *g = &lcd_pages[ui.page];
+    if (field < g->fields)
+        (void)patch_edit(6u * 64u + g->f[field].byte, step, g->f[field].lo, g->f[field].hi);
+}
+static void uint_text(uint32_t v, char *b);
+/* The D-50's joystick on the play screen (#43), K1 and K2: K1 the balance between the upper and the lower tone (the patch block's byte 33,
+ * what the LCD shows as Bal), K2 the balance between the partials of both tones (each tone's common byte 47). Edits of the current patch,
+ * as the edit pages' are: they last until another program is chosen, and SysEx reads them back. */
+enum { PATCH_COMMON_UPPER = 2u * 64u, PATCH_COMMON_LOWER = 5u * 64u, COMMON_PARTIAL_BALANCE = 47u, PATCH_TONE_BALANCE = 6u * 64u + 33u };
+static void joystick(uint32_t axis, int32_t step)
+{
+    char t[12];
+    int32_t v;
+    if (axis == 0u) {
+        v = patch_edit(PATCH_TONE_BALANCE, step, 0, 100);
+    } else {
+        v = patch_edit(PATCH_COMMON_UPPER + COMMON_PARTIAL_BALANCE, step, 0, 100);
+        if (v >= 0)
+            (void)patch_edit(PATCH_COMMON_LOWER + COMMON_PARTIAL_BALANCE, v - (int32_t)d50_patch_bytes()[PATCH_COMMON_LOWER + COMMON_PARTIAL_BALANCE], 0, 100);
+    }
+    if (v < 0)
+        return;
+    if (axis == 0u && (set.lcd & LCD_SHOWN))     /* (the LCD shows the tone balance itself, as Bal; the partial balance it has no place for) */
+        return;
+    uint_text((uint32_t)v, t);
+    app_say(axis == 0u ? "TONE BAL" : "PART BAL", t);
 }
 #define HOME_LONG_MS 3000u
 #define LCD_MSG_COMPLETE 1u
@@ -457,10 +490,16 @@ static void input(void)
         for (k = 0; k < 4u; k++)
             if ((e = plat_enc(knob[k])) != 0)
                 page_edit(k, e);
-    } else if ((e = plat_enc(EN_K1)) != 0 && (set.lcd & LCD_TRUE)) {   /* K1: the true-size LCD's dot height, on the play screen */
-        set.lcd = (uint8_t)((set.lcd & ~7u) | (uint32_t)clamp((int32_t)lcd_pitch() + (e > 0 ? 1 : -1), LCD_PITCH_MIN, LCD_PITCH_MAX));
-        set_dirty = 1;
-        ui.redraw = 1;
+    } else {                                     /* the play screen: K1 and K2 the joystick (#43), K3 the dot height of the true-size LCD (was K1) */
+        if ((e = plat_enc(EN_K1)) != 0)
+            joystick(0, e);
+        if ((e = plat_enc(EN_K2)) != 0)
+            joystick(1, e);
+        if ((e = plat_enc(EN_K3)) != 0 && (set.lcd & LCD_TRUE)) {
+            set.lcd = (uint8_t)((set.lcd & ~7u) | (uint32_t)clamp((int32_t)lcd_pitch() + (e > 0 ? 1 : -1), LCD_PITCH_MIN, LCD_PITCH_MAX));
+            set_dirty = 1;
+            ui.redraw = 1;
+        }
     }
     if ((e = plat_enc(EN_SELECT)) != 0 || (e = plat_enc(EN_PRESET)) != 0)
         program_step((int32_t)(set.bank * d50_programs() + set.program) + e);
