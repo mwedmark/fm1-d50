@@ -58,7 +58,7 @@ The view and the colour are saved with SAVE.
 | K1 | The joystick's tone balance: the Upper against the Lower tone (the LCD's Bal) |
 | K2 | The joystick's partial balance: partial 1 against partial 2, in both tones |
 | K3 | The LCD's dot height (true-size view) |
-| SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz, 440.0 at start), K2 Key Transpose (−12 to +12). Not kept over a power cycle |
+| SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12). Not kept over a power cycle |
 | EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel), then the play screen |
 | SAVE | Saves the patch, bank, octave, view, colour and the MIDI settings |
 

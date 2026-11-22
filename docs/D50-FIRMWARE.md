@@ -81,8 +81,58 @@ them (an edit of the current patch). The firmware's own joystick scaling, when f
   This is the whole table: **the D-50 takes no controller for the tone or partial balance**, which fits `d50.h`'s list of what the engine implements (issue #4). CC81 and CC82 (#58) are ours.
   The mode messages 0x78-0x7F and the all-notes-off are in the 0x4D3F table (not decoded here; the app's `d50_panic()` covers 120 and 123).
 
-Open: the SysEx parser (0x4FC6 for status 0xF0's data bytes), the joystick and the lever's A/D path (the test mode's page names `Stick-X`, `Stick-Y`, `E.Pedal`, `ExCont`, `P.Hold`, `PedalSW` at 0x764F-0x7690
-are the controls the firmware reads; where it reads the stick is not found: only two A/D channels are started by name, ADM=0x13 and 0x15 at 0x58F5 and 0x5901, and the stick may arrive through the key scanner's registers at 0xE000).
+Open: the SysEx parser (0x4FC6 for status 0xF0's data bytes).
+
+## The analogue controls and the joystick (verified in the listing, 2026-11-22)
+
+- **Sampling.** 0x23BB sets the A/D converter to run by *macro service* (the 78K/III's interrupt-driven transfer: `ADIC`=0x27, `ADMS`=0x97, pointer 0xFEEC = 0xC02F, count 0xFEEE = 10,
+  SFR 0xFEEF = 0x6A, `ADCR`), so the hardware fills a buffer downward from 0xC02F without code. When a block is done, the interrupt at **0x3413** (register bank 1) steps an external
+  multiplexer on P1.0-P1.2 (8 inputs), moves the buffer pointer (wrapping at 0xC010) and restarts the conversion.
+- **Averaging.** 0x33D7 sums four samples of each of the 8 inputs (0xC010..0xC02F) and shifts right by 2: the results are 0xC008..0xC00F. Inputs 1 and 2 are then inverted (XOR 0xFF).
+  0x33C7 copies them to 0xC000..0xC007, where the control routines read them. 0x3015 runs the eight control routines in turn.
+- **Which input is which.** The test mode shows them on two pages (texts at 0x7650 and 0x7678); each routine prints its value at a column of 0xFE3D (0x28 = the lower line's first column):
+
+  | RAM | routine | column | the test page's name |
+  | --- | --- | --- | --- |
+  | 0xC003 | 0x3173 | 2 | Bender |
+  | 0xC005 | 0x31A9 | 10 (page 1) | Mod |
+  | 0xC007 | 0x320B | 18 | After |
+  | **0xC001** | **0x3031** | **26** | **Stick-X** |
+  | **0xC002** | **0x305A** | **34** | **Stick-Y** |
+  | 0xC006 | 0x31D2 | 10 (page 2) | ExCont |
+  | 0xC004 | 0x3318 | (page 2) | E.Pedal (by elimination) |
+  | 0xC000 | 0x3248 | - | the data entry slider (by elimination: the eighth input, not on the test pages) |
+
+- **What the stick moves.** The firmware edits parameters through 6-byte descriptors: +0 the parameter number, +1 its stored value, +2 its maximum, +3 the current value, +5 the value the
+  stick moves from. **Stick-X uses the descriptor at 0xC0B6, Stick-Y the one at 0xC0BC.** On the play screens (0x496A and 0x49A1, taken when 0xFE45, the screen number, is below 0x28 except
+  3, 0x0A and 0x0B) they are given:
+  - **Stick-X: parameter 0x66 = tone common byte 47, the partial balance.** The tone is the one the panel has selected (0xFE54.6 picks 0xC400, the upper, or 0xC4C0, the lower: 0x3B9C).
+  - **Stick-Y: parameter 0x8A = patch byte 33, the tone balance.**
+  Another screen (0x4865) points Stick-X at parameter 0xA3 (system byte 17, Key Transpose) and switches Stick-Y off (0xFF).
+- **How it moves them.** 0x3083: with a maximum of 16 or more, the stick's 0..255 is halved, shaped by the routine at 0x30E7 (a table at 0x3114 by range), and added to the descriptor's starting
+  value as an offset from the centre, clamped to 0..maximum. Below 16, or when P1.3/P1.4 are set (0x4AC9, 0x4AD0, 0x4AD7 set the two bits: the panel's joystick mode), 0x30BD sets the value
+  directly. A changed value goes through 0x3784 (store, then 0x3B5A: write to the tone, patch or system byte and update the screen).
+
+### The parameter numbers and their ranges (verified: the code at 0x3B7C and the tables)
+
+| numbers | area | RAM | range table | offset |
+| --- | --- | --- | --- | --- |
+| 0x00-0x36 | a partial | 0xC400 / 0xC4C0 (+0x40 the second partial) | 0x7D20 | number |
+| 0x37-0x68 | a tone's common | the same + 0x80 | 0x7D60 | number - 0x37 |
+| 0x69-0x91 | the patch | 0xC580 | 0x7DA0 | number - 0x69 (the patch block's byte) |
+| 0x92-0xB3 | the system (MIDI, function) | 0xC5C0 | 0x7DE0 | number - 0x92 |
+
+The range tables hold each parameter's maximum (0 minimum). They agree with what the repository already uses (patch bytes 29-38: 3, 31, 100, 100, 100, 2, 100, 100, 16, 16).
+The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps, 0.251 Hz each, 50 = 440.0), 1-2: 3, 3-12: switches (the MIDI pages' Bender, Mod, Volume, Hold, Porta,
+Prog.C, Exclu, ...: 0xC5C3-0xC5CC, as the parser tests them), 13: 15 (the basic channel), 14: 2, 15-16: 31 (the two assignable controllers, CC 64 + value), **17: 24 (Key Transpose,
+-12..+12 around 12)**, 18: 127, ... The names of bytes 1-2, 14 and 18 on are still to place.
+
+### What this means for the FM-1
+
+- The D-50's stick: **X = partial balance (of the selected tone), Y = tone balance.** The FM-1's K1 is the tone balance and K2 the partial balance of both tones (#43): the order is
+  swapped against the stick's X/Y and K2 moves both tones. Whether to follow the D-50 here is a decision for the maintainer (#58).
+- The stick moves a parameter from where it was (an offset from the stick's centre), not to an absolute value. CC81/CC82 set absolute values.
+- Master Tune is 0..100, not 0..126 as PR #56 first had it: corrected (`d50_tune` 0..100, 50 = 440.0 Hz). Key Transpose's -12..+12 is confirmed.
 
 ## Coverage and what is next
 
@@ -90,6 +140,6 @@ First recursive descent from reset, the vectors and the two tables: 6 122 instru
 together. The rest is reached by indirect jumps and by handlers installed into the RAM vectors at run time, which the descent does not follow. To do, in this order:
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
 2. SysEx (0x4FC6) and the channel and omni logic (the MIDI page's bytes at 0xC5C0..0xC5D0).
-3. The A/D handling: channel assignment (joystick X/Y, bender, modulation, aftertouch, pedals), scaling, and what the stick does in each key mode. The joystick's real behaviour (K1/K2 here are a guess from the D-50's manual).
+3. (Done: the A/D path and the stick's targets.) Still open: the shaping table at 0x3114, and the joystick mode bits P1.3/P1.4 (which panel key sets them).
 4. The function menu and the tune/transpose parameters: ranges and steps (issue #57).
 5. Name things: write `tools/d50_dasm/names.txt` (address, name) and have analyze.py use it, so the listing becomes readable.

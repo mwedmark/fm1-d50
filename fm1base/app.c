@@ -318,7 +318,7 @@ static struct {
     uint8_t lcd_msg;                             /* the message in the LCD (#25): 0 the panel's, LCD_MSG_COMPLETE, LCD_MSG_ERROR | its number */
     uint8_t home_long;                         /* HOME held long enough to have changed the LCD's colours (this press) */
     uint32_t home_ms;                            /* when HOME was pressed */
-    int8_t tune_off;                            /* Master Tune 0..126 (#54) less 63 (so 0 = 440.0 Hz at start); not kept over a power cycle */
+    int8_t tune_off;                            /* Master Tune 0..100 (#54) less 50 (so 0 = 440.0 Hz at start); not kept over a power cycle */
     int8_t transpose;                            /* Key Transpose -12..12 (#54) */
     uint8_t page;                                /* the edit page (#31): d50_lcd.h LCD_PAGE_*, LCD_PAGE_PLAY none */
 } ui;
@@ -560,8 +560,8 @@ static void input(void)
     }
     if (ui.page == LCD_PAGE_TUNE) {              /* K1 Master Tune, K2 Key Transpose (#54) */
         if ((e = plat_enc(EN_K1)) != 0) {
-            ui.tune_off = (int8_t)clamp((int32_t)ui.tune_off + e, -63, 63);
-            d50_tune((unsigned)(63 + ui.tune_off));
+            ui.tune_off = (int8_t)clamp((int32_t)ui.tune_off + e, -50, 50);
+            d50_tune((unsigned)(50 + ui.tune_off));
             ui.redraw = 1;
         }
         if ((e = plat_enc(EN_K2)) != 0) {
@@ -635,7 +635,7 @@ static void draw(void)
         if (!pb)
             lcd_clear();
         else if (ui.page == LCD_PAGE_TUNE)
-            lcd_tune_screen((uint32_t)(63 + ui.tune_off), ui.transpose);
+            lcd_tune_screen((uint32_t)(50 + ui.tune_off), ui.transpose);
         else if (ui.page != LCD_PAGE_PLAY) {
             uint8_t own[2];
             midi_values(own);

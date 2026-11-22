@@ -234,11 +234,11 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
     }
 }
 
-/* The TUNE/FUNCTION page (issue #54, SEL): the firmware's Master Tune and Key Transpose lines (0x7515 on), the tune 0..126 as 427.5 .. 452.6 Hz */
+/* The TUNE/FUNCTION page (issue #54, SEL): the firmware's Master Tune and Key Transpose lines (0x7515 on), the tune 0..100 as 427.5 .. 452.6 Hz (0.251 Hz a step) */
 static void lcd_tune_screen(uint32_t tune, int32_t transpose)
 {
     char t[8];
-    uint32_t hz = 4275u + tune * 251u / 126u, a = (uint32_t)(transpose < 0 ? -transpose : transpose);
+    uint32_t hz = 4275u + tune * 251u / 100u, a = (uint32_t)(transpose < 0 ? -transpose : transpose);
     lcd_clear();
     lcd_put(0, 0, "Master Tune", LCD_COLS);
     t[0] = (char)('0' + hz / 1000u);

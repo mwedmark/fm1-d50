@@ -45,7 +45,7 @@ void d50_bend(unsigned value);
 /* A control change, as the D-50 receives them: 1 modulation lever, 5 portamento time, 6 data entry (RPN 0: the bender range),
  * 7 volume, 64 hold pedal, 65 portamento switch, 100/101 the RPN; the others are ignored. Issue #4. */
 void d50_cc(unsigned cc, unsigned value);
-/* The D-50's TUNE/FUNCTION (issue #54): Master Tune 0..126 (427.5 .. 452.6 Hz, 63 = 440.0 Hz; the pitch's offset, with the bend) and Key
+/* The D-50's TUNE/FUNCTION (issue #54): Master Tune 0..100 (427.5 .. 452.6 Hz, 50 = 440.0 Hz, as the D-50's system byte; the pitch's offset, with the bend) and Key
  * Transpose -12..12 semitones (a key sounds its note moved; its note-off ends the one it sounded). Both are kept over a program change. */
 void d50_tune(unsigned value);
 void d50_transpose(int semitones);

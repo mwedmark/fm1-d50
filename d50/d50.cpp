@@ -126,7 +126,7 @@ constexpr unsigned kChaseCc = 80;                // Chase Play on (>= 64) or off
 // The controllers' state, the audio interrupt's (d50_render's events): what a program change keeps (the lever, the pressure, CC7: the
 // voices' and the patch's live controls) and what it resets to the new patch's (the bender range, the portamento). Issue #4.
 struct Controls {
-    int tune = 63;                               // Master Tune, 0..126 (427.5 .. 452.6 Hz, 63 = 440.0), issue #54
+    int tune = 50;                               // Master Tune, 0..100 (427.5 .. 452.6 Hz, 50 = 440.0: the firmware's range table, #58), issue #54
     int transpose = 0;                           // Key Transpose, -12..12 semitones (issue #54)
     uint8_t sounded[128] = {};                   // the note a key's note-on sounded (its note-off ends that one, whatever the transpose is now)
     unsigned bend = 8192;                        // the last pitch bend, 0..16383
@@ -322,7 +322,7 @@ extern "C" void d50_note(unsigned note, unsigned velocity) { push(kEvNote << 24 
 extern "C" void d50_bend(unsigned value) { push(kEvBend << 24 | (value & 16383U)); }
 extern "C" void d50_panic(void) { push(kEvPanic << 24); }
 extern "C" void d50_cc(unsigned cc, unsigned value) { push(kEvCc << 24 | (cc & 127U) << 8 | (value & 127U)); }
-extern "C" void d50_tune(unsigned value) { push(kEvTune << 24 | (value > 126U ? 126U : value)); }
+extern "C" void d50_tune(unsigned value) { push(kEvTune << 24 | (value > 100U ? 100U : value)); }
 extern "C" void d50_transpose(int semitones) { push(kEvTranspose << 24 | static_cast<unsigned>(semitones < -12 ? -12 : semitones > 12 ? 12 : semitones) + 12U); }
 extern "C" void d50_pressure(unsigned value) { push(kEvPressure << 24 | (value & 127U)); }
 
@@ -336,9 +336,9 @@ void bit_set(uint32_t *set, int note, bool on)
 void apply_bend()
 {
     const int range = ctl.bend_range >= 0 ? ctl.bend_range : spec_at(spec_done & 1U).bend_range;
-    // (the master tune, 0.00795 semitone a step: 100.3 cents over the 126 steps)
+    // (the master tune, 0.01003 semitone a step: 100.3 cents over the 100 steps)
     patch->set_bend_semis((static_cast<int>(ctl.bend) - 8192) * (static_cast<float>(range) / 8192.0f) +
-                          static_cast<float>(ctl.tune - 63) * (1.0f / 126.0f) * 1.0029f);
+                          static_cast<float>(ctl.tune - 50) * (1.0f / 100.0f) * 1.0029f);
 }
 void apply_volume() { patch->set_volume(spec_at(spec_done & 1U).volume * (static_cast<float>(ctl.volume) / 127.0f)); }
 // after configure (a new program, or the first): the new patch's own bender range and portamento; the volume, the bend and the
