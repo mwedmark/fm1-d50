@@ -51,7 +51,7 @@ Everything the earlier work took from the dump stays valid: the play-screen temp
 
 The D-50's MIDI implementation takes CC1, 5, 6, 7, 64, 65 and the RPNs (`d50.h`). The joystick's X and Y are A/D controls on the instrument, not MIDI messages, so the balances
 have no D-50 CC to follow. #58's **CC81 (tone balance, the stick's Y) and CC82 (the selected tone's partial balance, X)** are ours, as CC80 (Chase Play) is: 0..127 over the
-balances' 0..100, set as K2 and K1 set them (an edit of the current patch). The firmware's own joystick scaling, when found, may change the curve.
+balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Their linear 0..100 is the stick's own on the play screens (0x3114, below).
 
 ## The MIDI receive path (verified in the listing, 2026-11-22)
 
@@ -194,9 +194,31 @@ D-50 (#58): a byte of the temporary area above its maximum is skipped, wherever 
   - **Stick-X: parameter 0x66 = tone common byte 47, the partial balance.** The tone is the one the panel has selected (0xFE54.6 picks 0xC400, the upper, or 0xC4C0, the lower: 0x3B9C).
   - **Stick-Y: parameter 0x8A = patch byte 33, the tone balance.**
   Another screen (0x4865) points Stick-X at parameter 0xA3 (system byte 17, Key Transpose) and switches Stick-Y off (0xFF).
-- **How it moves them.** 0x3083: with a maximum of 16 or more, the stick's 0..255 is halved, shaped by the routine at 0x30E7 (a table at 0x3114 by range), and added to the descriptor's starting
-  value as an offset from the centre, clamped to 0..maximum. Below 16, or when P1.3/P1.4 are set (0x4AC9, 0x4AD0, 0x4AD7 set the two bits: the panel's joystick mode), 0x30BD sets the value
-  directly. A changed value goes through 0x3784 (store, then 0x3B5A: write to the tone, patch or system byte and update the screen).
+- **How it moves them** (verified 2026-11-22; this corrects the first reading, which had the play screens' stick relative). Two ways, chosen per screen by P1.3 and P1.4, which
+  the firmware uses as two flag bits: 0x4AC5, 0x4AC9, 0x4AD0 and 0x4AD7 set them to 00, 01, 10, 11, and each screen's script calls one (the screen scripts are bytecode: `28 lo hi`
+  calls a routine, `0C F8 B6 C0 B9 66` gives the descriptor at 0xC0B6 parameter 0x66). **Both play screens' scripts (0x496A, 0x49A1) set P1.4** (0x4AD0 and 0x4AD7) before
+  pointing X at 0x66 and Y at 0x8A.
+  - **Reading** (0x335A): the new average is averaged again with the last value taken, and a change of less than 2 (of 0..255) is ignored. 0x3346 then trims the ends: less 4
+    (0 below), times 33/32, 255 at most, so the stick's full value is reached about 4 short of each end.
+  - **Catching** (0x30E7): while the stick is not in use (0xFE54.3 clear, or 0xFE47.2 set) the reading is only tracked. In use, a first movement is taken only when it is small
+    (less than 4) or at an end (below 8 or 0xF7 and up); once a value has changed (0xFE55.5) every movement is taken. A jump in the reading does not move the parameter.
+  - **Absolute, 0x30BD**: X with P1.3 or P1.4 set, Y with P1.4 set (Y is off with only P1.3), or any parameter with a maximum below 16. The value is the stick's position over
+    the parameter's range, through **the table at 0x3114**, which is not a curve but a dispatch: `03 7F 64 63` (3 keys: the maxima 127, 100, 99) and four routines, found by
+    0x3440 (`CMPMNE`):
+
+    | maximum | routine | value |
+    | --- | --- | --- |
+    | 127 | 0x3167 | reading / 2 (0..127) |
+    | 100 | 0x3160 | reading / 2, then 0x417E: v - v·56/256 (0..127 to 0..100) |
+    | 99 | 0x3159 | reading / 2, then 0x418C: v - v·57/256 (to 0..99) |
+    | any other | 0x3120 | the reading in max + 1 equal steps of 256 / (max + 1), centred (less half the remainder), at most max; a change is taken only when it is more than half a step (a quarter for a step of 128 and up): hysteresis |
+
+    **So on the play screens the stick sets the balances directly and linearly: 0 at one end, about 50 in the middle, 100 at the other**, whatever the patch had.
+  - **Relative, 0x3083**: neither bit set and a maximum of 16 or more (the screen at 0x4918, P1 00: an edit screen). The max is halved, the reading quantised by 0x3120 into
+    max/2 + 1 steps, and the step less max/4 added to the descriptor's starting value (+5), clamped to 0..max: the stick moves the parameter by up to a quarter of its range
+    either way from where it was. The start is set when the screen gives the descriptor (0x3FE8: +1, +3, +5 from the parameter), and, with P1.3 set and P1.4 not, from the
+    current value (0x4930); after each store with either bit set (0x3B60).
+  A changed value goes through 0x3784 (store, then 0x3B5A: write to the tone, patch or system byte and update the screen).
 
 ### The parameter numbers and their ranges (verified: the code at 0x3B7C and the tables)
 
@@ -217,7 +239,8 @@ Prog.C, Exclu, ...: 0xC5C3-0xC5CC, as the parser tests them), 13: 15 (the basic 
 - The D-50's stick: **X = partial balance (of the selected tone), Y = tone balance.** #43 had K1 as the tone balance and K2 as the partial balance of both tones; the
   maintainer chose to follow the D-50 (#58): **K1 is now X (the selected tone's partial balance), K2 Y (the tone balance), and K4 selects the tone** (the D-50's UPPER/LOWER
   keys; the Upper at start). CC82 follows K1 and CC81 K2.
-- The stick moves a parameter from where it was (an offset from the stick's centre), not to an absolute value. CC81/CC82 set absolute values.
+- On the play screens the D-50's stick sets the balances absolutely and linearly over 0..100, as CC81/CC82 do (0..127 over 0..100): those two follow the D-50. K1 and K2 are
+  encoders without a position, so they step the balances from where they are; that is ours. The D-50 ignores a jump in the reading (0x30E7); MIDI CCs are taken as they come.
 - Master Tune is 0..100, not 0..126 as PR #56 first had it: corrected (`d50_tune` 0..100, 50 = 440.0 Hz). Key Transpose's -12..+12 is confirmed.
 
 ## Coverage and what is next
@@ -227,6 +250,7 @@ together. The rest is reached by indirect jumps and by handlers installed into t
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
 2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
-3. (Done: the A/D path and the stick's targets.) Still open: the shaping table at 0x3114, and the joystick mode bits P1.3/P1.4 (which panel key sets them).
+3. (Done: the A/D path, the stick's targets, the table at 0x3114 and P1.3/P1.4 as per-screen flags.) Still open: what else P1.3/P1.4 change (0x1562, 0x3EB7, 0x4014,
+   0x495F), the difference between the two play screens (P1 10 and 11), and decoding the screen scripts' bytecode as a whole.
 4. The function menu and the tune/transpose parameters: ranges and steps (issue #57).
 5. Name things: write `tools/d50_dasm/names.txt` (address, name) and have analyze.py use it, so the listing becomes readable.
