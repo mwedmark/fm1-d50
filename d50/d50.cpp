@@ -573,9 +573,12 @@ struct Reply {
     bool receiving;
 } reply;
 
-void answer(uint8_t dev, uint8_t cmd) { reply.answer = cmd; reply.answer_dev = dev; }
+void answer(uint8_t dev, uint8_t cmd) { reply.answer = cmd; reply.answer_dev = dev; }   // (dev: the frame's, which is ours: d50_sysex)
 void hs_stop() { reply.go = reply.eod = reply.waiting = reply.receiving = false; reply.sent = 0; if (reply.cmd == kDat) reply.left = 0; }
 }  // namespace
+
+static uint8_t device_id;                       // d50_device: the basic channel less one (issue #51)
+extern "C" void d50_device(unsigned id) { device_id = static_cast<uint8_t>(id & 15U); }
 
 static unsigned sysex_error;                     // the last frame's fault (d50.h D50_ERR_*), 0 none; d50_sysex_error reads and clears it
 
@@ -652,6 +655,7 @@ static void d50_handshake(const uint8_t *p, uint32_t n)
 extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
 {
     if (n < 4U || p[0] != kRoland || p[2] != kModel) return 0;
+    if (p[1] != device_id) return 1;              // another D-50's (issue #51): not done, not answered
     if (p[3] >= kWsd && p[3] <= kRjc) {           // the handshake: answered even without data (RJC), so the other side does not wait
         d50_handshake(p, n);
         return 1;

@@ -11,7 +11,11 @@ typedef struct {
     uint8_t program;                     /* 0 .. 63, in the bank */
     uint8_t bank;                        /* 0 .. d50_banks() - 1 (issue #7; was a reserved byte, 0) */
     uint8_t lcd;                         /* the D-50's display (issues #23, #26; was a reserved byte, 0): the view, the low bits its dot pitch */
+    uint8_t midi;                        /* the D-50's MIDI (issue #51; a record without it reads 0): the basic channel, and MIDI_OMNI_OFF */
 } settings_t;
+#define SET_OLD_BYTES 8u                 /* the record before midi (one without it loads, with midi 0: channel 1, omni on) */
+#define MIDI_CHANNEL 0x0Fu               /* the basic channel, 0 .. 15 (1 .. 16 on the screen): also the SysEx device ID, as the D-50's */
+#define MIDI_OMNI_OFF 0x10u              /* omni off: only the basic channel plays. Omni on (the default): every channel, as before #51 */
 #define LCD_TRUE 0x80u                   /* the LCD at true size, 2 x 40 (#23) */
 #define LCD_FOLDED 0x40u                 /* the LCD folded, 4 x 20 (#26) */
 #define LCD_SHOWN (LCD_TRUE | LCD_FOLDED)
@@ -74,6 +78,8 @@ static void midi_in(void)                    /* audio interrupt: the packets tha
         uint32_t st = (pkt >> 8) & 0xFFu, d1 = (pkt >> 16) & 0x7Fu, d2 = (pkt >> 24) & 0x7Fu;
         if (st == 0xF8u || st == 0xFEu)
             continue;
+        if (st < 0xF0u && (set.midi & MIDI_OMNI_OFF) && (st & 0x0Fu) != (set.midi & MIDI_CHANNEL))
+            continue;                            /* omni off: another channel's (issue #51) */
         midi_count++;
         switch (st & 0xF0u) {
         case 0x90u: d50_note(d1, d2); break;
@@ -203,14 +209,16 @@ void app_backup_restored(void)
 /* ------------------------------------------------------------------ settings --- */
 static void settings_load(void)
 {
-    if (plat_store_load(OBJ_SETTINGS, &set, sizeof set) != (int)sizeof set || set.magic != SET_MAGIC || set.octave < -2 ||
-        set.octave > 2 || set.program > 63u) {
+    int n;
+    memset(&set, 0, sizeof set);
+    n = plat_store_load(OBJ_SETTINGS, &set, sizeof set);
+    if ((n != (int)sizeof set && n != (int)SET_OLD_BYTES) || set.magic != SET_MAGIC || set.octave < -2 || set.octave > 2 ||
+        set.program > 63u) {
+        memset(&set, 0, sizeof set);
         set.magic = SET_MAGIC;
-        set.octave = 0;
-        set.program = 0;
-        set.bank = 0;
-        set.lcd = 0;
     }
+    set.midi &= MIDI_CHANNEL | MIDI_OMNI_OFF;
+    d50_device(set.midi & MIDI_CHANNEL);         /* the SysEx device ID: the basic channel's (issue #51) */
 }
 
 static uint32_t lcd_pitch(void)
@@ -314,8 +322,9 @@ static struct {
 static int32_t patch_edit(uint32_t at, int32_t step, int32_t lo, int32_t hi)
 {
     const uint8_t *p = d50_patch_bytes();
-    uint8_t f[9] = {0x41, 0x10, 0x14, 0x12, 0, 0, 0, 0, 0};    /* 41 dev 14 12, the address (three 7-bit bytes), the value, the sum */
+    uint8_t f[9] = {0x41, 0, 0x14, 0x12, 0, 0, 0, 0, 0};       /* 41 dev 14 12, the address (three 7-bit bytes), the value, the sum */
     int32_t v;
+    f[1] = (uint8_t)(set.midi & MIDI_CHANNEL);   /* (the device ID d50_sysex takes: issue #51) */
     if (!p)
         return -1;
     v = clamp((int32_t)p[at] + step, lo, hi);
@@ -328,12 +337,29 @@ static int32_t patch_edit(uint32_t at, int32_t step, int32_t lo, int32_t hi)
     ui.redraw = 1;
     return v;
 }
-/* A parameter of the patch block changed on an edit page (#31) */
+/* The MIDI page's values (issue #51, lcd_pages' own): 0 the basic channel (0..15), 1 omni (1 on) */
+static void midi_values(uint8_t *v)
+{
+    v[0] = (uint8_t)(set.midi & MIDI_CHANNEL);
+    v[1] = (uint8_t)(set.midi & MIDI_OMNI_OFF ? 0u : 1u);
+}
+/* A parameter changed on an edit page: the patch block's (#31), or the MIDI page's settings (#51; kept with SAVE) */
 static void page_edit(uint32_t field, int32_t step)
 {
     const lcd_page_t *g = &lcd_pages[ui.page];
-    if (field < g->fields)
-        (void)patch_edit(6u * 64u + g->f[field].byte, step, g->f[field].lo, g->f[field].hi);
+    if (field >= g->fields)
+        return;
+    if (g->own) {
+        uint8_t v[2];
+        midi_values(v);
+        v[field] = (uint8_t)clamp((int32_t)v[field] + (step > 0 ? 1 : -1), g->f[field].lo, g->f[field].hi);
+        set.midi = (uint8_t)((v[0] & MIDI_CHANNEL) | (v[1] ? 0u : MIDI_OMNI_OFF));
+        d50_device(set.midi & MIDI_CHANNEL);
+        set_dirty = 1;
+        ui.redraw = 1;
+        return;
+    }
+    (void)patch_edit(6u * 64u + g->f[field].byte, step, g->f[field].lo, g->f[field].hi);
 }
 static void uint_text(uint32_t v, char *b);
 /* The D-50's joystick on the play screen (#43), K1 and K2: K1 the balance between the upper and the lower tone (the patch block's byte 33,
@@ -587,10 +613,13 @@ static void draw(void)
             lcd_clear();
         else if (ui.page == LCD_PAGE_TUNE)
             lcd_tune_screen((uint32_t)(63 + ui.tune_off), ui.transpose);
-        else if (ui.page != LCD_PAGE_PLAY)
-            lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb);
-        else
+        else if (ui.page != LCD_PAGE_PLAY) {
+            uint8_t own[2];
+            midi_values(own);
+            lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb, own);
+        } else {
             lcd_play_screen(set.bank ? 'C' : 'I', p, pb);
+        }
         if (now < ui.msg_until) {
             if (ui.lcd_msg & LCD_MSG_ERROR)
                 lcd_error_screen(ui.lcd_msg & ~LCD_MSG_ERROR);
