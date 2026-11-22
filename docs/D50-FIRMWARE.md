@@ -207,8 +207,15 @@ D-50 (#58): a byte of the temporary area above its maximum is skipped, wherever 
   **At power-on they are 01, Valu**: start-up's 0x22A7 (from 0x20EC) clears the run-time state and writes `MOV P1,#08H` (0x22C0), every start, whatever was set before.
   No stick descriptor is given a parameter then, and a screen change (0x345C) clears 0xFE54.3, so **after power-on the stick does nothing on the play screen until Lowr or Uppr
   is pressed**; on a screen that gives the descriptor a parameter it sets that value (Valu). Two more paths leave Lowr/Uppr: every screen change runs 0x495F (with P1.4 set:
-  P1 to 01, Valu), so leaving the play screen ends the balance mode, and the key at 0x4737 (Copy, 0x1E, by the table) calls Valu's handler. (Whether a patch change counts as a screen change here, ending the balance mode, is
-  not checked.) What the code does with them:
+  P1 to 01, Valu), so leaving the play screen ends the balance mode, and the key at 0x4737 (Copy, 0x1E, by the table) calls Valu's handler.
+  **A patch change ends the balance mode too** (verified 2026-11-22). Every way of choosing a patch goes through 0x25C7, which loads it (from internal memory, or the card
+  with 0xFE39 bit 6) and, also when the card fails (0x25DA), ends in `MOV R1,#00H; CALL !345CH`: screen 0 again, so 0x495F sets P1 to Valu and 0xFE54.3 is cleared. The ways:
+  - a Bnk or Nmb key on the play screen (the tables at 0x461D/0x4621 and 0x467C/0x4680, by screen 0x0B, 0x28, 0x34, 0x00, else: on screen 0, 0x4644 and 0x46A3 set the
+    pending bank or number in 0xFE39 and call 0x25B6). 0x25B6 loads the patch only when system byte 12's bit 0 is set (0xC5CC); clear, it only sends the program change (0x551B,
+    when Prog.C, 0xC5C9 bit 0, is on: `C0 n` through 0x5544). After a load it sends the program change as well;
+  - a MIDI program change (0x4BCC), taken only on screen 0 and with Prog.C on, straight to 0x25C7.
+  So after a patch change on a D-50 the stick is idle until Lowr or Uppr is pressed again. (On screens 0x17-0x27, the tone screens, Nmb1-4 instead toggle the partials on and
+  off: 0x46AD flips bits of the tones' common byte 46, 0xC4AE and 0xC56E.) What the code does with them:
 
   | key | handler | P1.4 P1.3 | the stick |
   | --- | --- | --- | --- |
@@ -278,7 +285,7 @@ Prog.C, Exclu, ...: 0xC5C3-0xC5CC, as the parser tests them), 13: 15 (the basic 
   keys; the Upper at start). CC82 follows K1 and CC81 K2.
 - With Lowr or Uppr (on a play screen) the D-50's stick sets the balances absolutely and linearly over 0..100, as CC81/CC82 do (0..127 over 0..100): those two follow the D-50. K1 and K2 are
   encoders without a position, so they step the balances from where they are; that is ours. The D-50 ignores a jump in the reading (0x30E7); MIDI CCs are taken as they come.
-- The D-50's stick moves the balances only after Lowr or Uppr, and leaves them on a screen change; at power-on it is in Valu. The FM-1's K1/K2 move them on the play
+- The D-50's stick moves the balances only after Lowr or Uppr, and leaves them on a screen change or a patch change; at power-on it is in Valu. The FM-1's K1/K2 move them on the play
   screen at any time, and K4's Upper at start matches the D-50's power-on P1.3 (set: 0x3EB4 would take the upper). Kept as ours: the FM-1 has no Lcal/Valu.
 - Master Tune is 0..100, not 0..126 as PR #56 first had it: corrected (`d50_tune` 0..100, 50 = 440.0 Hz). Key Transpose's -12..+12 is confirmed.
 
