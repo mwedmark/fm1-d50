@@ -84,6 +84,8 @@ It receives over USB. The **MIDI Channel** page (EDIT) has the D-50's two settin
 | CC7 | Volume |
 | CC64 | Hold pedal |
 | CC80 | Chase Play on (64 and up) or off |
+| CC81 | The joystick's tone balance (K1): 0 to 127 over 0 to 100, the Upper against the Lower tone. Ours: the D-50 has no controller for it |
+| CC82 | The joystick's partial balance (K2): 0 to 127 over 0 to 100, in both tones. Ours |
 | CC100, CC101, CC6 | RPN 0: the bender range |
 | CC120, CC123 | All sound off, all notes off |
 | SysEx DT1, RQ1 | Roland, model 14h: the temporary area at 00 00 00 and the internal memory at 02 00 00 (below) |

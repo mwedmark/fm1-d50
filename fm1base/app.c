@@ -70,6 +70,10 @@ static PLAT_RAM_CODE uint32_t resample(int32_t *lr, uint32_t n, uint32_t at, int
     return at;
 }
 
+/* The joystick's balances over MIDI (ours, as Chase Play's CC80: the D-50 has no controller for them), 0..127 over 0..100 (#58) */
+#define D50_BALANCE_CC 81u
+#define D50_PARTIAL_BALANCE_CC 82u
+static volatile int8_t joy_asked[2] = {-1, -1};
 static void midi_in(void)                    /* audio interrupt: the packets that came in */
 {
     uint32_t pkt;
@@ -89,6 +93,8 @@ static void midi_in(void)                    /* audio interrupt: the packets tha
         case 0xB0u:
             if (d1 == 120u || d1 == 123u)
                 d50_panic();
+            else if (d1 == D50_BALANCE_CC || d1 == D50_PARTIAL_BALANCE_CC)
+                joy_asked[d1 - D50_BALANCE_CC] = (int8_t)d2;   /* the joystick's two axes, absolute (#58); the main loop does it */
             else if (d1 == 0u)
                 bank_asked = (int32_t)d2;        /* (not the D-50's: its banks were cards; upstream PicoFaceD5's) */
             else
@@ -384,6 +390,16 @@ static void joystick(uint32_t axis, int32_t step)
     uint_text((uint32_t)v, t);
     app_say(axis == 0u ? "TONE BAL" : "PART BAL", t);
 }
+static void joystick_to(uint32_t axis, int32_t v127)      /* a MIDI value of the axis: 0..127 over 0..100 */
+{
+    const uint8_t *p = d50_patch_bytes();
+    int32_t d;
+    if (!p)
+        return;
+    d = (v127 * 100 + 63) / 127 - (int32_t)p[axis == 0u ? PATCH_TONE_BALANCE : PATCH_COMMON_UPPER + COMMON_PARTIAL_BALANCE];
+    if (d != 0)
+        joystick(axis, d);
+}
 #define HOME_LONG_MS 3000u
 #define LCD_MSG_COMPLETE 1u
 #define LCD_MSG_ERROR 0x80u
@@ -534,6 +550,13 @@ static void input(void)
         set.lcd = (uint8_t)((set.lcd & ~LCD_SHOWN) | v);
         set_dirty = 1;
         ui.redraw = 1;
+    }
+    for (k = 0; k < 2u; k++) {                   /* CC81 and CC82 (#58) */
+        int32_t v = joy_asked[k];
+        if (v >= 0) {
+            joy_asked[k] = -1;
+            joystick_to(k, v);
+        }
     }
     if (ui.page == LCD_PAGE_TUNE) {              /* K1 Master Tune, K2 Key Transpose (#54) */
         if ((e = plat_enc(EN_K1)) != 0) {
