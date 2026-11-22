@@ -2,7 +2,7 @@
 # fm1-base and felucca-bsp for the build on GitHub (issue #36): the fork's d50-layout at a fixed commit (fm1.toml data_lo, also in the
 # host and web builds), and felucca-bsp upstream at a fixed commit with tools/ci/felucca-bsp-d50-layout.patch. Usage: fetch_platform.sh DIR
 set -euo pipefail
-FM1_BASE_COMMIT=936eec20b1ce1605b22cfd787acc42a546ec8f5e   # mwedmark/fm1-base d50-layout
+FM1_BASE_COMMIT=6ea8ec9883bb5ecca3106bb248c5cd9b43e7d141   # mwedmark/fm1-base res-var (d50-layout and resources_var)
 BSP_COMMIT=2a5af3dfc8bccb92e37d48a3e7e0bf9a5827e51f        # hugelton/felucca-bsp, before the patch
 base="$1"
 here="$(cd "$(dirname "$0")" && pwd)"

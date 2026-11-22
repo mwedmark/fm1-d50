@@ -219,12 +219,11 @@ static uint32_t lcd_pitch(void)
     return p < LCD_PITCH_MIN || p > LCD_PITCH_MAX ? LCD_PITCH_DEFAULT : p;
 }
 
-/* The D-50's data (d50.cpp fm1_flash_map): the resource region's payload. A build with fm1.toml resources has plat_res, which takes only
- * the payload that build was made from (its length and CRC are compiled in). A build without them (GitHub's, which never holds Roland's
- * data: issue #36) reads the region as it lies: the commit record a local build's package or fm1_resources.py wrote (device/res.c:
- * "RES1", the payload's length and CRC-32, the record's own CRC), and the payload checked against it once. d50.cpp then checks its own
- * header ("FMD5"). So an update from GitHub keeps the data the FM-1 has and plays it. */
-#if !FM1B_RES
+/* The D-50's data (d50.cpp fm1_flash_map): the resource region's payload. The FM-1's firmware has the region with resources_var (fm1.toml:
+ * any data the host writes, the install page's own file; GitHub's build never holds Roland's data: issues #36, #47), so plat_res gives it
+ * on the device. The browser emulator's data area is not plat_res's (the data you load: web/emu/app.js), so there the region is read as it
+ * lies: the commit record (device/res.c: "RES1", the payload's length and CRC-32, the record's own CRC) and the payload checked against
+ * it once. d50.cpp then checks its own header ("FMD5"). An update from GitHub keeps the data the FM-1 has and plays it. */
 static uint32_t res_crc32(const void *p, uint32_t n)   /* zlib's CRC-32, a bit at a time (once, at the start) */
 {
     const uint8_t *b = (const uint8_t *)p;
@@ -236,12 +235,19 @@ static uint32_t res_crc32(const void *p, uint32_t n)   /* zlib's CRC-32, a bit a
     }
     return ~c;
 }
-#endif
 const uint8_t *app_d50_data(uint32_t *len)
 {
 #if FM1B_RES
-    return plat_res(len);
-#else
+    {
+        uint32_t n = 0;
+        const uint8_t *p = plat_res(&n);
+        if (p && n) {
+            if (len)
+                *len = n;
+            return p;
+        }
+    }
+#endif
     static uint8_t checked;
     static uint32_t found;
     if (!checked) {
@@ -258,7 +264,21 @@ const uint8_t *app_d50_data(uint32_t *len)
     if (len)
         *len = found;
     return found ? plat_data(APP_RES_BASE + 32u) : 0;
+}
+
+/* What the region holds, as its commit record says (the payload's CRC-32; 0 while it holds nothing): the data the engine was bound to
+ * at the start. New data written over USB (the install page, tools/fm1_resources.py) changes it, and the engine is bound once: a restart
+ * binds it (app_frame). */
+static uint32_t res_stamp(void)
+{
+    uint32_t n = 0, crc = 0;
+    const uint8_t *r = plat_data(APP_RES_BASE);
+#if FM1B_RES
+    (void)plat_res(&n);
 #endif
+    if (r && n)
+        memcpy(&crc, r + 8, sizeof crc);
+    return crc;
 }
 
 static int bound;                            /* the D-50's data found and the engine started */
@@ -615,6 +635,15 @@ void app_frame(void)
 {
     static uint32_t last_ms, last_midi;
     uint32_t now = plat_ms();
+    static uint32_t stamp0, restart_at;
+    static uint8_t stamped;
+    if (!stamped) {
+        stamped = 1;
+        stamp0 = res_stamp();
+    } else if (!restart_at && res_stamp() != stamp0)   /* new D-50 data was written: say so a moment, then start on it */
+        restart_at = (now + 2500u) | 1u;
+    if (restart_at && (int32_t)(now - restart_at) >= 0)
+        plat_restart();
     input();
     if (d50_edit_poll())                         /* a SysEx edit of the current patch: the sound, and its name on the screen */
         ui.redraw = 1;
