@@ -285,7 +285,6 @@ static int bound;                            /* the D-50's data found and the en
 void app_init(void)
 {
     settings_load();
-    ui.tune = 63;                            /* Master Tune 440.0 Hz, Key Transpose 0 (#54) */
 #if FM1_CPU1
     plat_cpu2_set(1);                        /* the second core renders every second sounding voice (d50.cpp split_begin); else one core */
 #endif
@@ -305,7 +304,7 @@ static struct {
     uint8_t lcd_msg;                             /* the message in the LCD (#25): 0 the panel's, LCD_MSG_COMPLETE, LCD_MSG_ERROR | its number */
     uint8_t home_long;                         /* HOME held long enough to have changed the LCD's colours (this press) */
     uint32_t home_ms;                            /* when HOME was pressed */
-    uint8_t tune;                                /* Master Tune 0..126 (#54), 63 = 440.0 Hz; not kept over a power cycle */
+    int8_t tune_off;                            /* Master Tune 0..126 (#54) less 63 (so 0 = 440.0 Hz at start); not kept over a power cycle */
     int8_t transpose;                            /* Key Transpose -12..12 (#54) */
     uint8_t page;                                /* the edit page (#31): d50_lcd.h LCD_PAGE_*, LCD_PAGE_PLAY none */
 } ui;
@@ -512,8 +511,8 @@ static void input(void)
     }
     if (ui.page == LCD_PAGE_TUNE) {              /* K1 Master Tune, K2 Key Transpose (#54) */
         if ((e = plat_enc(EN_K1)) != 0) {
-            ui.tune = (uint8_t)clamp((int32_t)ui.tune + e, 0, 126);
-            d50_tune(ui.tune);
+            ui.tune_off = (int8_t)clamp((int32_t)ui.tune_off + e, -63, 63);
+            d50_tune((unsigned)(63 + ui.tune_off));
             ui.redraw = 1;
         }
         if ((e = plat_enc(EN_K2)) != 0) {
@@ -587,7 +586,7 @@ static void draw(void)
         if (!pb)
             lcd_clear();
         else if (ui.page == LCD_PAGE_TUNE)
-            lcd_tune_screen(ui.tune, ui.transpose);
+            lcd_tune_screen((uint32_t)(63 + ui.tune_off), ui.transpose);
         else if (ui.page != LCD_PAGE_PLAY)
             lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb);
         else
