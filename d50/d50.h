@@ -57,6 +57,9 @@ unsigned d50_chase_on(void);
  * DT1, or an RQD's next DAT once the other side has acknowledged the last (then EOD); its length, 0 when none is due.
  * d50_edit_poll: a DT1 or DAT into the temporary area becomes the sound (each pass of the main loop); 1 when it did. */
 #define D50_SYSEX_REPLY_MAX 266U
+/* The device ID (issue #51), 0..15: the D-50's is its basic channel less one. A D-50 frame with another is taken (1) but neither done nor
+ * answered, as on a D-50 that is not the one addressed; what goes out carries this one. 0 (channel 1) until set. */
+void d50_device(unsigned id);
 int d50_sysex(const uint8_t *p, uint32_t n);
 unsigned d50_sysex_reply(uint8_t *frame);
 int d50_edit_poll(void);

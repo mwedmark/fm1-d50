@@ -180,8 +180,8 @@ static void lcd_message(const char *a, const char *b)
 
 /* The edit pages (issue #31, the first of #8): the firmware's title (16 characters, 0xF940 on) above its parameters line, each value in the
  * template's three $ columns from a byte of the patch block. The title line's layout (the patch number at the right) is ours. */
-enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGES };
-enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE };     /* the value; the value + 1; the chase mode's name */
+enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_MIDI, LCD_PAGES };
+enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE, LCD_SHOW_ONOFF };   /* the value; the value + 1; the chase mode's name; ON or OFF */
 typedef struct {
     uint8_t byte, lo, hi, col, show;                      /* the patch block's byte, its range, its column on the lower line, how shown */
 } lcd_field_t;
@@ -189,6 +189,7 @@ typedef struct {
     const char *title, *line;
     uint8_t fields;
     lcd_field_t f[4];
+    uint8_t own;                                          /* the values are not the patch's but the caller's (lcd_page_screen own[]) */
 } lcd_page_t;
 static const lcd_page_t lcd_pages[LCD_PAGES] = {
     {"", "", 0, {{0}}},
@@ -196,12 +197,16 @@ static const lcd_page_t lcd_pages[LCD_PAGES] = {
      {{29, 0, 3, 4, LCD_SHOW_NUM1}, {30, 0, 31, 12, LCD_SHOW_NUM1}, {31, 0, 100, 20, LCD_SHOW_NUM}, {32, 0, 100, 28, LCD_SHOW_NUM}}},
     {"Chase Edit", "Mode$$$ Levl$$$ Time$$$", 3,                         /* 0x6FC4 */
      {{34, 0, 2, 4, LCD_SHOW_CHASE}, {35, 0, 100, 12, LCD_SHOW_NUM}, {36, 0, 100, 20, LCD_SHOW_NUM}}},
+    /* the MIDI settings (issue #51), not the patch's: the basic channel (also the SysEx device ID) and omni. The title is the firmware's
+     * (0xF900's list); the line is ours */
+    {"MIDI Channel", "BasicCH$$$     Omni$$$", 2,
+     {{0, 0, 15, 7, LCD_SHOW_NUM1}, {1, 0, 1, 19, LCD_SHOW_ONOFF}}, 1},
 };
-static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p)
+static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p, const uint8_t *own)
 {
     static const char chase[] = " ULULLULU";                                         /* 3 each, mode 0..2 (0x7B98) */
     const lcd_page_t *g = &lcd_pages[page];
-    const uint8_t *pb = p + 6u * 64u;
+    const uint8_t *pb = g->own ? own : p + 6u * 64u;
     char t[4];
     uint32_t i;
     lcd_clear();
@@ -217,6 +222,8 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
         uint32_t v = pb[f->byte] < f->lo ? f->lo : pb[f->byte] > f->hi ? f->hi : pb[f->byte];
         if (f->show == LCD_SHOW_CHASE) {
             lcd_put(1, f->col, chase + 3u * v, 3);
+        } else if (f->show == LCD_SHOW_ONOFF) {
+            lcd_put(1, f->col, v ? " ON" : "OFF", 3);
         } else {
             v += f->show == LCD_SHOW_NUM1 ? 1u : 0u;
             t[0] = v >= 100u ? (char)('0' + v / 100u) : ' ';
