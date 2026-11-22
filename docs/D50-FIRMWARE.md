@@ -211,10 +211,16 @@ D-50 (#58): a byte of the temporary area above its maximum is skipped, wherever 
   **A patch change ends the balance mode too** (verified 2026-11-22). Every way of choosing a patch goes through 0x25C7, which loads it (from internal memory, or the card
   with 0xFE39 bit 6) and, also when the card fails (0x25DA), ends in `MOV R1,#00H; CALL !345CH`: screen 0 again, so 0x495F sets P1 to Valu and 0xFE54.3 is cleared. The ways:
   - a Bnk or Nmb key on the play screen (the tables at 0x461D/0x4621 and 0x467C/0x4680, by screen 0x0B, 0x28, 0x34, 0x00, else: on screen 0, 0x4644 and 0x46A3 set the
-    pending bank or number in 0xFE39 and call 0x25B6). 0x25B6 loads the patch only when system byte 12's bit 0 is set (0xC5CC); clear, it only sends the program change (0x551B,
+    pending bank or number in 0xFE39 and call 0x25B6). 0x25B6 loads the patch only when **Local** is on (system byte 12, 0xC5CC bit 0: below); off, it only sends the program change (0x551B,
     when Prog.C, 0xC5C9 bit 0, is on: `C0 n` through 0x5544). After a load it sends the program change as well;
   - a MIDI program change (0x4BCC), taken only on screen 0 and with Prog.C on, straight to 0x25C7.
-  So after a patch change on a D-50 the stick is idle until Lowr or Uppr is pressed again. (On screens 0x17-0x27, the tone screens, Nmb1-4 instead toggle the partials on and
+  So after a patch change on a D-50 the stick is idle until Lowr or Uppr is pressed again.
+- **Local (system byte 12, 0xC5CC bit 0)**, the MIDI-1 page's Local switch (verified 2026-11-22). **CC 122, Local Control**, sets it: the mode table at 0x4D4C (CC 122-127:
+  0x4EA5, 0x4E8A, 0x4F5A, 0x4F39, 0x4EDF, 0x4EAC) takes 122 to 0x5F20 (skipped when 0xFE30.0 is set), where 0 is off and 127 on, any other value ignored; a change runs 0x5773.
+  The firmware tests it in about twenty places. Seen: the bender (0x3195) is always sent on MIDI (0x5534) but goes to the sound chip (0xFE02, 0xFE0A) only with Local on; the
+  same shape is at 0x31C7, 0x31ED, 0x3216 and 0x327D (the modulation lever, the external controller, aftertouch, the slider: by their routines' inputs); with Local off a
+  patch key only sends the program change (0x25B6 above) and the bank keys (0x4639, 0x4698) do nothing locally; 0x2437 sets the output pin P0.2 from 0xFE33 bit 4, and with Local off also from bit 5 (not decoded); 0x2528 chooses
+  between two ways of taking a key (0x2595 loads, 0x25A1 only stores). The keyboard's own notes with Local off (0x5FB4, 0x48CD, 0x42CB, 0x4322) are not followed here. (On screens 0x17-0x27, the tone screens, Nmb1-4 instead toggle the partials on and
   off: 0x46AD flips bits of the tones' common byte 46, 0xC4AE and 0xC56E.) What the code does with them:
 
   | key | handler | P1.4 P1.3 | the stick |
@@ -274,8 +280,9 @@ D-50 (#58): a byte of the temporary area above its maximum is skipped, wherever 
 | 0x92-0xB3 | the system (MIDI, function) | 0xC5C0 | 0x7DE0 | number - 0x92 |
 
 The range tables hold each parameter's maximum (0 minimum). They agree with what the repository already uses (patch bytes 29-38: 3, 31, 100, 100, 100, 2, 100, 100, 16, 16).
-The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps, 0.251 Hz each, 50 = 440.0), 1-2: 3, 3-12: switches (the MIDI pages' Bender, Mod, Volume, Hold, Porta,
-Prog.C, Exclu, ...: 0xC5C3-0xC5CC, as the parser tests them), 13: 15 (the basic channel), 14: 2, 15-16: 31 (the two assignable controllers, CC 64 + value), **17: 24 (Key Transpose,
+The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps, 0.251 Hz each, 50 = 440.0), 1-2: 3, 3-12: switches, bit 0 each (verified: the MIDI pages' texts at 0x748E,
+"MIDI-1 BasicCH Control Omni Local", "MIDI-2 After Bender Mod Volume", "MIDI-3 Hold Porta Prog.C Exclu", and the code that tests each byte): **3 After (0xC5C3), 4 Bender
+(0xC5C4), 5 Mod (0xC5C5), 6 Volume (0xC5C6), 7 Hold (0xC5C7), 8 Porta (0xC5C8), 9 Prog.C (0xC5C9), 10 Exclu (0xC5CA), 11 Omni (0xC5CB), 12 Local (0xC5CC)**; 13: 15 (the basic channel), 14: 2, 15-16: 31 (the two assignable controllers, CC 64 + value), **17: 24 (Key Transpose,
 -12..+12 around 12)**, 18: 127, ... The names of bytes 1-2, 14 and 18 on are still to place.
 
 ### What this means for the FM-1
@@ -285,6 +292,8 @@ Prog.C, Exclu, ...: 0xC5C3-0xC5CC, as the parser tests them), 13: 15 (the basic 
   keys; the Upper at start). CC82 follows K1 and CC81 K2.
 - With Lowr or Uppr (on a play screen) the D-50's stick sets the balances absolutely and linearly over 0..100, as CC81/CC82 do (0..127 over 0..100): those two follow the D-50. K1 and K2 are
   encoders without a position, so they step the balances from where they are; that is ours. The D-50 ignores a jump in the reading (0x30E7); MIDI CCs are taken as they come.
+- The FM-1 has no Local: its keys, K1-K4 and touch controls always play the engine, and CC 122 is not taken (`d50.h` has no Local). A Local off would matter only with
+  the FM-1's own MIDI out, which it does not send; nothing to follow here for now.
 - The D-50's stick moves the balances only after Lowr or Uppr, and leaves them on a screen change or a patch change; at power-on it is in Valu. The FM-1's K1/K2 move them on the play
   screen at any time, and K4's Upper at start matches the D-50's power-on P1.3 (set: 0x3EB4 would take the upper). Kept as ours: the FM-1 has no Lcal/Valu.
 - Master Tune is 0..100, not 0..126 as PR #56 first had it: corrected (`d50_tune` 0..100, 50 = 440.0 Hz). Key Transpose's -12..+12 is confirmed.
@@ -294,7 +303,7 @@ Prog.C, Exclu, ...: 0xC5C3-0xC5CC, as the parser tests them), 13: 15 (the basic 
 First recursive descent from reset, the vectors and the two tables: 6 122 instructions in 367 functions, about 14.8 KB of the 56 KB above 0x2000/0x80 that are code and data
 together. The rest is reached by indirect jumps and by handlers installed into the RAM vectors at run time, which the descent does not follow. To do, in this order:
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
-2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0), the reverb data's
+2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122), the mode messages 123-127 (0x4D4C), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
 3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) (Done: 0x3EB4 is parameter
    0x66's access routine, Lowr/Uppr choose X's tone; 0xFE47/0xFE3F are LCD refresh requests.) (Done: power-on is Valu, 01.)
