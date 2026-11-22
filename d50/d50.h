@@ -50,18 +50,20 @@ void d50_pressure(unsigned value);
 /* Chase Play (issue #18), on or off with d50_cc(D50_CHASE_CC, >= 64 / < 64): the D-50's CHASE button. 1 while it is on. */
 #define D50_CHASE_CC 80U
 unsigned d50_chase_on(void);
-/* SysEx, the D-50's DT1 and RQ1 (issue #6), main loop. d50_sysex: a frame without F0 and F7; 1 when it is the D-50's (Roland 0x41, model
- * 0x14). DT1 writes the temporary area (00 00 00, the current patch: applied while it sounds) or the bank in RAM (02 00 00); RQ1 asks for
- * them back. d50_sysex_reply: the next DT1 of an RQ1's answer, F0 .. F7, into frame (D50_SYSEX_REPLY_MAX bytes); its length, 0 when none is
- * due. d50_edit_poll: a DT1 into the temporary area becomes the sound (each pass of the main loop); 1 when it did. */
+/* SysEx, the D-50's (Roland 0x41, model 0x14), main loop: one-way DT1 and RQ1 (issue #6), and the handshake (issue #51: WSD, RQD, DAT,
+ * ACK, EOD, ERR, RJC). d50_sysex: a frame without F0 and F7; 1 when it is the D-50's. DT1 or DAT writes the temporary area (00 00 00, the
+ * current patch: applied while it sounds) or the bank in RAM (02 00 00), and elsewhere is taken and ignored; RQ1 or RQD asks for them back.
+ * d50_sysex_reply: the next frame to send, F0 .. F7, into frame (D50_SYSEX_REPLY_MAX bytes): a short answer (ACK, ERR, RJC), an RQ1's next
+ * DT1, or an RQD's next DAT once the other side has acknowledged the last (then EOD); its length, 0 when none is due.
+ * d50_edit_poll: a DT1 or DAT into the temporary area becomes the sound (each pass of the main loop); 1 when it did. */
 #define D50_SYSEX_REPLY_MAX 266U
 int d50_sysex(const uint8_t *p, uint32_t n);
 unsigned d50_sysex_reply(uint8_t *frame);
 int d50_edit_poll(void);
 /* The fault of the last D-50 frame d50_sysex took, then 0 until the next (main loop). The numbers are the D-50 firmware's error lines'
  * (v1.06, after "Error  Reject"): its screen shows them (issue #25). */
-#define D50_ERR_ADDRESS 4U                        /* Invalid Data Address: an RQ1 of nothing there */
-#define D50_ERR_FORMAT 6U                         /* Invalid Data Format: not a DT1 or RQ1 of the right length */
+#define D50_ERR_ADDRESS 4U                        /* Invalid Data Address: an RQ1 or RQD of nothing there */
+#define D50_ERR_FORMAT 6U                         /* Invalid Data Format: not a frame of the right length */
 #define D50_ERR_SUM 7U                            /* Sum Check Error */
 unsigned d50_sysex_error(void);
 void d50_panic(void);

@@ -508,14 +508,22 @@ void chase_clear()
 }
 }  // namespace
 
-// ---- SysEx: the D-50's exclusive, Roland's one-way DT1 and RQ1 (model 0x14), as upstream PicoFaceD5 speaks it (issue #6). Main loop.
+// ---- SysEx: the D-50's exclusive (Roland, model 0x14), main loop. Two ways, as the D-50's own Data Transfer menu has them ("Bulk Dump.O",
+// "Bulk Load.O" one-way; "Bulk Dump", "Bulk Load" with the handshake):
+// - one-way, DT1 and RQ1, as upstream PicoFaceD5 speaks it (issue #6);
+// - the handshake (issue #51): WSD, RQD, DAT, ACK, EOD, ERR, RJC, Roland's protocol of the time (the MT-32's and D-110's manuals: the
+//   receiver answers ACK to each WSD, DAT and EOD it takes, ERR to a checksum fault (the sender sends that message again or gives up with
+//   RJC) and RJC when it cannot; the sender sends the next DAT only after the ACK of the last). WSD and RQD carry three address and three
+//   size bytes as RQ1 does, DAT up to 256 data bytes as DT1 does, the checksum over the address (and size or data). Read from the
+//   protocol, not yet checked against a real D-50.
 // Addresses are three 7-bit bytes, here one 21-bit number: the temporary area at 00 00 00 (448 bytes: upper partial 1, partial 2, common,
 // lower partial 1, partial 2, common, patch, 64 bytes each), internal memory at 02 00 00 (the bank, 448 bytes a patch, held in RAM: a
 // power cycle brings back the bank in the flash). Anything else (the reverb data at 03 60 00) is taken and ignored.
 namespace {
 constexpr uint8_t kRoland = 0x41, kModel = 0x14, kRq1 = 0x11, kDt1 = 0x12;
+constexpr uint8_t kWsd = 0x40, kRqd = 0x41, kDat = 0x42, kAck = 0x43, kEod = 0x45, kErr = 0x4E, kRjc = 0x4F;
 constexpr uint32_t kInternal = 2U << 14;
-constexpr unsigned kChunk = 256;                  // the data bytes of one DT1 the D-50 sends
+constexpr unsigned kChunk = 256;                  // the data bytes of one DT1 or DAT the D-50 sends
 
 uint32_t addr_of(const uint8_t *a) { return static_cast<uint32_t>(a[0]) << 14 | static_cast<uint32_t>(a[1]) << 7 | a[2]; }
 // the byte at an address, nullptr where nothing is
@@ -525,18 +533,41 @@ uint8_t *byte_at(uint32_t a)
     if (a >= kInternal && a - kInternal < bank_patches * D50_PATCH_BYTES) return bank + (a - kInternal);
     return nullptr;
 }
+// the end of the area an address is in (the temporary area or the bank)
+uint32_t end_of(uint32_t a) { return a < D50_PATCH_BYTES ? D50_PATCH_BYTES : kInternal + bank_patches * D50_PATCH_BYTES; }
 uint8_t roland_sum(const uint8_t *p, unsigned n)
 {
     unsigned s = 0;
     for (unsigned i = 0; i < n; ++i) s += p[i];
     return static_cast<uint8_t>((128U - (s & 127U)) & 127U);
 }
+// a DT1's or DAT's data bytes into the areas (nothing where nothing is)
+void write_at(uint32_t a, const uint8_t *d, unsigned len)
+{
+    for (unsigned i = 0; i < len; ++i) {
+        uint8_t *b = byte_at(a + i);
+        if (!b) continue;
+        *b = d[i] & 127U;
+        if (a + i < D50_PATCH_BYTES) temp_dirty = true;
+    }
+}
 
-// an RQ1 being answered: DT1s of up to 256 bytes from its address, one per d50_sysex_reply
+// what goes out, one frame per d50_sysex_reply: a short answer first (ACK, ERR, RJC), then an RQ1's DT1s or an RQD's DATs and EOD
 struct Reply {
     uint8_t dev;
+    uint8_t cmd;                                  // kDt1 (one-way) or kDat (the handshake)
     uint32_t at, left;
+    uint8_t answer;                               // a short answer due (kAck, kErr, kRjc), 0 none
+    uint8_t answer_dev;
+    // the handshake's sending side: a DAT (or the EOD) may go out (go), or went out and waits for the other side's ACK (sent: its length)
+    bool go, eod, waiting;
+    unsigned sent;
+    // the receiving side: a WSD was taken (DATs and the EOD are expected)
+    bool receiving;
 } reply;
+
+void answer(uint8_t dev, uint8_t cmd) { reply.answer = cmd; reply.answer_dev = dev; }
+void hs_stop() { reply.go = reply.eod = reply.waiting = reply.receiving = false; reply.sent = 0; if (reply.cmd == kDat) reply.left = 0; }
 }  // namespace
 
 static unsigned sysex_error;                     // the last frame's fault (d50.h D50_ERR_*), 0 none; d50_sysex_error reads and clears it
@@ -548,12 +579,79 @@ extern "C" unsigned d50_sysex_error(void)
     return e;
 }
 
+// the handshake (issue #51): p is 41 dev 14 cmd ..., n its length
+static void d50_handshake(const uint8_t *p, uint32_t n)
+{
+    const uint8_t dev = p[1], cmd = p[3];
+    switch (cmd) {
+    case kWsd:                                    // 41 dev 14 40 a a a s s s sum: the other side wants to send
+    case kRqd: {                                  // 41 dev 14 41 a a a s s s sum: the other side asks for data
+        if (n != 11U) { sysex_error = D50_ERR_FORMAT; answer(dev, kRjc); return; }
+        if (roland_sum(p + 4, 6U) != p[10]) { sysex_error = D50_ERR_SUM; answer(dev, kErr); return; }
+        hs_stop();
+        reply.left = 0;                           // (an RQ1's answer under way ends too)
+        const uint32_t a = addr_of(p + 4);
+        uint32_t size = addr_of(p + 7);
+        if (!ready) { answer(dev, kRjc); return; }
+        if (cmd == kWsd) {                        // taken anywhere, as a DT1 is: what is not here (the reverb data at 03 60 00 of a whole
+            reply.receiving = true;               // bulk dump) is taken and ignored, so a dump is not stopped halfway
+            answer(dev, kAck);
+            return;
+        }
+        if (!byte_at(a) || !size) { sysex_error = D50_ERR_ADDRESS; answer(dev, kRjc); return; }   // (nothing there to send)
+        if (size > end_of(a) - a) size = end_of(a) - a;
+        reply.dev = dev;
+        reply.cmd = kDat;
+        reply.at = a;
+        reply.left = size;
+        reply.go = true;
+        return;
+    }
+    case kDat: {                                  // 41 dev 14 42 a a a data.. sum
+        if (n < 9U) { sysex_error = D50_ERR_FORMAT; answer(dev, kErr); return; }
+        const unsigned len = n - 8U;
+        if (roland_sum(p + 4, 3U + len) != p[n - 1]) { sysex_error = D50_ERR_SUM; answer(dev, kErr); return; }
+        if (!ready) { answer(dev, kRjc); return; }
+        write_at(addr_of(p + 4), p + 7, len);     // (taken without a WSD too: as a DT1 would be)
+        answer(dev, kAck);
+        return;
+    }
+    case kEod:                                    // 41 dev 14 45: the other side's data ends
+        reply.receiving = false;
+        answer(dev, kAck);
+        return;
+    case kAck:                                    // our DAT (or EOD) arrived
+        if (!reply.waiting) return;
+        reply.waiting = false;
+        if (reply.eod) { hs_stop(); return; }     // (the EOD's ACK: done)
+        reply.at += reply.sent;
+        reply.left -= reply.sent;
+        reply.sent = 0;
+        if (reply.left) reply.go = true;
+        else reply.eod = reply.go = true;
+        return;
+    case kErr:                                    // our last DAT (or EOD) arrived damaged: again
+        if (reply.waiting) { reply.waiting = false; reply.go = true; }
+        return;
+    case kRjc:                                    // the other side ends the transfer
+        hs_stop();
+        return;
+    default:
+        sysex_error = D50_ERR_FORMAT;
+        return;
+    }
+}
+
 extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
 {
     if (n < 4U || p[0] != kRoland || p[2] != kModel) return 0;
+    if (p[3] >= kWsd && p[3] <= kRjc) {           // the handshake: answered even without data (RJC), so the other side does not wait
+        d50_handshake(p, n);
+        return 1;
+    }
     if (!ready) return 1;                         // (ours, but nothing to edit yet)
     if ((p[3] == kDt1 && n < 9U) || (p[3] == kRq1 && n != 11U) || (p[3] != kDt1 && p[3] != kRq1)) {
-        sysex_error = D50_ERR_FORMAT;             // (the handshake's WSD, ACK and so on are not taken: one-way DT1 and RQ1)
+        sysex_error = D50_ERR_FORMAT;
         return 1;
     }
     if (p[3] == kDt1) {                           // 41 dev 14 12 a a a data.. sum
@@ -562,13 +660,7 @@ extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
             sysex_error = D50_ERR_SUM;
             return 1;
         }
-        const uint32_t a = addr_of(p + 4);
-        for (unsigned i = 0; i < len; ++i) {
-            uint8_t *b = byte_at(a + i);
-            if (!b) continue;
-            *b = p[7 + i] & 127U;
-            if (a + i < D50_PATCH_BYTES) temp_dirty = true;
-        }
+        write_at(addr_of(p + 4), p + 7, len);
     } else {                                      // RQ1: 41 dev 14 11 a a a s s s sum
         if (roland_sum(p + 4, 6U) != p[10]) {
             sysex_error = D50_ERR_SUM;
@@ -577,13 +669,14 @@ extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
         const uint32_t a = addr_of(p + 4);
         uint32_t size = addr_of(p + 7);
         // only what is there: the temporary area or the bank, cut at its end
-        const uint32_t end = a < D50_PATCH_BYTES ? D50_PATCH_BYTES : kInternal + bank_patches * D50_PATCH_BYTES;
         if (!byte_at(a)) {
             sysex_error = D50_ERR_ADDRESS;
             return 1;
         }
-        if (size > end - a) size = end - a;
+        if (size > end_of(a) - a) size = end_of(a) - a;
+        hs_stop();                                // (a handshake under way ends)
         reply.dev = p[1];
+        reply.cmd = kDt1;
         reply.at = a;
         reply.left = size;
     }
@@ -592,13 +685,29 @@ extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
 
 extern "C" unsigned d50_sysex_reply(uint8_t *frame)
 {
-    if (!reply.left) return 0;
-    const unsigned len = reply.left > kChunk ? kChunk : reply.left;
     frame[0] = 0xF0;
     frame[1] = kRoland;
-    frame[2] = reply.dev;
     frame[3] = kModel;
-    frame[4] = kDt1;
+    if (reply.answer) {                           // ACK, ERR, RJC: F0 41 dev 14 cmd F7
+        frame[2] = reply.answer_dev;
+        frame[4] = reply.answer;
+        frame[5] = 0xF7;
+        reply.answer = 0;
+        return 6U;
+    }
+    if (reply.cmd == kDat && !reply.go) return 0; // (the handshake: waiting for the other side's ACK)
+    if (reply.cmd == kDat && reply.eod) {         // F0 41 dev 14 45 F7
+        frame[2] = reply.dev;
+        frame[4] = kEod;
+        frame[5] = 0xF7;
+        reply.go = false;
+        reply.waiting = true;
+        return 6U;
+    }
+    if (!reply.left) return 0;
+    const unsigned len = reply.left > kChunk ? kChunk : reply.left;
+    frame[2] = reply.dev;
+    frame[4] = reply.cmd;
     frame[5] = static_cast<uint8_t>(reply.at >> 14 & 127U);
     frame[6] = static_cast<uint8_t>(reply.at >> 7 & 127U);
     frame[7] = static_cast<uint8_t>(reply.at & 127U);
@@ -608,8 +717,14 @@ extern "C" unsigned d50_sysex_reply(uint8_t *frame)
     }
     frame[8 + len] = roland_sum(frame + 5, 3U + len);
     frame[9 + len] = 0xF7;
-    reply.at += len;
-    reply.left -= len;
+    if (reply.cmd == kDat) {                      // the next only after the ACK (kAck moves on, kErr sends this one again)
+        reply.go = false;
+        reply.waiting = true;
+        reply.sent = len;
+    } else {
+        reply.at += len;
+        reply.left -= len;
+    }
     return 10U + len;
 }
 

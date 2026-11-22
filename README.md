@@ -84,20 +84,36 @@ It receives on every channel, over USB.
 
 ## SysEx
 
-**The D-50's own** (`F0 41 dev 14 ...`, Roland, model 14h), one-way:
+**The D-50's own** (`F0 41 dev 14 ...`, Roland, model 14h), both ways the D-50's Data Transfer menu has: one-way ("Bulk Dump.O",
+"Bulk Load.O") and with the handshake ("Bulk Dump", "Bulk Load").
+
+One-way:
 
 | Message | What it does |
 | --- | --- |
 | DT1 (`12`) | Writes data at an address; the checksum is checked. |
 | RQ1 (`11`) | Reads data from an address; the FM-1 answers with DT1s of up to 256 bytes, one at a time as the computer reads. |
 
+With the handshake (Roland's protocol of the time; not yet tried against a real D-50 or a librarian):
+
+| Message | What the FM-1 does |
+| --- | --- |
+| WSD (`40`, address, size) | Answers ACK: the computer may send. |
+| DAT (`42`, address, data) | Writes the data as a DT1 does and answers ACK; ERR when the checksum is wrong (the computer sends it again). |
+| EOD (`45`) | Answers ACK: the transfer is done. |
+| RQD (`41`, address, size) | Sends the data as DATs of up to 256 bytes, each after the computer's ACK of the one before, then EOD; RJC when nothing is at that address. |
+| ACK (`43`), ERR (`4E`), RJC (`4F`) | From the computer: the next DAT, the last one again, or stop. |
+
+Without D-50 data on the FM-1, WSD and RQD are answered with RJC.
+
 | Address | What it is |
 | --- | --- |
-| `00 00 00` | The temporary area: the current patch's 448 bytes (upper partial 1 and 2, common, lower partial 1 and 2, common, patch; 64 bytes each). A DT1 here changes the sound at once. |
-| `02 00 00` | The internal memory: the bank in RAM, 448 bytes a patch. A power cycle brings back the bank from the flash. |
-| Anything else | For example the reverb data at `03 60 00`: taken and ignored. |
+| `00 00 00` | The temporary area: the current patch's 448 bytes (upper partial 1 and 2, common, lower partial 1 and 2, common, patch; 64 bytes each). A DT1 or DAT here changes the sound at once. |
+| `02 00 00` | The internal memory: the bank in RAM, 448 bytes a patch (64 patches, up to `03 60 00`). A power cycle brings back the bank from the flash. |
+| Anything else | For example the reverb data at `03 60 00`: taken and ignored, so a whole bulk dump goes through. |
 
-Not supported: the D-50's handshake (WSD, ACK and so on). A faulty message shows its error on the screen (wrong format, checksum or address).
+A faulty message shows its error on the screen (wrong format, checksum or address). Not yet: the system area, the device ID (the FM-1
+answers any), memory protect ([issue 51](https://github.com/mwedmark/fm1-d50/issues/51)).
 
 **For measuring** (`F0 7D 'S' 'F' 02 ... F7`, six bytes):
 
