@@ -10,7 +10,11 @@ usb_product = "D-50 FM-1"
 data_lo = 0x4E000
 # the D-50's data as the resource region (app.h APP_RES_BASE): in the package, written by the update loader after the app
 resources = "../roms/out/d50_fm1base.fmd5"
-resources_what = "the D-50's waves and patches"
+resources_what = "D-50 data"
+# any D-50 data of up to the region's size, written by the host (the install page takes your own .fmd5): the file above is optional
+# at build time (no Roland data on GitHub: the build there has none and carries no region)
+resources_var = true
+resources_magic = "FMD5"
 backup = true
 emu = ["data"]                   # the browser emulator keeps its data area (the D-50 data you load: web/emu/app.js, issue #40)
 words = "words.tsv"

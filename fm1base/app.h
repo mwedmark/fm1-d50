@@ -19,6 +19,8 @@ enum { OBJ_SETTINGS, OBJ_PANEL, OBJ_NOBJ };
  * The package carries it and the update loader writes it after the app. Issue #7: 0x5B000 and 131 sectors held one bank */
 #define APP_RES_BASE 0x4E000u
 #define APP_RES_SECTORS 144u
+/* plat_restart (device/main_fm1.c): the FM-1 starts again on data written over USB (app_frame, res_stamp) */
+#define APP_RESTART 1
 /* the resources need the backup (the transfer is the restore's): the settings are all there is to back up */
 #define APP_BACKUP_OBJS {OBJ_SETTINGS}
 #define APP_BACKUP_MAGIC 0x30354444u            /* "DD50" */

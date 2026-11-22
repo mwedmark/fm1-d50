@@ -6,7 +6,7 @@
 # (https://mwedmark.github.io/fm1-d50/).
 #
 # No D-50 data is ever on GitHub (Roland's PCM ROM and the banks stay on the maintainer's computer). The runner builds without the
-# resource region (fm1.toml's resources lines are left out), so the package and the emulator carry no Roland data. The firmware reads
+# resource region (resources_var: the file named in fm1.toml is not there), so the package and the emulator carry no Roland data. The firmware reads
 # the region the FM-1 already holds (fm1base/app.c app_d50_data), so installing it keeps the data and plays it; the emulator takes
 # your own data file in the browser (fm1base/web/emu/app.js). README.md: your own data.
 #
@@ -45,9 +45,9 @@ jobs:
         python3 -c "from PIL import features; assert features.check('raqm'), 'Pillow without raqm'"
         # PicoFaceD5's sample table (fm1.toml includes roms/gen) from its committed JSON, without the ROM
         python3 tools/ci/make_pcm_table.py roms/gen
-        # no D-50 data: the build without the resource region
-        sed -i '/^resources\(_what\)\? *=/d' fm1base/fm1.toml
-        if grep -q '^resources' fm1base/fm1.toml; then echo 'fm1.toml still names resources'; exit 1; fi
+        # no D-50 data: fm1.toml's resources file (roms/out) is not on the runner, and resources_var = true builds without it
+        # (the FM-1 then takes your own data from the install page: no region in the package)
+        if [ -e roms/out/d50_fm1base.fmd5 ]; then echo 'D-50 data on the runner'; exit 1; fi
         mkdir -p build/release-assets
         if [[ "$GITHUB_REF" == refs/tags/* ]]; then
           version=${GITHUB_REF_NAME#v}
@@ -88,8 +88,7 @@ jobs:
           base="$RUNNER_TEMP/fm1-base"
           bash tools/ci/fetch_platform.sh "$base"
           python3 tools/ci/make_pcm_table.py roms/gen
-          sed -i '/^resources\(_what\)\? *=/d' fm1base/fm1.toml
-          if grep -q '^resources' fm1base/fm1.toml; then echo 'fm1.toml still names resources'; exit 1; fi
+          if [ -e roms/out/d50_fm1base.fmd5 ]; then echo 'D-50 data on the runner'; exit 1; fi
           python3 "$base/tools/build.py" fm1base --no-ble --web
           rm -rf fm1base/build/emu/o2 fm1base/build/emu/web
           if find fm1base/build/emu -name '*.fmd5' -o -name '*.syx' | grep -q .; then echo 'D-50 data in the page'; exit 1; fi

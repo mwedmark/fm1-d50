@@ -39,7 +39,7 @@ for lic in sorted((base / "LICENSES").glob("*.txt")):     # the licences of the 
 html = (base / "web" / "installer.html").read_text(encoding="utf-8")
 lib = "\n".join(M.strip_module((base / "web" / f).read_text(encoding="utf-8")) for f in ("fm1ports.js", "fm1pkg.js", "fm1ota.js"))
 meta = json.dumps({"version": version, "product": product, "pkg": "../firmware/" + name, "backup": bool(conf.get("backup")),
-                   "res": None, "boot": None})
+                   "res": None, "resPick": M.res_pick(app, conf), "boot": None})
 for mark in ("/*LIB*/", "/*META*/", "/*APP*/"):
     if html.count(mark) != 1:
         raise SystemExit(f"web/installer.html must contain {mark} once")
@@ -48,6 +48,6 @@ for key, val in (("RES", conf.get("resources_what", "the D-50's data")), ("RES_J
                  ("REPO", repo), ("REPO_SHORT", re.sub(r"^https?://", "", repo)), ("LICENSE", conf.get("licence", "GPL-3.0-or-later")),
                  ("CREDITS", " The D-50 engine is PicoFaceD5 by Michi71. The D-50's data is Roland's and is not part of this page.")):
     html = html.replace("{{" + key + "}}", val)
-(out / "install" / "index.html").write_text(html.replace("/*LIB*/", lib).replace("/*META*/", meta).replace("/*APP*/", "null"),
-                                            encoding="utf-8")
+with open(out / "install" / "index.html", "w", encoding="utf-8", newline="\n") as f:    # (LF on Windows too)
+    f.write(html.replace("/*LIB*/", lib).replace("/*META*/", meta).replace("/*APP*/", "null"))
 print(f"install page: {out / 'install' / 'index.html'} ({product}, {name}, sha256 {hashlib.sha256(raw).hexdigest()[:12]})")
