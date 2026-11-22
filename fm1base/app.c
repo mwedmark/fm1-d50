@@ -320,6 +320,7 @@ static struct {
     uint32_t home_ms;                            /* when HOME was pressed */
     int8_t tune_off;                            /* Master Tune 0..100 (#54) less 50 (so 0 = 440.0 Hz at start); not kept over a power cycle */
     int8_t transpose;                            /* Key Transpose -12..12 (#54) */
+    uint8_t lower;                               /* the selected tone, the joystick's X: 0 the upper, 1 the lower (#58) */
     uint8_t page;                                /* the edit page (#31): d50_lcd.h LCD_PAGE_*, LCD_PAGE_PLAY none */
 } ui;
 #include "d50_lcd.h"
@@ -368,27 +369,29 @@ static void page_edit(uint32_t field, int32_t step)
     (void)patch_edit(6u * 64u + g->f[field].byte, step, g->f[field].lo, g->f[field].hi);
 }
 static void uint_text(uint32_t v, char *b);
-/* The D-50's joystick on the play screen (#43), K1 and K2: K1 the balance between the upper and the lower tone (the patch block's byte 33,
- * what the LCD shows as Bal), K2 the balance between the partials of both tones (each tone's common byte 47). Edits of the current patch,
- * as the edit pages' are: they last until another program is chosen, and SysEx reads them back. */
+/* The D-50's joystick on the play screen (#43), as its firmware has it (docs/D50-FIRMWARE.md, #58): K1 the stick's X, the balance between
+ * the partials of the selected tone (that tone's common byte 47, parameter 0x66), K2 its Y, the balance between the upper and the lower
+ * tone (the patch block's byte 33, parameter 0x8A, what the LCD shows as Bal). K4 selects the tone, as the D-50's UPPER and LOWER keys
+ * (the upper at start). Edits of the current patch, as the edit pages' are: they last until another program is chosen, and SysEx reads
+ * them back. */
 enum { PATCH_COMMON_UPPER = 2u * 64u, PATCH_COMMON_LOWER = 5u * 64u, COMMON_PARTIAL_BALANCE = 47u, PATCH_TONE_BALANCE = 6u * 64u + 33u };
+enum { JOY_X, JOY_Y };
+static uint32_t joystick_byte(uint32_t axis)
+{
+    if (axis == JOY_Y)
+        return PATCH_TONE_BALANCE;
+    return (ui.lower ? PATCH_COMMON_LOWER : PATCH_COMMON_UPPER) + COMMON_PARTIAL_BALANCE;
+}
 static void joystick(uint32_t axis, int32_t step)
 {
     char t[12];
-    int32_t v;
-    if (axis == 0u) {
-        v = patch_edit(PATCH_TONE_BALANCE, step, 0, 100);
-    } else {
-        v = patch_edit(PATCH_COMMON_UPPER + COMMON_PARTIAL_BALANCE, step, 0, 100);
-        if (v >= 0)
-            (void)patch_edit(PATCH_COMMON_LOWER + COMMON_PARTIAL_BALANCE, v - (int32_t)d50_patch_bytes()[PATCH_COMMON_LOWER + COMMON_PARTIAL_BALANCE], 0, 100);
-    }
+    int32_t v = patch_edit(joystick_byte(axis), step, 0, 100);
     if (v < 0)
         return;
-    if (axis == 0u && (set.lcd & LCD_SHOWN))     /* (the LCD shows the tone balance itself, as Bal; the partial balance it has no place for) */
+    if (axis == JOY_Y && (set.lcd & LCD_SHOWN))  /* (the LCD shows the tone balance itself, as Bal; the partial balance it has no place for) */
         return;
     uint_text((uint32_t)v, t);
-    app_say(axis == 0u ? "TONE BAL" : "PART BAL", t);
+    app_say(axis == JOY_Y ? "TONE BAL" : ui.lower ? "L PART BAL" : "U PART BAL", t);
 }
 static void joystick_to(uint32_t axis, int32_t v127)      /* a MIDI value of the axis: 0..127 over 0..100 */
 {
@@ -396,7 +399,7 @@ static void joystick_to(uint32_t axis, int32_t v127)      /* a MIDI value of the
     int32_t d;
     if (!p)
         return;
-    d = (v127 * 100 + 63) / 127 - (int32_t)p[axis == 0u ? PATCH_TONE_BALANCE : PATCH_COMMON_UPPER + COMMON_PARTIAL_BALANCE];
+    d = (v127 * 100 + 63) / 127 - (int32_t)p[joystick_byte(axis)];
     if (d != 0)
         joystick(axis, d);
 }
@@ -551,11 +554,11 @@ static void input(void)
         set_dirty = 1;
         ui.redraw = 1;
     }
-    for (k = 0; k < 2u; k++) {                   /* CC81 and CC82 (#58) */
+    for (k = 0; k < 2u; k++) {                   /* CC81 the tone balance (Y), CC82 the selected tone's partial balance (X) (#58) */
         int32_t v = joy_asked[k];
         if (v >= 0) {
             joy_asked[k] = -1;
-            joystick_to(k, v);
+            joystick_to(k == 0u ? JOY_Y : JOY_X, v);
         }
     }
     if (ui.page == LCD_PAGE_TUNE) {              /* K1 Master Tune, K2 Key Transpose (#54) */
@@ -574,11 +577,16 @@ static void input(void)
         for (k = 0; k < 4u; k++)
             if ((e = plat_enc(knob[k])) != 0)
                 page_edit(k, e);
-    } else {                                     /* the play screen: K1 and K2 the joystick (#43), K3 the dot height of the true-size LCD (was K1) */
+    } else {                                     /* the play screen: K1 and K2 the joystick's X and Y (#43, #58), K3 the dot height of the
+                                                  * true-size LCD (was K1), K4 the selected tone (right the lower, left the upper) */
         if ((e = plat_enc(EN_K1)) != 0)
-            joystick(0, e);
+            joystick(JOY_X, e);
         if ((e = plat_enc(EN_K2)) != 0)
-            joystick(1, e);
+            joystick(JOY_Y, e);
+        if ((e = plat_enc(EN_K4)) != 0 && (uint32_t)(e > 0) != ui.lower) {
+            ui.lower = (uint8_t)(e > 0);
+            app_say("TONE", ui.lower ? "LOWER" : "UPPER");
+        }
         if ((e = plat_enc(EN_K3)) != 0 && (set.lcd & LCD_TRUE)) {
             set.lcd = (uint8_t)((set.lcd & ~7u) | (uint32_t)clamp((int32_t)lcd_pitch() + (e > 0 ? 1 : -1), LCD_PITCH_MIN, LCD_PITCH_MAX));
             set_dirty = 1;

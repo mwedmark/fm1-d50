@@ -50,8 +50,8 @@ Everything the earlier work took from the dump stays valid: the play-screen temp
 ## The D-50 has no controller for the balances
 
 The D-50's MIDI implementation takes CC1, 5, 6, 7, 64, 65 and the RPNs (`d50.h`). The joystick's X and Y are A/D controls on the instrument, not MIDI messages, so the balances
-have no D-50 CC to follow. #58's **CC81 (tone balance) and CC82 (partial balance)** are ours, as CC80 (Chase Play) is: 0..127 over the balances' 0..100, set as K1 and K2 set
-them (an edit of the current patch). The firmware's own joystick scaling, when found, may change the curve.
+have no D-50 CC to follow. #58's **CC81 (tone balance, the stick's Y) and CC82 (the selected tone's partial balance, X)** are ours, as CC80 (Chase Play) is: 0..127 over the
+balances' 0..100, set as K2 and K1 set them (an edit of the current patch). The firmware's own joystick scaling, when found, may change the curve.
 
 ## The MIDI receive path (verified in the listing, 2026-11-22)
 
@@ -129,8 +129,9 @@ Prog.C, Exclu, ...: 0xC5C3-0xC5CC, as the parser tests them), 13: 15 (the basic 
 
 ### What this means for the FM-1
 
-- The D-50's stick: **X = partial balance (of the selected tone), Y = tone balance.** The FM-1's K1 is the tone balance and K2 the partial balance of both tones (#43): the order is
-  swapped against the stick's X/Y and K2 moves both tones. Whether to follow the D-50 here is a decision for the maintainer (#58).
+- The D-50's stick: **X = partial balance (of the selected tone), Y = tone balance.** #43 had K1 as the tone balance and K2 as the partial balance of both tones; the
+  maintainer chose to follow the D-50 (#58): **K1 is now X (the selected tone's partial balance), K2 Y (the tone balance), and K4 selects the tone** (the D-50's UPPER/LOWER
+  keys; the Upper at start). CC82 follows K1 and CC81 K2.
 - The stick moves a parameter from where it was (an offset from the stick's centre), not to an absolute value. CC81/CC82 set absolute values.
 - Master Tune is 0..100, not 0..126 as PR #56 first had it: corrected (`d50_tune` 0..100, 50 = 440.0 Hz). Key Transpose's -12..+12 is confirmed.
 

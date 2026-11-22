@@ -55,9 +55,10 @@ The view and the colour are saved with SAVE.
 | SELECT / PRESET encoders | The patch, through all banks: 1-11 to 6-88 |
 | ARP | The D-50's CHASE button: Chase Play on or off |
 | HOME | The view; held 3 s, the LCD's colour |
-| K1 | The joystick's tone balance: the Upper against the Lower tone (the LCD's Bal) |
-| K2 | The joystick's partial balance: partial 1 against partial 2, in both tones |
+| K1 | The joystick's X, as on a D-50: the selected tone's partial balance, partial 1 against partial 2 |
+| K2 | The joystick's Y, as on a D-50: the tone balance, the Upper against the Lower tone (the LCD's Bal) |
 | K3 | The LCD's dot height (true-size view) |
+| K4 | The selected tone for K1, as the D-50's UPPER and LOWER keys: right the Lower, left the Upper (the Upper at start) |
 | SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12). Not kept over a power cycle |
 | EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel), then the play screen |
 | SAVE | Saves the patch, bank, octave, view, colour and the MIDI settings |
@@ -84,8 +85,8 @@ It receives over USB. The **MIDI Channel** page (EDIT) has the D-50's two settin
 | CC7 | Volume |
 | CC64 | Hold pedal |
 | CC80 | Chase Play on (64 and up) or off |
-| CC81 | The joystick's tone balance (K1): 0 to 127 over 0 to 100, the Upper against the Lower tone. Ours: the D-50 has no controller for it |
-| CC82 | The joystick's partial balance (K2): 0 to 127 over 0 to 100, in both tones. Ours |
+| CC81 | The joystick's tone balance (K2, Y): 0 to 127 over 0 to 100, the Upper against the Lower tone. Ours: the D-50 has no controller for it |
+| CC82 | The joystick's partial balance (K1, X): 0 to 127 over 0 to 100, of the selected tone (K4). Ours |
 | CC100, CC101, CC6 | RPN 0: the bender range |
 | CC120, CC123 | All sound off, all notes off |
 | SysEx DT1, RQ1 | Roland, model 14h: the temporary area at 00 00 00 and the internal memory at 02 00 00 (below) |
