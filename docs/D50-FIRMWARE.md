@@ -94,7 +94,8 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
 
   Every mode message ends with the notes off, as the MIDI specification asks. System byte 14 (range 0..2) is not named yet: its bit 1 shuts out Mono and Poly, its bit 0
   makes 0x4F7E set 0xFE60/0xFE62 to 0xFFFF.
-  The FM-1 (`app.c`) takes 120 and 123 as `d50_panic()` (all voices off, in any omni), and ignores 122 and 124-127; its omni is the MIDI page's setting (#51).
+  The FM-1 (`app.c`) takes 120 and 123 as `d50_panic()` (all voices off, in any omni), and 124/125 as the D-50 does (#59): on the basic channel with value 0 they
+  set the MIDI page's Omni (#51) and turn the notes off. It ignores 122, 126 and 127.
 
 ## The SysEx parser (verified in the listing, 2026-11-22)
 

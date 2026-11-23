@@ -74,6 +74,7 @@ static PLAT_RAM_CODE uint32_t resample(int32_t *lr, uint32_t n, uint32_t at, int
 #define D50_BALANCE_CC 81u
 #define D50_PARTIAL_BALANCE_CC 82u
 static volatile int8_t joy_asked[2] = {-1, -1};
+static volatile int8_t omni_asked = -1;      /* CC 124 (0, omni off) or 125 (1, on), from midi_in (#59) */
 static void midi_in(void)                    /* audio interrupt: the packets that came in */
 {
     uint32_t pkt;
@@ -93,6 +94,10 @@ static void midi_in(void)                    /* audio interrupt: the packets tha
         case 0xB0u:
             if (d1 == 120u || d1 == 123u)
                 d50_panic();
+            else if ((d1 == 124u || d1 == 125u) && d2 == 0u && (st & 0x0Fu) == (set.midi & MIDI_CHANNEL)) {
+                d50_panic();                     /* Omni Off/On, the D-50's (0x4F5A, 0x4F39; #59): on the basic channel, value 0, notes off */
+                omni_asked = (int8_t)(d1 - 124u);/* the main loop sets omni */
+            }
             else if (d1 == D50_BALANCE_CC || d1 == D50_PARTIAL_BALANCE_CC)
                 joy_asked[d1 - D50_BALANCE_CC] = (int8_t)d2;   /* the joystick's two axes, absolute (#58); the main loop does it */
             else if (d1 == 0u)
@@ -559,6 +564,18 @@ static void input(void)
         if (v >= 0) {
             joy_asked[k] = -1;
             joystick_to(k == 0u ? JOY_Y : JOY_X, v);
+        }
+    }
+    {                                            /* CC 124/125: the MIDI Channel page's Omni, as the D-50's MIDI-1 page (#59) */
+        int32_t o = omni_asked;
+        if (o >= 0) {
+            omni_asked = -1;
+            if ((uint32_t)o != ((set.midi & MIDI_OMNI_OFF) ? 0u : 1u)) {
+                set.midi = (uint8_t)(o ? set.midi & ~MIDI_OMNI_OFF : set.midi | MIDI_OMNI_OFF);
+                set_dirty = 1;
+                ui.redraw = 1;
+            }
+            app_say("OMNI", o ? "ON" : "OFF");
         }
     }
     if (ui.page == LCD_PAGE_TUNE) {              /* K1 Master Tune, K2 Key Transpose (#54) */

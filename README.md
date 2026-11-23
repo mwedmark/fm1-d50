@@ -89,6 +89,7 @@ It receives over USB. The **MIDI Channel** page (EDIT) has the D-50's two settin
 | CC82 | The joystick's partial balance (K1, X): 0 to 127 over 0 to 100, of the selected tone (K4). Ours |
 | CC100, CC101, CC6 | RPN 0: the bender range |
 | CC120, CC123 | All sound off, all notes off |
+| CC124, CC125 | Omni off, omni on, as on a D-50: only on the basic channel and with the value 0. They set the MIDI Channel page's Omni (kept with SAVE) and turn the notes off |
 | SysEx DT1, RQ1 | Roland, model 14h: the temporary area at 00 00 00 and the internal memory at 02 00 00 (below) |
 
 ## SysEx
