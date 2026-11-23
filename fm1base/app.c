@@ -1036,6 +1036,7 @@ void app_frame(void)
             ui.msg_until = now + 2500u;
         }
     }
+    d50_handshake_poll(now);                     /* (an ACK that never came in: the dump goes on after 200 ms) */
     while (plat_sysex_room() >= D50_SYSEX_REPLY_MAX) {   /* an RQ1's answer, a DT1 at a time as the computer reads */
         static uint8_t f[D50_SYSEX_REPLY_MAX];
         uint32_t len = d50_sysex_reply(f);

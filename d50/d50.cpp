@@ -919,6 +919,7 @@ struct Reply {
     uint8_t answer_dev;
     // the handshake's sending side: a DAT (or the EOD) may go out (go), or went out and waits for the other side's ACK (sent: its length)
     bool go, eod, waiting;
+    uint32_t wait_ms;                             // when the wait for an ACK was first seen (d50_handshake_poll), 0 not yet
     unsigned sent;
     // the receiving side: a WSD was taken (DATs and the EOD are expected)
     bool receiving;
@@ -928,7 +929,7 @@ struct Reply {
 } reply;
 
 void answer(uint8_t dev, uint8_t cmd) { reply.answer = cmd; reply.answer_dev = dev; }   // (dev: the frame's, which is ours: d50_sysex)
-void hs_stop() { reply.go = reply.eod = reply.waiting = reply.receiving = false; reply.first = 0; reply.sent = 0; if (reply.cmd == kDat) reply.left = 0; }
+void hs_stop() { reply.go = reply.eod = reply.waiting = reply.receiving = false; reply.wait_ms = 0; reply.first = 0; reply.sent = 0; if (reply.cmd == kDat) reply.left = 0; }
 }  // namespace
 
 static uint8_t device_id;                       // d50_device: the basic channel less one (issue #51)
@@ -989,6 +990,7 @@ static void d50_handshake(const uint8_t *p, uint32_t n)
     case kAck:                                    // our DAT (or EOD) arrived
         if (!reply.waiting) return;
         reply.waiting = false;
+        reply.wait_ms = 0;
         if (reply.eod) { xfer_end(D50_XFER_DONE); hs_stop(); return; }     // (the EOD's ACK: done)
         reply.at += reply.sent;
         reply.left -= reply.sent;
@@ -997,7 +999,7 @@ static void d50_handshake(const uint8_t *p, uint32_t n)
         else reply.eod = reply.go = true;
         return;
     case kErr:                                    // our last DAT (or EOD) arrived damaged: again
-        if (reply.waiting) { reply.waiting = false; reply.go = true; }
+        if (reply.waiting) { reply.waiting = false; reply.wait_ms = 0; reply.go = true; }
         return;
     case kRjc:                                    // the other side ends the transfer
         xfer_end(D50_XFER_FAIL);
@@ -1012,7 +1014,9 @@ static void d50_handshake(const uint8_t *p, uint32_t n)
 extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
 {
     if (n < 4U || p[0] != kRoland || p[2] != kModel) return 0;
-    if (p[1] != device_id) return 1;              // another D-50's (issue #51): not done, not answered
+    // (while we wait for the computer's ACK, ERR or RJC it is taken whatever device number it carries: a librarian's own number may differ)
+    const bool answer_to_us = reply.waiting && (p[3] == kAck || p[3] == kErr || p[3] == kRjc);
+    if (p[1] != device_id && !answer_to_us) return 1;   // another D-50's (issue #51): not done, not answered
     if (p[3] >= kWsd && p[3] <= kRjc) {           // the handshake: answered even without data (RJC), so the other side does not wait
         d50_handshake(p, n);
         return 1;
@@ -1076,7 +1080,7 @@ extern "C" unsigned d50_sysex_reply(uint8_t *frame)
         frame[10] = static_cast<uint8_t>(size & 127U);
         frame[11] = roland_sum(frame + 5, 6U);
         frame[12] = 0xF7;
-        if (reply.first == kWsd) reply.waiting = true;   // (the computer's ACK lets the first DAT go: kAck)
+        if (reply.first == kWsd) { reply.waiting = true; reply.wait_ms = 0; }   // (the computer's ACK lets the first DAT go: kAck)
         reply.first = 0;
         return 13U;
     }
@@ -1087,6 +1091,7 @@ extern "C" unsigned d50_sysex_reply(uint8_t *frame)
         frame[5] = 0xF7;
         reply.go = false;
         reply.waiting = true;
+        reply.wait_ms = 0;
         return 6U;
     }
     if (!reply.left) return 0;
@@ -1102,6 +1107,7 @@ extern "C" unsigned d50_sysex_reply(uint8_t *frame)
     if (reply.cmd == kDat) {                      // the next only after the ACK (kAck moves on, kErr sends this one again)
         reply.go = false;
         reply.waiting = true;
+        reply.wait_ms = 0;
         reply.sent = len;
     } else {
         reply.at += len;
@@ -1109,6 +1115,17 @@ extern "C" unsigned d50_sysex_reply(uint8_t *frame)
         if (!reply.left) xfer_end(D50_XFER_DONE); // (Bulk Dump.O's last DT1; an RQ1's answer is no transfer)
     }
     return 10U + len;
+}
+
+// An ACK that never came (lost on its way in): after 200 ms the wait is taken as answered, so the dump goes on instead of standing still.
+// ms: the main loop's clock, called each pass.
+extern "C" void d50_handshake_poll(uint32_t ms)
+{
+    if (!reply.waiting) { reply.wait_ms = 0; return; }
+    if (!reply.wait_ms) { reply.wait_ms = ms ? ms : 1U; return; }
+    if (ms - reply.wait_ms < 200U) return;
+    const uint8_t ack[4] = {kRoland, reply.dev, kModel, kAck};
+    d50_handshake(ack, sizeof ack);
 }
 
 // The D-50's Data Transfer menu (docs/D50-FIRMWARE.md, the table at 0x3822): the FM-1 starts the transfer itself, which a librarian that
