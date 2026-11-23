@@ -100,7 +100,9 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
   - **The channel test, 0x4B81:** a channel message's channel less the basic channel (mod 16) is its relative channel. Omni on makes it 0 for every channel. Notes go to
     0x298F with it, so channel basic + k plays as part k; a k above 0xFE42 is ignored. The bender too (0x4C65): in mono each relative channel has its own
     (0xD3D2[k], 0xD3DB[k]), and the basic channel's also sets the global one (0xD315).
-  - **The voices, 0x29BE:** the note handler is picked from the 27-entry table at 0x69EC, in three rows of nine indexed by the patch's key mode (0xC592):
+  - **The voices, 0x29BE:** the note handler is picked from the 27-entry table at 0x69EC, in three rows of nine indexed by the patch's key mode (0xC592).
+    The columns are taken in the order of the key mode names (0x7C80: WHOLE, DUAL, SPLIT, SEP, WHOL-S, ...). 0x4FA6 and 0x61C5 test 0xC592 for 0 and 4 together, Whole and
+    Whole-S in that order, which supports it. PicoFaceD5 reads the patch byte (pb[18]) in another order (3 WHOL-S, 7 SEP), so the firmware may map one to the other (not checked):
 
     | Row | When | Whole | Dual | Split | Sep | Whole-S | Dual-S | Split-US | Split-LS | Sep-S |
     | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -123,7 +125,7 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
       again, clears mono and poly and sets 0xFE42 = 0: back to the power-on state.
   - Mono and the global channel are what a MIDI guitar controller needs, one string a channel, which is the likely reason the D-50 has them.
   The FM-1 (`app.c`) takes 120 and 123 as `d50_panic()` (all voices off, in any omni), and 124/125 as the D-50 does (#59): on the basic channel with value 0 they
-  set the MIDI page's Omni (#51) and turn the notes off. It ignores 122, 126 and 127.
+  set the MIDI page's Omni (#51) and turn the notes off. 126 and 127 as the D-50 (#60, below). It ignores 122.
 
 ## The SysEx parser (verified in the listing, 2026-11-22)
 
@@ -340,10 +342,10 @@ The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps,
   the FM-1 sent its keys and controls on MIDI, which it does not (it sends only SysEx answers); nothing to follow here for now.
 - The D-50's stick moves the balances only after Lowr or Uppr, and leaves them on a screen change or a patch change; at power-on it is in Valu. The FM-1's K1/K2 move them on the play
   screen at any time, and K4's Upper at start matches the D-50's power-on P1.3 (set: 0x3EB4 would take the upper). Kept as ours: the FM-1 has no Lcal/Valu.
-- The FM-1 has no mono mode and no Control setting: it plays every channel polyphonically with the patch's key mode, ignores 126/127, and takes the program
-  change and the controllers on any channel it plays. Following the D-50 would mean up to 8 channels, each one fixed voice (one monophonic part), plus
-  the basic or the global channel for the controllers. That matters for a MIDI guitar or a multitimbral sequencer part per string. It is not done, and it is a
-  question for the maintainer.
+- The mono mode and Control follow the D-50 (#60). `app.c` makes the channel test (the part, Control's channel), takes CC 126/127, and has Control as the MIDI
+  page's K3. `d50.cpp` keeps one note a part with the part's bend, and the engine plays the Solo key modes polyphonically after a Poly or in mono.
+  Two differences remain. A part plays its note as the patch's key mode plays it (the engine's voices), not on the firmware's fixed voice k / k + 8.
+  And two parts on the same note share its voices until the last one's note-off.
 - Master Tune is 0..100, not 0..126 as PR #56 first had it: corrected (`d50_tune` 0..100, 50 = 440.0 Hz). Key Transpose's -12..+12 is confirmed.
 
 ## Coverage and what is next

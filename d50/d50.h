@@ -49,6 +49,17 @@ void d50_cc(unsigned cc, unsigned value);
  * Transpose -12..12 semitones (a key sounds its note moved; its note-off ends the one it sounded). Both are kept over a program change. */
 void d50_tune(unsigned value);
 void d50_transpose(int semitones);
+/* The D-50's MIDI modes (issue #60, its firmware's rows at 0x69EC): D50_MODE_NORMAL the power-on state (the patch's key mode, its Solo too);
+ * D50_MODE_POLY after a received Poly (the Solo key modes play polyphonically); D50_MODE_MONO, mode 4: channels 1..8 parts, each one note at
+ * a time with its own bender, in any key mode. A change turns the notes off. d50_note_ch and d50_bend_ch take the part, the channel less the
+ * basic channel (the caller's channel test): in mono a part's note ends the part's last one, and its bend moves only its note; otherwise the
+ * part is not looked at. d50_note and d50_bend are part 0's. */
+#define D50_MODE_NORMAL 0U
+#define D50_MODE_POLY 1U
+#define D50_MODE_MONO 2U
+void d50_mode(unsigned mode, unsigned channels);
+void d50_note_ch(unsigned part, unsigned note, unsigned velocity);
+void d50_bend_ch(unsigned part, unsigned value);
 /* Channel pressure (aftertouch), 0..127 */
 void d50_pressure(unsigned value);
 /* Chase Play (issue #18), on or off with d50_cc(D50_CHASE_CC, >= 64 / < 64): the D-50's CHASE button. 1 while it is on. */

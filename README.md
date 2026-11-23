@@ -60,7 +60,7 @@ The view and the colour are saved with SAVE.
 | K3 | The LCD's dot height (true-size view) |
 | K4 | The selected tone for K1, as the D-50's UPPER and LOWER keys: right the Lower, left the Upper (the Upper at start) |
 | SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12). Not kept over a power cycle |
-| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel), then the play screen |
+| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel: BasicCH, Omni, Control), then the play screen |
 | SAVE | Saves the patch, bank, octave, view, colour and the MIDI settings |
 
 The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.
@@ -72,6 +72,16 @@ It receives over USB. The **MIDI Channel** page (EDIT) has the D-50's two settin
 - **BasicCH** (K1), 1 to 16, default 1: the channel it plays on with omni off, and its SysEx device ID, as on a D-50 (the device ID is the
   basic channel less one: channel 1 is `00`).
 - **Omni** (K2), default ON: ON plays every channel, as before; OFF only the basic channel.
+- **Control** (K3), the D-50's MIDI-1 setting, default B.CH: the channel the program change, aftertouch and controllers come on in the
+  mono mode (below). B.CH is the basic channel and G.CH the global channel, the one below it. MdeOff ignores Mono and Poly, and choosing it
+  ends the mono mode.
+
+**The mono mode** (CC 126 on the basic channel, with omni off), as on a D-50: the value is the number of channels, from the basic channel
+up (0 and 9 to 16 give 8, and no further than channel 16). Each channel is a monophonic part of its own, with its own bender, whatever the
+patch's key mode is: a new note on a channel ends that channel's last one. It is for a MIDI guitar, a channel a string, or a sequencer
+part a channel. With omni on, Mono plays polyphonically. **CC 127 (Poly)** ends it; from then on, the Solo key modes (Whole-S, Dual-S,
+Split-US and so on) play polyphonically too, as on a D-50, until Mono or MdeOff. Each turns the notes off. The mode is not kept over a
+power cycle (a D-50's is not either); the screen says MONO or POLY.
 
 | Message | What it does |
 | --- | --- |
@@ -90,6 +100,7 @@ It receives over USB. The **MIDI Channel** page (EDIT) has the D-50's two settin
 | CC100, CC101, CC6 | RPN 0: the bender range |
 | CC120, CC123 | All sound off, all notes off |
 | CC124, CC125 | Omni off, omni on, as on a D-50: only on the basic channel and with the value 0. They set the MIDI Channel page's Omni (kept with SAVE) and turn the notes off |
+| CC126, CC127 | Mono (the value: the channels) and Poly (value 0), as on a D-50: only on the basic channel, not with Control MdeOff (above) |
 | SysEx DT1, RQ1 | Roland, model 14h: the temporary area at 00 00 00 and the internal memory at 02 00 00 (below) |
 
 ## SysEx

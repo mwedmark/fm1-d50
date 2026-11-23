@@ -281,6 +281,12 @@ public:
         return false;
     }
 
+    // fm1-d50, diagnostic: the slots whose key is down (the FM-1's mono test)
+    int keys_down() const {
+        int n = 0;
+        for (int i = 0; i < kVoices; ++i) n += key_[i] ? 1 : 0;
+        return n;
+    }
     // Diagnostic: how many slots are actually rendering right now.
     int voices_sounding() const {
         int n = 0;
@@ -339,6 +345,11 @@ public:
     void set_master_cents(float c) { spec_.voice.master_cents = c; }
     void set_bend_semis(float st) {
         for (int i = 0; i < kVoices; ++i) voices_[i].set_bend_semis(st);
+    }
+    // fm1-d50: the bend of one note's voices only (sounding or in their release), for the D-50's mono mode: a bender per MIDI channel
+    void set_note_bend(int note, float st) {
+        for (int i = 0; i < kVoices; ++i)
+            if (active_[i] && note_[i] == note) voices_[i].set_bend_semis(st);
     }
     void set_aftertouch(float a) {
         for (int i = 0; i < kVoices; ++i) voices_[i].set_aftertouch(a);
@@ -495,18 +506,19 @@ public:
         // steal that no factory patch tells them apart, and it cannot
         // click.
         bool sounded = false;
+        const bool whole_solo = spec_.solo && !solo_off_;
         switch (spec_.key_mode) {
             case KeyMode::kDual: {
-                if (spec_.solo) solo_cut(0, note);
+                if (whole_solo) solo_cut(0, note);
                 const bool u = upper_.note_on(note, velocity);
-                if (spec_.solo) solo_note_[0] = note;
-                lower_later(note, velocity, true, spec_.solo);
+                if (whole_solo) solo_note_[0] = note;
+                lower_later(note, velocity, true, whole_solo);
                 sounded = u || true;
                 break;
             }
             case KeyMode::kSplit: {
                 const int side = note >= spec_.split_point ? 0 : 1;
-                const bool solo = side == 0 ? spec_.solo_upper : spec_.solo_lower;
+                const bool solo = !solo_off_ && (side == 0 ? spec_.solo_upper : spec_.solo_lower);
                 if (side == 0) {
                     if (solo) solo_cut(0, note);
                     sounded = upper_.note_on(note, velocity);
@@ -519,9 +531,9 @@ public:
             }
             case KeyMode::kWhole:
             default:
-                if (spec_.solo) solo_cut(0, note);
+                if (whole_solo) solo_cut(0, note);
                 sounded = upper_.note_on(note, velocity);
-                if (spec_.solo) solo_note_[0] = note;
+                if (whole_solo) solo_note_[0] = note;
                 break;
         }
         // The gate and reverse reverbs time their wet envelope against the
@@ -852,6 +864,18 @@ public:
         upper_.set_bend_semis(st);
         lower_.set_bend_semis(st);
     }
+    // fm1-d50: the D-50's mono mode (MIDI mode 4), for the FM-1's d50.cpp: one note's bend (a bender per channel), and the Solo key modes
+    // played polyphonically (the firmware's note-handler rows at 0x69EC: after a received Poly, and in mono, where the caller keeps each
+    // channel to one note itself)
+    void set_note_bend(int note, float st) {
+        upper_.set_note_bend(note, st);
+        lower_.set_note_bend(note, st);
+    }
+    int keys_down() const { return upper_.keys_down() + lower_.keys_down(); }   // (diagnostic)
+    void set_solo_off(bool off) {
+        if (off && !solo_off_) solo_note_[0] = solo_note_[1] = -1;
+        solo_off_ = off;
+    }
     void set_mod_wheel(float w) {
         upper_.set_wheel(w);
         lower_.set_wheel(w);
@@ -874,6 +898,7 @@ private:
     Reverb reverb_{};
     float sr_ = 32000.0f;
     int solo_note_[2] = {-1, -1}; // the solo modes' held note per tone (0 upper, 1 lower)
+    bool solo_off_ = false;       // fm1-d50: the Solo key modes play polyphonically (set_solo_off)
 
     // The lower tone runs 128 samples (4.0 ms) behind the upper: Roland's
     // D-50 VST starts it exactly that much later on every note, key and

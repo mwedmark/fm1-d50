@@ -120,7 +120,16 @@ d5::Patch::Split split;
 unsigned guard_hold, guard_calm;
 int guard_cap = 16;
 
-enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kEvTune = 6, kEvTranspose = 7, kQueue = 64 };
+enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kEvTune = 6, kEvTranspose = 7, kEvMode = 8, kQueue = 64 };
+// The mono mode (issue #60): up to 8 parts, each one note at a time with its own bend. The audio interrupt's.
+constexpr unsigned kMonoParts = 8;
+struct Mono {
+    unsigned mode = D50_MODE_NORMAL;
+    unsigned parts = 0;                          // 0: not mono
+    int key[kMonoParts];                         // the key of the part's note (its note-off's), -1 none
+    int note[kMonoParts];                        // the note it sounds (after Key Transpose)
+    unsigned bend[kMonoParts];
+} mono;
 constexpr unsigned kChaseCc = 80;                // Chase Play on (>= 64) or off: ours, the D-50 has no CC for it (issue #18)
 
 // The controllers' state, the audio interrupt's (d50_render's events): what a program change keeps (the lever, the pressure, CC7: the
@@ -141,6 +150,7 @@ struct Controls {
     uint32_t held[4] = {0, 0, 0, 0};             // released while the pedal held them
 } ctl;
 void after_configure();                          // (below, with the other controls)
+void mono_set(unsigned mode, unsigned parts);
 void release_note(int note);                     // (below, with Chase Play: a key's note-off)
 void chase_clear();
 
@@ -308,6 +318,7 @@ extern "C" int d50_bind_flash(void)
 #endif
     guard_cap = 16;
     guard_hold = guard_calm = 0;
+    mono_set(mono.mode, mono.parts);             // (a new engine: the mode as it was, nothing sounding)
     attach_reverb();                             // before configure, which binds the reverb's lines
     build_program(program_now);
     patch->configure(spec_at(spec_serial & 1U), static_cast<float>(D50_RATE));
@@ -318,8 +329,17 @@ extern "C" int d50_bind_flash(void)
     return 1;
 }
 
-extern "C" void d50_note(unsigned note, unsigned velocity) { push(kEvNote << 24 | (note & 127U) << 8 | (velocity & 127U)); }
-extern "C" void d50_bend(unsigned value) { push(kEvBend << 24 | (value & 16383U)); }
+extern "C" void d50_note_ch(unsigned part, unsigned note, unsigned velocity)
+{
+    push(kEvNote << 24 | (part & 15U) << 16 | (note & 127U) << 8 | (velocity & 127U));
+}
+extern "C" void d50_bend_ch(unsigned part, unsigned value) { push(kEvBend << 24 | (part & 15U) << 16 | (value & 16383U)); }
+extern "C" void d50_note(unsigned note, unsigned velocity) { d50_note_ch(0, note, velocity); }
+extern "C" void d50_bend(unsigned value) { d50_bend_ch(0, value); }
+extern "C" void d50_mode(unsigned mode, unsigned channels)
+{
+    push(kEvMode << 24 | (mode & 3U) << 8 | (channels > kMonoParts ? kMonoParts : channels));
+}
 extern "C" void d50_panic(void) { push(kEvPanic << 24); }
 extern "C" void d50_cc(unsigned cc, unsigned value) { push(kEvCc << 24 | (cc & 127U) << 8 | (value & 127U)); }
 extern "C" void d50_tune(unsigned value) { push(kEvTune << 24 | (value > 100U ? 100U : value)); }
@@ -333,12 +353,77 @@ void bit_set(uint32_t *set, int note, bool on)
     if (on) set[note >> 5] |= 1U << (note & 31);
     else set[note >> 5] &= ~(1U << (note & 31));
 }
-void apply_bend()
+float bend_semis(unsigned bend)
 {
     const int range = ctl.bend_range >= 0 ? ctl.bend_range : spec_at(spec_done & 1U).bend_range;
     // (the master tune, 0.01003 semitone a step: 100.3 cents over the 100 steps)
-    patch->set_bend_semis((static_cast<int>(ctl.bend) - 8192) * (static_cast<float>(range) / 8192.0f) +
-                          static_cast<float>(ctl.tune - 50) * (1.0f / 100.0f) * 1.0029f);
+    return (static_cast<int>(bend) - 8192) * (static_cast<float>(range) / 8192.0f) + static_cast<float>(ctl.tune - 50) * (1.0f / 100.0f) * 1.0029f;
+}
+// In mono each part's note has the part's bend (#60). Again after each block's events: a slot keeps the bend it had, and the lower tone's
+// note starts 128 samples late (Patch::lower_later), so a new note would have another part's until then.
+void mono_bends()
+{
+    for (unsigned k = 0; k < mono.parts; ++k)
+        if (mono.note[k] >= 0) patch->set_note_bend(mono.note[k], bend_semis(mono.bend[k]));
+}
+void apply_bend()
+{
+    patch->set_bend_semis(bend_semis(ctl.bend));
+    mono_bends();
+}
+// Another part sounds this note too (mono): the engine's voices are the note's, so it ends with the last part's note-off
+bool mono_shared(unsigned part, int note)
+{
+    for (unsigned k = 0; k < mono.parts; ++k)
+        if (k != part && mono.note[k] == note) return true;
+    return false;
+}
+void mono_clear()                                // nothing sounds (a panic, a new program)
+{
+    for (unsigned k = 0; k < kMonoParts; ++k) mono.key[k] = mono.note[k] = -1;
+}
+void mono_set(unsigned mode, unsigned parts)
+{
+    mono.mode = mode;
+    mono.parts = mode == D50_MODE_MONO ? (parts == 0 ? 1U : parts) : 0U;
+    mono_clear();
+    for (unsigned k = 0; k < kMonoParts; ++k) mono.bend[k] = ctl.bend;
+    patch->set_solo_off(mode != D50_MODE_NORMAL);
+}
+// A part's note on or off in mono: one note a part, as the D-50's fixed voice per channel (0x2BC1), whatever the key mode; no Chase Play
+void mono_note(unsigned part, int key, int velocity)
+{
+    if (part >= mono.parts) return;
+    if (velocity) {
+        const int old = mono.note[part];
+        if (old >= 0) {                          // the part's last note ends
+            mono.note[part] = -1;
+            bit_set(ctl.held, old, false);
+            if (!mono_shared(part, old)) {
+                bit_set(ctl.down, old, false);
+                patch->note_off(old);
+            }
+        }
+        const int n = key + ctl.transpose < 0 ? 0 : key + ctl.transpose > 127 ? 127 : key + ctl.transpose;
+        mono.key[part] = key;
+        mono.note[part] = n;
+        bit_set(ctl.down, n, true);
+        bit_set(ctl.held, n, false);
+        patch->note_on(n, static_cast<float>(velocity) / 127.0f);
+        patch->set_note_bend(n, bend_semis(mono.bend[part]));
+    } else if (mono.key[part] == key) {
+        const int n = mono.note[part];
+        mono.key[part] = -1;
+        if (ctl.hold) {                          // the pedal holds it: hold_release ends it
+            bit_set(ctl.held, n, true);
+            return;
+        }
+        mono.note[part] = -1;
+        if (!mono_shared(part, n)) {
+            bit_set(ctl.down, n, false);
+            patch->note_off(n);
+        }
+    }
 }
 void apply_volume() { patch->set_volume(spec_at(spec_done & 1U).volume * (static_cast<float>(ctl.volume) / 127.0f)); }
 // after configure (a new program, or the first): the new patch's own bender range and portamento; the volume, the bend and the
@@ -353,12 +438,14 @@ void after_configure()
     ctl.porta_switch = s.upper.voice.porta_switch;
     ctl.porta_time = s.upper.voice.porta_time;
     for (unsigned i = 0; i < 4; ++i) ctl.held[i] = 0;
-    chase_clear();
+    chase_clear();                               // (the mono parts stay, mode and notes: configure leaves the keys down, and a part's note-off ends its note)
     apply_bend();
     apply_volume();
 }
 void hold_release()
 {
+    for (unsigned k = 0; k < mono.parts; ++k)    // (mono: a part whose note the pedal held has none now)
+        if (mono.note[k] >= 0 && mono.key[k] < 0) mono.note[k] = -1;
     for (int note = 0; note < 128; ++note)
         if (bit_of(ctl.held, note)) release_note(note);
     for (unsigned i = 0; i < 4; ++i) ctl.held[i] = 0;
@@ -862,6 +949,10 @@ extern "C" void d50_render(int32_t *out, unsigned n)
         case kEvNote: {
             int note = static_cast<int>((e >> 8) & 127U);
             const int velocity = static_cast<int>(e & 127U);
+            if (mono.parts) {                    // mono (#60): the part's one note
+                mono_note((e >> 16) & 15U, note, velocity);
+                break;
+            }
             if (velocity) {                      // Key Transpose (issue #54): the note the key sounds, kept for its note-off
                 const int n = note + ctl.transpose;
                 ctl.sounded[note] = static_cast<uint8_t>(n < 0 ? 0 : n > 127 ? 127 : n);
@@ -881,17 +972,35 @@ extern "C" void d50_render(int32_t *out, unsigned n)
         }
         case kEvTune: ctl.tune = static_cast<int>(e & 127U); apply_bend(); break;
         case kEvTranspose: ctl.transpose = static_cast<int>(e & 127U) - 12; break;
-        case kEvBend: ctl.bend = e & 16383U; apply_bend(); break;
+        case kEvBend: {
+            const unsigned part = (e >> 16) & 15U;
+            if (!mono.parts) {
+                ctl.bend = e & 16383U;
+                apply_bend();
+            } else if (part < mono.parts) {      // mono (#60): the part's bender moves its note only; part 0's is also the global one
+                mono.bend[part] = e & 16383U;
+                if (part == 0) ctl.bend = e & 16383U;
+                if (mono.note[part] >= 0) patch->set_note_bend(mono.note[part], bend_semis(mono.bend[part]));
+            }
+            break;
+        }
         case kEvCc: control((e >> 8) & 127U, e & 127U); break;
         case kEvPressure: patch->set_aftertouch(static_cast<float>(e & 127U) / 127.0f); break;
         case kEvPanic:
+        case kEvMode:                            // a mode message (#60): the notes off, as every one on the D-50, then the mode
             patch->silence();
             chase_clear();
+            mono_clear();
             ctl.hold = false;
             for (unsigned i = 0; i < 4; ++i) ctl.held[i] = ctl.down[i] = 0;
+            if (e >> 24 == kEvMode) {
+                mono_set((e >> 8) & 3U, e & 15U);
+                apply_bend();
+            }
             break;
         }
     }
+    if (mono.parts) mono_bends();                // (a new lower note's bend: mono_bends)
     chase_service();                             // Chase Play's repeats that are due (to the block: 3 ms)
     // A block at a time, a share of the sounding voices on CPU1 (Patch::render_block; FM1B_SPLIT, split_begin)
     static float left[kBlock], right[kBlock];
