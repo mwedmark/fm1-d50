@@ -168,8 +168,10 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
       0xFE33.6, the Upper's. SepCH's CC 64 (0x5F0D) sets only 0xFE33.6. The portamento switch goes the same way: the basic channel's CC 65 (0x4E49, 0x435F) sets
       0xFE33.5, the Lower's, and SepCH's (0x5E83, 0x5F5A) sets 0xFE33.4, the Upper's.
     - So in SEP the basic channel's 0x2B2F (R7 = 1) is the Lower, and SepCH's 0x2B29 (R7 = 0) and SEP-S's fixed voice 0 (0x2B40) are the Upper.
-    - **Hold Mode (pb[21]) is not in PicoFaceD5**, where the pedal holds both tones. In the split and separate modes the D-50 holds only the tones Hold Mode names.
-      Portamento Mode (pb[20]) is in it (`porta_mode_on`).
+    - **Hold Mode (pb[21])** was not in PicoFaceD5, where the pedal held both tones. The FM-1 now follows the D-50 (#63). `PatchSpec::hold_mode` holds it,
+      and `d50.cpp`'s `basic_holds`/`sep_holds` apply it. The whole and dual modes hold both tones. The split modes hold a key above the split point only unless
+      Hold Mode is L, and one below it unless it is U. The separate modes hold the Lower (the basic channel's pedal) unless U, and the Upper (SepCH's) unless L.
+      In fm1-d50's banks, 19 of the 34 split patches have U or L. Portamento Mode (pb[20]) was already in PicoFaceD5 (`porta_mode_on`).
   - **SepCH equal to the basic channel:** both paths take the message, so it plays both tones with separate controller sets (not tried). **SepCH OFF:** only the
     basic channel's tone sounds.
   - **The FM-1 follows this (#62).** PicoFaceD5 had played SEP and SEP-S on one channel as a split with a monophonic Lower, as the VST did.
@@ -418,7 +420,7 @@ The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps,
 First recursive descent from reset, the vectors and the two tables: 6 122 instructions in 367 functions, about 14.8 KB of the 56 KB above 0x2000/0x80 that are code and data
 together. The rest is reached by indirect jumps and by handlers installed into the RAM vectors at run time, which the descent does not follow. To do, in this order:
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
-2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 122-127, the mono mode, system byte 14 (Control), the key modes' order and SepCH are done; 0xFE60/0xFE62, P0.1, TxCH's sending and Hold Mode in the engine not; which tone each pool is, done), the reverb data's
+2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 122-127, the mono mode, system byte 14 (Control), the key modes' order and SepCH are done; 0xFE60/0xFE62, P0.1, TxCH's sending; which tone each pool is and Hold Mode, done), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
 3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) (Done: 0x3EB4 is parameter
    0x66's access routine, Lowr/Uppr choose X's tone; 0xFE47/0xFE3F are LCD refresh requests.) (Done: power-on is Valu, 01.)

@@ -21,7 +21,8 @@ It is a work in progress. This README describes what works now and will grow wit
   - **Velocity**, from the FM-1's keys.
   - **Aftertouch**, from how hard a held key is pressed.
   - The **bender** and the **modulation**, from MIDI.
-  - **Portamento** and the **hold pedal**.
+  - **Portamento** and the **hold pedal**, with the patch's Portamento Mode and Hold Mode (U, L or both) as on a D-50: in the split and
+    separate modes the pedal holds only the tones Hold Mode names.
 - **Chase Play:** the D-50's echo of a note from one tone to the other.
 - **SysEx:** the D-50's DT1 and RQ1 for the current patch and the bank in RAM, so D-50 editors and librarians can read and send patches.
 - **The D-50's display:** the LCD of the original, its play screen as a real D-50 shows it.

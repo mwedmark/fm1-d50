@@ -419,6 +419,9 @@ struct PatchSpec {
     // key_mode stays kSplit (two tones, eight voices each, mixed as a split).
     bool separate = false;
     int sep_channel = 0;          // fm1-d50: pb[38], SepCH: 0 OFF, 1..16
+    // fm1-d50: pb[21], Hold Mode: 0 U, 1 L, 2 UL. The tones the pedal holds in the split and separate modes (the firmware's 0x249F; the
+    // whole and dual modes hold both). The FM-1's glue keeps the pedal's notes (d50.cpp), so it is the glue that reads it (issue #63).
+    int hold_mode = 2;
     int split_point = 60;         // panel "Split Point", C4 by default
     float balance = 0.5f;         // panel "Tone Balance", upper to lower
     // Panel "Bender Range", pb[26], 0..12 semitones. Patch-common: the

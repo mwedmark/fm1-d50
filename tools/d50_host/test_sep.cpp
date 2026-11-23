@@ -130,6 +130,47 @@ int main(int argc, char **argv)
     d50_sep(on, 64, 100);
     check(upper() == 0 && lower() == 0, "outside the separate modes SepCH plays nothing");
 
+    printf("Hold Mode (#63)\n");
+    static const char *const hold_name[3] = {"U", "L", "UL"};
+    temp_patch[6 * 64 + 19] = 24;                 // split point C4 (60)
+    for (unsigned h = 0; h < 3; ++h) {
+        temp_patch[6 * 64 + 21] = static_cast<uint8_t>(h);
+        key_mode(2, 0);                           // Split
+        d50_cc(64, 127);
+        d50_note(72, 100);                        // the Upper's side
+        d50_note(48, 100);                        // the Lower's
+        d50_note(72, 0);
+        d50_note(48, 0);
+        char what[96];
+        snprintf(what, sizeof what, "Split, Hold Mode %s: the pedal holds the Upper %s, the Lower %s", hold_name[h], h != 1 ? "yes" : "no",
+                 h != 0 ? "yes" : "no");
+        check(upper() == (h != 1 ? 1 : 0) && lower() == (h != 0 ? 1 : 0), what);
+        d50_cc(64, 0);
+        check(upper() == 0 && lower() == 0, "  the pedal up ends them");
+
+        key_mode(3, sepch);                       // SEP
+        d50_cc(64, 127);
+        d50_sep(cc, 64, 127);
+        d50_note(60, 100);
+        d50_sep(on, 64, 100);
+        d50_note(60, 0);
+        d50_sep(off, 64, 0);
+        snprintf(what, sizeof what, "SEP, Hold Mode %s: SepCH's pedal holds the Upper %s, the basic channel's the Lower %s", hold_name[h],
+                 h != 1 ? "yes" : "no", h != 0 ? "yes" : "no");
+        check(upper() == (h != 1 ? 1 : 0) && lower() == (h != 0 ? 1 : 0), what);
+        d50_cc(64, 0);
+        d50_sep(cc, 64, 0);
+        check(upper() == 0 && lower() == 0, "  the pedals up end them");
+    }
+    temp_patch[6 * 64 + 21] = 0;
+    key_mode(1, 0);                               // Dual, Hold Mode U: both tones held anyway
+    d50_cc(64, 127);
+    d50_note(60, 100);
+    d50_note(60, 0);
+    check(upper() == 1 && lower() == 1, "Dual: the pedal holds both tones whatever Hold Mode is");
+    d50_cc(64, 0);
+    check(upper() == 0 && lower() == 0, "  the pedal up ends them");
+
     printf("SepCH OFF\n");
     key_mode(3, 0);
     check(patch->separate() && d50_sep_channel() == 0, "SEP with SepCH OFF: no channel to take");

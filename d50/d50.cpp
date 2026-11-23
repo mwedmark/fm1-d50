@@ -394,6 +394,17 @@ void apply_bend()
     }
     mono_bends();
 }
+// The patch's Hold Mode (pb[21]: 0 U, 1 L, 2 UL; issue #63, the firmware's 0x249F): the whole and dual modes hold both tones; the split
+// modes only the tones it names, a note above the split point being the Upper's; the separate modes the Lower by the basic channel's
+// pedal (unless U) and the Upper by SepCH's (unless L)
+bool basic_holds(int note)
+{
+    const d5::PatchSpec &s = spec_at(spec_done & 1U);
+    if (s.key_mode != d5::KeyMode::kSplit) return true;   // (the separate modes are kSplit too)
+    const bool upper = !s.separate && note >= s.split_point;
+    return upper ? s.hold_mode != 1 : s.hold_mode != 0;
+}
+bool sep_holds() { return spec_at(spec_done & 1U).hold_mode != 1; }
 // Another part sounds this note too (mono): the engine's voices are the note's, so it ends with the last part's note-off
 bool mono_shared(unsigned part, int note)
 {
@@ -437,7 +448,7 @@ void mono_note(unsigned part, int key, int velocity)
     } else if (mono.key[part] == key) {
         const int n = mono.note[part];
         mono.key[part] = -1;
-        if (ctl.hold) {                          // the pedal holds it: hold_release ends it
+        if (ctl.hold && basic_holds(n)) {      // the pedal holds it (Hold Mode, #63): hold_release ends it
             bit_set(ctl.held, n, true);
             return;
         }
@@ -516,7 +527,7 @@ void sep_note(int key, int velocity)
     const int n = sep.sounded[key];
     if (!bit_of(sep.down, n)) return;
     bit_set(sep.down, n, false);
-    if (sep.hold) bit_set(sep.held, n, true);
+    if (sep.hold && sep_holds()) bit_set(sep.held, n, true);   // (Hold Mode, #63)
     else patch->sep_note_off(n);
 }
 void sep_control(unsigned cc, unsigned v)
@@ -1090,7 +1101,7 @@ extern "C" void d50_render(int32_t *out, unsigned n)
                 bit_set(ctl.held, note, false);  // (struck again under the pedal: the new note is the one held now)
                 if (chase_applies()) chase_start(note, static_cast<unsigned>(velocity));
                 else patch->note_on(note, velocity / 127.0f);
-            } else if (ctl.hold) {
+            } else if (ctl.hold && basic_holds(note)) {   // (Hold Mode, #63)
                 bit_set(ctl.held, note, true);   // CC64: the note-off waits for the pedal
             } else {
                 release_note(note);

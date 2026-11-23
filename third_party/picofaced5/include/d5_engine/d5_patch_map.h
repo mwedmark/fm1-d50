@@ -498,6 +498,7 @@ inline PatchSpec patch_from_bytes(const uint8_t* patch, const int16_t* blob) {
         default: p.key_mode = KeyMode::kWhole; break;
     }
     p.sep_channel = pb[38] <= 16 ? pb[38] : 0;
+    p.hold_mode = pb[21] > 2 ? 2 : pb[21];       // fm1-d50: Hold Mode, U L UL (0x7B92, display type 0x53), issue #63
     p.split_point = 36 + pb[19];                 // panel C2..C7
     p.upper.voice.master_cents = static_cast<float>(pb[24]) - 50.0f;
     p.lower.voice.master_cents = static_cast<float>(pb[25]) - 50.0f;
