@@ -44,13 +44,19 @@ const char *d50_program_name(unsigned program);   /* the current program's; "" f
 const uint8_t *d50_patch_bytes(void);
 /* MIDI pitch bend, 0..16383, 8192 = centre; over the patch's bender range (pb26, 0..12 semitones), or RPN 0's */
 void d50_bend(unsigned value);
-/* A control change, as the D-50 receives them: 1 modulation lever, 5 portamento time, 6 data entry (RPN 0: the bender range),
- * 7 volume, 64 hold pedal, 65 portamento switch, 100/101 the RPN; the others are ignored. Issue #4. */
+/* A control change, as the D-50 receives them: 1 modulation lever, 5 portamento time, 6 and 38 data entry (RPN 0: the bender range;
+ * RPN 1: Fine Tuning, issue #66), 7 volume, 64 hold pedal, 65 portamento switch, 100/101 the RPN, 98/99 an NRPN (the data entries after it
+ * are not taken); the others are ignored. Issue #4. */
 void d50_cc(unsigned cc, unsigned value);
 /* The D-50's TUNE/FUNCTION (issue #54): Master Tune 0..100 (427.5 .. 452.6 Hz, 50 = 440.0 Hz, as the D-50's system byte; the pitch's offset, with the bend) and Key
  * Transpose -12..12 semitones (a key of d50_key sounds its note moved, MIDI's notes are not: #64; its note-off ends the one it sounded). Both are kept over a program change. */
 void d50_tune(unsigned value);
 void d50_transpose(int semitones);
+/* RPN 1, Fine Tuning, sets Master Tune as on the D-50 (issue #66): d50_midi_tune is the tune now (the low 8 bits, 0..100) and a count of
+ * the times MIDI set it (the bits above), for the panel to follow. d50_rpn_reset: the RPN null and Fine Tuning's bytes not received, as the
+ * D-50 does on a basic channel change and when mono starts with Control G.CH. */
+unsigned d50_midi_tune(void);
+void d50_rpn_reset(void);
 /* The D-50's MIDI modes (issue #60, its firmware's rows at 0x69EC): D50_MODE_NORMAL the power-on state (the patch's key mode, its Solo too);
  * D50_MODE_POLY after a received Poly (the Solo key modes play polyphonically); D50_MODE_MONO, mode 4: channels 1..8 parts, each one note at
  * a time with its own bender, in any key mode. A change turns the notes off. d50_note_ch and d50_bend_ch take the part, the channel less the

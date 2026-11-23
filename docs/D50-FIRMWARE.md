@@ -100,12 +100,16 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
   - **The NRPN flag:** CC 98/99 set 0xFE34.2, and CC 100/101 clear it. While it is set, a data entry is ignored.
   - **RPN 0, the bender range:** data entry MSB (CC 6), clamped to 12, goes to 0xD314 and the chip (0xFE0C, and 0xFE04 outside separate mode).
   - **RPN 1, Fine Tuning:** sets **Master Tune** (system byte 0, 0xC5C0) at 0x4DA6, once both data entry bytes have come.
-    - The 14-bit value's top 8 bits (MSB × 2 + LSB's bit 6), less 64, are clamped to 0..127, then × 200 / 256 (0x417E) gives 0..99.
+    - The 14-bit value's top 8 bits (MSB × 2 + LSB's bit 6), less 64, are clamped to 0..127, then × 200 / 256 (0x417E: A − (A × 56) / 256) gives 0..100.
     - The centre (0x2000) gives 50, 440.0 Hz. The 427.5..452.6 Hz range (about ±50 cents) is 0x1000..0x2FFF, a quarter of the RPN's range each way: MIDI's
       ±100 cents.
     - Any other RPN is ignored.
   - **A reset:** a basic channel change (0x5BEC), and mono starting with Control G.CH (0x4F89), set both words to 0xFFFF.
-  - **The FM-1** (`d50.cpp`) takes RPN 0 only, on CC 100/101 and 6. It has no NRPN flag (CC 98/99 are not looked at on the basic channel) and no RPN 1.
+  - **The FM-1 follows this (#66):**
+    - `d50.cpp` `control` has the NRPN flag, and RPN 1 (`fine_tune`) sets Master Tune. The TUNE/FUNCTION page follows it through `d50_midi_tune`.
+    - `d50_rpn_reset` is called on a basic channel change and when mono starts with G.CH.
+    - SepCH has an NRPN flag of its own (RPN 0 only, as before).
+    - `tools/d50_host/test_rpn.cpp` checks it.
 - **P0.0..P0.2 are the panel's mode states, kept in the port** (verified 2026-11-23). Port 0's mode register is 0x10 (0x221C): P0.4 is an input, the others outputs,
   so these are outputs. The firmware sets them and reads them back as flags; they most likely light the buttons' LEDs (not checked against the schematic).
   - **P0.0, Key Transpose:** set while Key Transpose is not 0 (0x23AE; the key handler Tran is 0x4865).

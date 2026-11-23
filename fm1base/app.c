@@ -139,6 +139,8 @@ static void midi_in(void)                    /* audio interrupt: the packets tha
                     mono_m = (uint8_t)m;
                     poly_rx = 0;
                     engine_mode();
+                    if (midi_control() == MIDI_CONTROL_GCH && (set.midi & MIDI_OMNI_OFF))
+                        d50_rpn_reset();         /* (0x4F7E: with the global channel the RPN starts again, #66) */
                     mode_said = 1;
                 } else if (d1 == 127u && d2 == 0u && midi_control() != MIDI_CONTROL_MDEOFF) {
                     mono_m = 0;                  /* Poly (0x4EAC) */
@@ -417,6 +419,8 @@ static void midi_changed(uint32_t old)
     if (set.midi == old)
         return;
     f = plat_lock();
+    if ((set.midi ^ old) & MIDI_CHANNEL)
+        d50_rpn_reset();                         /* a basic channel change: the RPN null (0x5BEC, #66) */
     m = mono_m;
     if ((set.midi & MIDI_CONTROL_MASK) != (old & MIDI_CONTROL_MASK) && midi_control() == MIDI_CONTROL_MDEOFF) {
         m = 0xFFu;                               /* (the notes off even when nothing was mono or poly) */
@@ -711,6 +715,15 @@ static void input(void)
                 ui.redraw = 1;
             }
             app_say("OMNI", o ? "ON" : "OFF");
+        }
+    }
+    {                                            /* Master Tune set by RPN 1 (#66): the TUNE/FUNCTION page follows */
+        static unsigned seen;
+        const unsigned v = d50_midi_tune();
+        if (v >> 8 != seen >> 8) {
+            seen = v;
+            ui.tune_off = (int8_t)((int32_t)(v & 255u) - 50);
+            ui.redraw = 1;
         }
     }
     if (mode_said) {                             /* CC 126/127 (#60) */

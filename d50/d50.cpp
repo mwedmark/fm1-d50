@@ -121,7 +121,7 @@ unsigned guard_hold, guard_calm;
 int guard_cap = 16;
 
 enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kEvTune = 6, kEvTranspose = 7, kEvMode = 8, kEvSep = 9,
-                  kQueue = 64 };
+                  kEvRpnReset = 10, kQueue = 64 };
 // The mono mode (issue #60): up to 8 parts, each one note at a time with its own bend. The audio interrupt's.
 constexpr unsigned kMonoParts = 8;
 struct Mono {
@@ -135,6 +135,7 @@ struct Mono {
 struct Sep {
     unsigned bend = 8192;
     unsigned rpn = 0x3FFF;
+    bool nrpn = false;                           // (as the basic channel's, #66)
     bool hold = false;
     bool porta_switch = false;
     int porta_time = 0;
@@ -153,6 +154,8 @@ struct Controls {
     unsigned bend = 8192;                        // the last pitch bend, 0..16383
     int bend_range = -1;                         // RPN 0's semitones, -1: the patch's (pb26)
     unsigned rpn = 0x3FFF;                       // CC101 << 7 | CC100; 0x3FFF: none (RPN null)
+    bool nrpn = false;                           // CC 98/99 came after the last CC 100/101: a data entry is not an RPN's (0xFE34.2, #66)
+    uint8_t fine_msb = 0xFF, fine_lsb = 0xFF;    // RPN 1's data entry, 0xFF: not received (0xFE62/0xFE63, #66)
     unsigned volume = 127;                       // CC7
     unsigned wheel = 0, pressure = 0;            // CC1, channel pressure (again after a program change: the separate modes route them, #62)
     bool porta_switch = false;
@@ -162,6 +165,7 @@ struct Controls {
     uint32_t down[4] = {0, 0, 0, 0};             // the notes whose key is down, a bit each
     uint32_t held[4] = {0, 0, 0, 0};             // released while the pedal held them
 } ctl;
+volatile unsigned tune_serial;                   // counts the Master Tunes MIDI set, for the panel (d50_midi_tune)
 void after_configure();                          // (below, with the other controls)
 void mono_set(unsigned mode, unsigned parts);
 void release_note(int note);                     // (below, with Chase Play: a key's note-off)
@@ -363,7 +367,9 @@ extern "C" void d50_mode(unsigned mode, unsigned channels)
     push(kEvMode << 24 | (mode & 3U) << 8 | (channels > kMonoParts ? kMonoParts : channels));
 }
 extern "C" void d50_panic(void) { push(kEvPanic << 24); }
+extern "C" void d50_rpn_reset(void) { push(kEvRpnReset << 24); }
 extern "C" void d50_cc(unsigned cc, unsigned value) { push(kEvCc << 24 | (cc & 127U) << 8 | (value & 127U)); }
+extern "C" unsigned d50_midi_tune(void) { return tune_serial << 8 | static_cast<unsigned>(ctl.tune); }
 extern "C" void d50_tune(unsigned value) { push(kEvTune << 24 | (value > 100U ? 100U : value)); }
 extern "C" void d50_transpose(int semitones) { push(kEvTranspose << 24 | static_cast<unsigned>(semitones < -12 ? -12 : semitones > 12 ? 12 : semitones) + 12U); }
 extern "C" void d50_pressure(unsigned value) { push(kEvPressure << 24 | (value & 127U)); }
@@ -485,6 +491,7 @@ void after_configure()
     sep.hold = false;
     sep.bend = 8192;
     sep.rpn = 0x3FFF;
+    sep.nrpn = false;
     sep.porta_switch = s.upper.voice.porta_switch;
     sep.porta_time = s.upper.voice.porta_time;
     if (patch->separate()) {
@@ -559,11 +566,11 @@ void sep_control(unsigned cc, unsigned v)
             if (bit_of(sep.down, n) || bit_of(sep.held, n)) patch->sep_note_off(n);
         for (unsigned i = 0; i < 4; ++i) sep.down[i] = sep.held[i] = 0;
         break;
-    case 101: sep.rpn = (sep.rpn & 127U) | v << 7; break;
-    case 100: sep.rpn = (sep.rpn & ~127U) | v; break;
-    case 98: case 99: sep.rpn = 0x3FFF; break;   // (an NRPN: a data entry after it is not RPN 0's)
+    case 101: sep.rpn = (sep.rpn & 127U) | v << 7; sep.nrpn = false; break;
+    case 100: sep.rpn = (sep.rpn & ~127U) | v; sep.nrpn = false; break;
+    case 98: case 99: sep.nrpn = true; break;    // (an NRPN: the data entries after it are not taken)
     case 6:
-        if (sep.rpn == 0) {                      // RPN 0: the bender range (patch-common: both tones', as the basic channel's)
+        if (!sep.nrpn && sep.rpn == 0) {                      // RPN 0: the bender range (patch-common: both tones', as the basic channel's)
             ctl.bend_range = v > 12U ? 12 : static_cast<int>(v);
             apply_bend();
         }
@@ -592,6 +599,17 @@ void hold_release()
         if (bit_of(ctl.held, note)) release_note(note);
     for (unsigned i = 0; i < 4; ++i) ctl.held[i] = 0;
 }
+// RPN 1, Fine Tuning, as the D-50's Master Tune (0x4DA6, #66): once both bytes have come, the 14-bit value's top 8 bits less 64, clamped
+// to 0..127, x 200 / 256 (0x417E): 0..99, the centre 0x2000 giving 50, 440.0 Hz; about +-50 cents over half the RPN's range
+void fine_tune()
+{
+    if (ctl.fine_msb > 127U || ctl.fine_lsb > 127U) return;
+    int a = ctl.fine_msb * 2 + ((ctl.fine_lsb >> 6) & 1) - 64;
+    a = a < 0 ? 0 : a > 127 ? 127 : a;
+    ctl.tune = a - ((a * 56) >> 8);
+    apply_bend();
+    tune_serial = tune_serial + 1U;
+}
 void control(unsigned cc, unsigned v)
 {
     switch (cc) {
@@ -610,12 +628,23 @@ void control(unsigned cc, unsigned v)
         ctl.hold = v >= 64U;
         if (!ctl.hold) hold_release();
         break;
-    case 101: ctl.rpn = (ctl.rpn & 127U) | v << 7; break;
-    case 100: ctl.rpn = (ctl.rpn & ~127U) | v; break;
+    case 101: ctl.rpn = (ctl.rpn & 127U) | v << 7; ctl.nrpn = false; break;
+    case 100: ctl.rpn = (ctl.rpn & ~127U) | v; ctl.nrpn = false; break;
+    case 98: case 99: ctl.nrpn = true; break;    // an NRPN: the data entries after it are not taken (0x4D58, #66)
     case 6:
+        if (ctl.nrpn) break;
         if (ctl.rpn == 0) {                      // RPN 0: the bender range, 0..12 semitones as the D-50's pb26
             ctl.bend_range = v > 12U ? 12 : static_cast<int>(v);
             apply_bend();
+        } else if (ctl.rpn == 1) {               // RPN 1, Fine Tuning: its MSB (0x4D8F)
+            ctl.fine_msb = static_cast<uint8_t>(v);
+            fine_tune();
+        }
+        break;
+    case 38:
+        if (!ctl.nrpn && ctl.rpn == 1) {         // its LSB (0x4D96)
+            ctl.fine_lsb = static_cast<uint8_t>(v);
+            fine_tune();
         }
         break;
     }
@@ -1116,6 +1145,10 @@ extern "C" void d50_render(int32_t *out, unsigned n)
             break;
         }
         case kEvTune: ctl.tune = static_cast<int>(e & 127U); apply_bend(); break;
+        case kEvRpnReset:                        // (0x5BEC, 0x4F89: the RPN null, Fine Tuning's bytes not received; #66)
+            ctl.rpn = 0x3FFF;
+            ctl.fine_msb = ctl.fine_lsb = 0xFF;
+            break;
         case kEvTranspose: ctl.transpose = static_cast<int>(e & 127U) - 12; break;
         case kEvBend: {
             const unsigned part = (e >> 16) & 15U;

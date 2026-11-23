@@ -114,7 +114,8 @@ a librarian can make one.
 | CC80 | Chase Play on (64 and up) or off |
 | CC81 | The joystick's tone balance (K2, Y): 0 to 127 over 0 to 100, the Upper against the Lower tone. Ours: the D-50 has no controller for it |
 | CC82 | The joystick's partial balance (K1, X): 0 to 127 over 0 to 100, of the selected tone (K4). Ours |
-| CC100, CC101, CC6 | RPN 0: the bender range |
+| CC100, CC101, CC6, CC38 | RPN 0: the bender range (up to 12). RPN 1, Fine Tuning: Master Tune, as on a D-50, once both data entry bytes have come (the centre is 440.0 Hz, about ±50 cents over half the range; the TUNE/FUNCTION page shows it) |
+| CC98, CC99 | An NRPN: the data entries after it are not taken, until the next RPN |
 | CC120, CC123 | All sound off, all notes off |
 | CC124, CC125 | Omni off, omni on, as on a D-50: only on the basic channel and with the value 0. They set the MIDI Channel page's Omni (kept with SAVE) and turn the notes off |
 | CC126, CC127 | Mono (the value: the channels) and Poly (value 0), as on a D-50: only on the basic channel, not with Control MdeOff (above) |
