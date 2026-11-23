@@ -417,6 +417,7 @@ inline constexpr ReverbType kReverbTypes[32] = {
 // fm1-d50 (#9) EXPERIMENT, not measured: the pre-delay (ms) and the high-frequency damping (kHz) of an outside, unsourced table of the 32 types
 // (AI-compiled, no provenance; it also disagrees with the VST on several decay times, so only these two columns are tried). Rows as kReverbTypes;
 // 0 in kExpPreMs: no pre-delay; 0 in kExpDampKhz: the type's own `damp`. Pre-delays above the pool's free words (~54 ms at 32 kHz) are cut to it.
+// -DD5_REVERB_TABLE_TOTAL_ONSET as well: the pre-delay is taken as the total onset, less the model's own entrance delay.
 // The damping becomes a scale on the Boss coefficient: sqrt(5 kHz / f), 5 kHz taken as the chip's own, within 0.6..1.5, on top of the type's `damp`.
 inline constexpr float kExpPreMs[32] = {
     15, 25, 40, 35,  0,  2,  5, 10, 15, 20,   // 1..10
@@ -627,7 +628,15 @@ public:
             pre_n_ = 0;
             float pre = pre_ms >= 0.0f ? pre_ms : t.pre_ms;
 #ifdef D5_REVERB_TABLE_EXPERIMENT
-            if (pre_ms < 0.0f && pre == 0.0f) pre = kExpPreMs[clamp_index(spec.type, 32)];
+            if (pre_ms < 0.0f && pre == 0.0f) {
+                pre = kExpPreMs[clamp_index(spec.type, 32)];
+#ifdef D5_REVERB_TABLE_TOTAL_ONSET
+                // the table's figure as the whole time to the first wet sample: the entrance delay (22 ms room, 30 ms hall, 3.7 ms plate)
+                // is already in the model, so only what is more than that is added
+                pre -= (m.comb_sizes[0] * scale - 1.0f) * 1000.0f / sr;
+                if (pre < 0.0f) pre = 0.0f;
+#endif
+            }
 #endif
             if (pre > 0.0f) {
                 const int off = 3900 + static_cast<int>(m.all_sizes[2] * scale) + 2;

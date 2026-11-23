@@ -4,7 +4,8 @@
 //   test_reverb          prints a hash of the wet output of all 32 types (an impulse, then a burst of noise, 1.5 s each), to compare
 //                        before and after a change of the model that must not change the sound
 //   test_reverb --check  the pre-delay and damping checks (exit code 1 on a failure)
-// With -DD5_REVERB_TABLE_EXPERIMENT (d5_effects.h) the hash is another one, and --check also covers the experimental values.
+// With -DD5_REVERB_TABLE_EXPERIMENT (d5_effects.h), and -DD5_REVERB_TABLE_TOTAL_ONSET beside it, the hash is another one, and --check also
+// covers the experimental values.
 //
 // Build (host, 32 kHz, the FM-1's segments):
 //   g++ -std=c++17 -O1 -DD5_HOST_BUILD -DD5_REVERB_INT16 -DD5_REVERB_EXTERNAL_POOL -I third_party/picofaced5/include tools/d50_host/test_reverb.cpp -o test_reverb
