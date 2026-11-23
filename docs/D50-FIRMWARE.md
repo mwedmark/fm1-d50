@@ -181,6 +181,41 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
       portamento go to the Lower only.
     - `app.c`: a message on SepCH goes to `d50_sep` and then through the normal channel test, as the firmware's two paths have it.
     - The basic channel's tone is the Lower (verified, above). No patch in fm1-d50's banks uses 3 or 8.
+- **What the D-50 sends, and TxCH** (verified 2026-11-23).
+  - **The channel:** every channel message goes out on TxCH, patch byte 37 (0xC5A5, the patch MIDI page). Its values are `B` (0, the basic channel) or 1..16, and
+    0x588C keeps it in 0xFE35.
+  - **The send path:**
+    - 0x5544 sends a message from a count-prefixed buffer. It puts TxCH into the status byte and leaves out a status equal to the last one (running status,
+      0xFE40). 0x558B waits for room in the output ring, and 0x55F6 queues a byte.
+    - 0x5534 is the shortcut for a control change (`Bn cc v`).
+    - A TxCH change sets 0xFE40 to 0, so the next status goes out in full.
+  - **The keyboard** (0x5FA0):
+    - A key's note-on goes out as `9n note vel`, and its note-off as `9n note 0` (0x603D). The note is the key + 36, moved by Key Transpose (0xC5D1 − 12).
+    - When the last key is released, 0x602D sends **CC 123 All Notes Off** (the buffer at 0x6DF8: `B0 7B 00`; 0x6093 tests the key map at 0xC340).
+    - The keys are sent whatever Local is. With Local on (0xC5CC) the key also plays the sound (0x2975, with the keyboard's flag HL = 0xC310).
+    - **Key Transpose moves only the keyboard's notes**, sent and played (0x2B46 adds it only for HL = 0xC310). Notes received over MIDI (0x298F, HL = 0xC300) are not
+      moved. 0x23AE lights P0.0 while Key Transpose is not 0.
+  - **The controllers**, each only with its MIDI page switch on (the same switches that gate receiving):
+
+    | What | Sent as | Where | Switch |
+    | --- | --- | --- | --- |
+    | Bender | `En lsb msb` | 0x3380 | (none found) |
+    | Modulation lever | CC 1 | 0x31BA | Mod, 0xC5C5 |
+    | Volume slider | CC 7 | 0x3188 | Volume, 0xC5C6 |
+    | Aftertouch | `Dn v` | 0x3232 | After, 0xC5C3 |
+    | Hold pedal | CC 64 | 0x2585; Hold switched off while the pedal is down: CC 64 = 0 (0x57E0) | Hold, 0xC5C7 |
+    | Portamento switch | CC 65, 0 or 127 | 0x4340 | Porta, 0xC5C8 |
+    | Pedal switch (P1.6) | CC 64 + 0xC5CF (MIDI-4 PedalSW), 0 or 127 | 0x24E0 | (none) |
+    | External controller | CC 0xC5D0 (MIDI-4 ExtCont) | 0x31E3 | (none) |
+    | Patch chosen on the panel | `Cn` the patch number 0..63 (0xFE39) | 0x551B, from 0x25B6 | Prog.C, 0xC5C9 |
+
+    The joystick's balances are not sent: no send was found near the stick's code (0x30BD..0x3120).
+  - **A TxCH change** (0x58AA):
+    - If keys are down (0x61D6), their note-offs go out on the old channel, then All Notes Off.
+    - Then the new channel gets **CC 124 Omni Off and CC 127 Poly** (0x56FA), so that a receiver set to it plays in mode 3.
+  - **SysEx:** the answers to RQ1/RQD and the handshake (above).
+  - **The FM-1** sends only the SysEx answers: no keys, no controllers. Its Key Transpose (`d50_transpose`, #54) moves every note, the ones from MIDI too, where the
+    D-50's moves only its keyboard's.
 - **System byte 14 (0xC5CE) is the MIDI-1 page's "Control"** (verified 2026-11-23). The page has BasicCH, Control, Omni and Local (texts at 0x7474), and its values
   are the strings at 0x7CB6, six characters each: ` B.CH `, ` G.CH ` and `MdeOff`.
   - **It picks the control channel in mono, 0x4BE9:** the program change, channel pressure and controllers (CC 0-121) are taken in mono only on that channel; in
@@ -420,7 +455,7 @@ The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps,
 First recursive descent from reset, the vectors and the two tables: 6 122 instructions in 367 functions, about 14.8 KB of the 56 KB above 0x2000/0x80 that are code and data
 together. The rest is reached by indirect jumps and by handlers installed into the RAM vectors at run time, which the descent does not follow. To do, in this order:
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
-2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 122-127, the mono mode, system byte 14 (Control), the key modes' order and SepCH are done; 0xFE60/0xFE62, P0.1, TxCH's sending; which tone each pool is and Hold Mode, done), the reverb data's
+2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 122-127, the mono mode, system byte 14 (Control), the key modes' order and SepCH are done; 0xFE60/0xFE62 and P0.1 not; which tone each pool is, Hold Mode and what the D-50 sends (TxCH), done), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
 3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) (Done: 0x3EB4 is parameter
    0x66's access routine, Lowr/Uppr choose X's tone; 0xFE47/0xFE3F are LCD refresh requests.) (Done: power-on is Valu, 01.)
