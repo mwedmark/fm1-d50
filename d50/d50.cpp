@@ -834,9 +834,15 @@ bool in_reverb(uint32_t a) { return a >= kReverbAt && a - kReverbAt < kReverbByt
 struct Xfer {
     unsigned item;
     unsigned state;                               // D50_XFER_IDLE, _RUN, _DONE, _FAIL
+    // a load (Bulk Load, Bulk Load.O): what came in. next: the address after the last byte taken; end: where the computer's data should
+    // stop (its WSD's address and size; the whole memory for a one-way load); gap: a frame is missing (the next one began past next).
+    // Complete only with no gap and all up to end (D50 Librarian sends at a set delay, waits for no ACK, and a dropped frame is not known else).
+    uint32_t next, end;
+    bool gap;
 } xfer;
 void xfer_end(unsigned state) { if (xfer.state == D50_XFER_RUN) xfer.state = state; }
 bool xfer_loads() { return xfer.state == D50_XFER_RUN && (xfer.item == D50_XFER_LOAD || xfer.item == D50_XFER_LOAD_O); }
+bool xfer_whole() { return !xfer.gap && xfer.next >= xfer.end; }   // (a load that got everything)
 
 uint32_t addr_of(const uint8_t *a) { return static_cast<uint32_t>(a[0]) << 14 | static_cast<uint32_t>(a[1]) << 7 | a[2]; }
 // the byte at an address, nullptr where nothing is
@@ -890,6 +896,10 @@ uint8_t temp_max(uint32_t a)
 // a DT1's or DAT's data bytes into the areas (nothing where nothing is; in the temporary area, nothing above the byte's maximum)
 void write_at(uint32_t a, const uint8_t *d, unsigned len)
 {
+    if (xfer_loads() && a >= kInternal) {         // (what a load brings: in order, or a gap)
+        if (a > xfer.next) xfer.gap = true;
+        if (a + len > xfer.next) xfer.next = a + len;
+    }
     for (unsigned i = 0; i < len; ++i) {
         if (in_reverb(a + i)) {                  // the reverb data (#69): a nibble, as the D-50 keeps it
             if (!reverb_have) memset(reverb_data, 0, sizeof reverb_data);
@@ -897,7 +907,7 @@ void write_at(uint32_t a, const uint8_t *d, unsigned len)
             const uint32_t r = a + i - kReverbAt;
             uint8_t &w = reverb_data[r / 2U];
             w = static_cast<uint8_t>((r & 1U) ? (w & 15U) | (d[i] & 15U) << 4 : (w & 0xF0U) | (d[i] & 15U));
-            if (r == kReverbBytes - 1U && xfer_loads()) xfer.state = D50_XFER_DONE;   // (the last byte of a whole memory: Bulk Load.O is done)
+            if (r == kReverbBytes - 1U && xfer_loads() && xfer.item == D50_XFER_LOAD_O) xfer_end(xfer_whole() ? D50_XFER_DONE : D50_XFER_FAIL);   // (the last byte of a whole memory: Bulk Load.O is done)
             continue;
         }
         uint8_t *b = byte_at(a + i);
@@ -961,6 +971,10 @@ static void d50_handshake(const uint8_t *p, uint32_t n)
         if (!ready) { answer(dev, kRjc); return; }
         if (cmd == kWsd) {                        // taken anywhere, as a DT1 is: what is not here is taken and ignored, so a dump is not
             reply.receiving = true;               // stopped halfway
+            if (xfer_loads() && xfer.item == D50_XFER_LOAD) {   // (our Bulk Load: the computer's own address and size say where it ends)
+                xfer.next = a;
+                xfer.end = size ? a + size : kReverbAt + kReverbBytes;
+            }
             answer(dev, kAck);
             return;
         }
@@ -982,11 +996,13 @@ static void d50_handshake(const uint8_t *p, uint32_t n)
         answer(dev, kAck);
         return;
     }
-    case kEod:                                    // 41 dev 14 45: the other side's data ends
-        if (xfer_loads()) xfer.state = D50_XFER_DONE;
+    case kEod: {                                  // 41 dev 14 45: the other side's data ends
+        const bool loads = xfer_loads(), whole = xfer_whole();
+        if (loads) xfer_end(whole ? D50_XFER_DONE : D50_XFER_FAIL);
         reply.receiving = false;
-        answer(dev, kAck);
+        answer(dev, loads && !whole ? kRjc : kAck);   // (data missing: not taken, RJC)
         return;
+    }
     case kAck:                                    // our DAT (or EOD) arrived
         if (!reply.waiting) return;
         reply.waiting = false;
@@ -1142,6 +1158,9 @@ extern "C" int d50_transfer(unsigned item)
     reply.dev = device_id;
     xfer.item = item;
     xfer.state = D50_XFER_RUN;
+    xfer.next = kInternal;
+    xfer.end = kReverbAt + kReverbBytes;
+    xfer.gap = false;
     const uint32_t size = bank_patches == D50_BANK_PATCHES ? kReverbAt + kReverbBytes - kInternal : end_of(kInternal) - kInternal;
     switch (item) {
     case D50_XFER_DUMP:                           // WSD, then a DAT on each ACK, then EOD
