@@ -566,6 +566,9 @@ static struct {
     uint8_t lcd_msg;                             /* the message in the LCD (#25): 0 the panel's, LCD_MSG_COMPLETE, LCD_MSG_ERROR | its number */
     uint8_t home_long;                         /* HOME held long enough to have changed the LCD's colours (this press) */
     uint32_t home_ms;                            /* when HOME was pressed */
+    uint8_t save_long;                           /* SAVE held long enough to have written the patch (this press: #83) */
+    uint32_t save_ms;                            /* when SAVE was pressed */
+    uint8_t write_to;                            /* a WRITE's save under way: the place it wrote, 1..64 (0 none: #83) */
     int8_t tune_off;                            /* Master Tune 0..100 (#54) less 50 (so 0 = 440.0 Hz at start); not kept over a power cycle */
     uint8_t tx_program;                         /* with Local off, the program change the encoders send (#67), 0..63 */
     int8_t transpose;                            /* Key Transpose -12..12 (#54) */
@@ -719,6 +722,7 @@ static void joystick_to(uint32_t axis, int32_t v127)      /* a MIDI value of the
         joystick(axis, d);
 }
 #define HOME_LONG_MS 3000u
+#define SAVE_LONG_MS 2000u                       /* SAVE held this long: WRITE (#83) */
 #define LCD_MSG_COMPLETE 1u
 #define LCD_MSG_ERROR 0x80u
 static uint32_t lcd_scheme_of(void)
@@ -867,16 +871,30 @@ static void note(uint32_t note, uint32_t vel)    /* main loop: the queue is the 
  * SAVE (Store SAVE). Leaving bank 0 saves first what Auto would have (with Store SAVE, what was not saved is lost, as on a card). */
 #define INT_QUIET_MS 1500u
 static int int_dirty(void) { return d50_internal(0) && d50_internal_serial() != istore.saved; }
+static void write_place(char *t)                 /* "WRITE I-11" .. "WRITE I-88": the place a WRITE wrote (ui.write_to) */
+{
+    const uint32_t p = ui.write_to - 1u;
+    text_cat(t, "WRITE I-");
+    t += text_len(t);
+    t[0] = (char)('1' + p / 8u);
+    t[1] = (char)('1' + p % 8u);
+    t[2] = 0;
+}
 static void int_result(int r)
 {
+    char t[16] = "";
+    if (r && ui.write_to)
+        write_place(t);
+    if (r)
+        ui.write_to = 0;
     if (r == 1) {
         istore.failed_on = 0;
-        app_say("INTERNAL", "SAVED");
+        app_say(t[0] ? t : "INTERNAL", "SAVED");
         ui.lcd_msg = LCD_MSG_COMPLETE;           /* (the LCD says it as the D-50 after a write) */
     } else if (r == -1) {
         istore.failed = istore.serial;
         istore.failed_on = 1;
-        app_say("INTERNAL", "SAVE FAILED");
+        app_say(t[0] ? t : "INTERNAL", "SAVE FAILED");
         ui.lcd_msg = LCD_MSG_ERROR;              /* (Error  Reject) */
     }
 }
@@ -890,7 +908,13 @@ static void int_save_start(void)
     f = plat_lock();
     d50_panic();                                 /* (the notes end: each step stops the sound a moment) */
     plat_unlock(f);
-    app_say("INTERNAL", "SAVING");
+    if (ui.write_to) {
+        char t[16] = "";
+        write_place(t);
+        app_say(t, "SAVING");
+    } else {
+        app_say("INTERNAL", "SAVING");
+    }
 }
 static void int_save_now(void)                   /* the whole save at once (before bank 0 is left) */
 {
@@ -914,6 +938,20 @@ static void int_poll(uint32_t now)               /* each main loop pass */
     if ((set.setup & SETUP_STORE_SAVE) || !int_dirty() || now - istore.seen_ms < INT_QUIET_MS || (istore.failed_on && s == istore.failed) ||
         (ui.xfer_on && d50_transfer_state() == D50_XFER_RUN))
         return;
+    int_save_start();
+}
+/* WRITE (#83), as the D-50's: SAVE held SAVE_LONG_MS writes the current patch with its edits (the temporary area) into its own place of
+ * the internal memory (bank 1, I), and it is saved in the flash at once, whatever Store is. The cards are read-only. */
+static void patch_write(void)
+{
+    if (istore.step >= 0)                        /* (a save under way first: the write is a new one after it) */
+        int_save_now();
+    if (!d50_write()) {
+        app_say("WRITE", "ONLY TO BANK I");
+        ui.lcd_msg = LCD_MSG_ERROR;
+        return;
+    }
+    ui.write_to = (uint8_t)(d50_current_program() + 1u);
     int_save_start();
 }
 static void bank_to(uint32_t b)                  /* d50_bank, bank 0's edits kept first (Store Auto, or a save under way) */
@@ -989,16 +1027,27 @@ static void input(void)
             ui.home_long = 0;
         } else if (k == B_SAVE && ui.page == LCD_PAGE_TRANSFER) {   /* the D-50's Enter on its Data Transfer menu */
             transfer_start();
-        } else if (k == B_SAVE) {
-            if (int_dirty())                     /* the internal memory too, when SysEx changed it (#22; then it says SAVED) */
-                int_save_start();
-            if (plat_store_save(OBJ_SETTINGS, &set, sizeof set) == 0) {
-                set_dirty = 0;
-                app_say("SAVED", "");
-                ui.lcd_msg = LCD_MSG_COMPLETE;   /* (the LCD says it as the D-50 after WRITE) */
-            } else {
-                app_say("SAVE", "FAILED");
-            }
+            ui.save_long = 1;                    /* (this press is the menu's: nothing on its release) */
+        } else if (k == B_SAVE) {                /* (on its release, or after SAVE_LONG_MS held: below) */
+            ui.save_ms = plat_ms();
+            ui.save_long = 0;
+        }
+        ui.redraw = 1;
+    }
+    /* SAVE (#83): a press saves the settings (and bank 1, when SysEx changed it), on its release; held SAVE_LONG_MS it is WRITE instead */
+    if ((btn & 1u << B_SAVE) && !ui.save_long && plat_ms() - ui.save_ms >= SAVE_LONG_MS) {
+        ui.save_long = 1;
+        patch_write();
+        ui.redraw = 1;
+    } else if (!(btn & 1u << B_SAVE) && (ui.btn & 1u << B_SAVE) && !ui.save_long) {
+        if (int_dirty())                         /* the internal memory too, when SysEx changed it (#22; then it says SAVED) */
+            int_save_start();
+        if (plat_store_save(OBJ_SETTINGS, &set, sizeof set) == 0) {
+            set_dirty = 0;
+            app_say("SAVED", "");
+            ui.lcd_msg = LCD_MSG_COMPLETE;       /* (the LCD says it as the D-50 after WRITE) */
+        } else {
+            app_say("SAVE", "FAILED");
         }
         ui.redraw = 1;
     }
