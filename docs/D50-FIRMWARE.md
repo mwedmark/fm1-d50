@@ -128,8 +128,8 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
     S-Bass sinus, E-Bass, ...); 3, 6, 7 and 8 not at all.
 
   PicoFaceD5 had 3 WHOL-S, 4 DUAL-S, 5 SPL-US, 6 SPL-LS and 7 SEP, read from Roland's D-50 VST by ear. That is one place off for 3..7, and its 5 (SPL-US) made the
-  8va basses a split with a monophonic Upper. Corrected in fm1-d50's copy (`d5_patch_map.h`, #58): 4 is WHOL-S and 5 DUAL-S. SEP and SEP-S, which on the D-50 take
-  the patch's separate channel (SepCH, the patch MIDI page) for one tone, stay a split with a monophonic Lower on one channel, as PicoFaceD5 had them.
+  8va basses a split with a monophonic Upper. Corrected in fm1-d50's copy (`d5_patch_map.h`, #58): 4 is WHOL-S and 5 DUAL-S (#61). SEP and SEP-S, which take
+  the patch's separate channel (SepCH, the patch MIDI page) for one tone, were then played as a split with a monophonic Lower; they now follow the D-50 (#62, below).
   The FM-1's LCD already showed the firmware's order (`d50_lcd.h`), so before this the screen said WHOL-S where the engine played DUAL-S.
 - **The Separate key modes and SepCH** (verified 2026-11-23, except where marked). In SEP and SEP-S the two tones are played from two MIDI channels.
   - **The patch's MIDI page** ("MIDI Channel": `TxCH$$$ SepCH$$$`, 0x6F50) has two patch bytes:
@@ -157,7 +157,13 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
     Dual mirrors to 0..7 (0x2A75). So the basic channel's 0x2B2F would be the Lower tone, and SepCH's 0x2B29 (R7 = 0) the Upper.
   - **SepCH equal to the basic channel:** both paths take the message, so it plays both tones with separate controller sets (not tried). **SepCH OFF:** only the
     basic channel's tone sounds.
-  - The FM-1 (PicoFaceD5) plays SEP and SEP-S on one channel as a split with a monophonic Lower, as the VST did. No patch in fm1-d50's banks uses 3 or 8.
+  - **The FM-1 follows this (#62).** PicoFaceD5 had played SEP and SEP-S on one channel as a split with a monophonic Lower, as the VST did.
+    - The engine: `PatchSpec::separate` and `sep_channel` (pb[38]). `note_on` plays the Lower and `sep_note_on` the Upper (one note at a time in SEP-S).
+      `set_tone_bend`, `set_tone_wheel`, `set_tone_aftertouch` and `set_tone_porta` control one tone each.
+    - `d50.cpp`: `d50_sep` and `d50_sep_channel`, with SepCH's own bender, hold pedal, portamento and RPN. The basic channel's lever, aftertouch, bender and
+      portamento go to the Lower only.
+    - `app.c`: a message on SepCH goes to `d50_sep` and then through the normal channel test, as the firmware's two paths have it.
+    - It rests on the reading that the basic channel's pool is the Lower. No patch in fm1-d50's banks uses 3 or 8.
 - **System byte 14 (0xC5CE) is the MIDI-1 page's "Control"** (verified 2026-11-23). The page has BasicCH, Control, Omni and Local (texts at 0x7474), and its values
   are the strings at 0x7CB6, six characters each: ` B.CH `, ` G.CH ` and `MdeOff`.
   - **It picks the control channel in mono, 0x4BE9:** the program change, channel pressure and controllers (CC 0-121) are taken in mono only on that channel; in

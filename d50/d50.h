@@ -60,6 +60,12 @@ void d50_transpose(int semitones);
 void d50_mode(unsigned mode, unsigned channels);
 void d50_note_ch(unsigned part, unsigned note, unsigned velocity);
 void d50_bend_ch(unsigned part, unsigned value);
+/* The Separate key modes, SEP and SEP-S (issue #62, the firmware's 0x5DB7): the basic channel plays the Lower tone (d50_note and the rest),
+ * the patch's SepCH the Upper with a controller set of its own. d50_sep_channel: the current patch's SepCH, 1..16, or 0 when it is not a
+ * separate patch or SepCH is OFF (the audio interrupt's, for the channel test). d50_sep: a message on it, as MIDI has it (8x, 9x, Bx, Dx,
+ * Ex; the channel is not looked at): notes, the bender, aftertouch, CC 1, 5, 6, 64, 65, 98-101 and 123; nothing else (no volume). */
+unsigned d50_sep_channel(void);
+void d50_sep(unsigned status, unsigned d1, unsigned d2);
 /* Channel pressure (aftertouch), 0..127 */
 void d50_pressure(unsigned value);
 /* Chase Play (issue #18), on or off with d50_cc(D50_CHASE_CC, >= 64 / < 64): the D-50's CHASE button. 1 while it is on. */

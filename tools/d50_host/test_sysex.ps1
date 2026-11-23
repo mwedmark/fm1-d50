@@ -1,5 +1,5 @@
 # Builds and runs the D-50 SysEx test (test_sysex.cpp): RQ1 and DT1, and the handshake (issue #51), on the real glue (d50/d50.cpp).
-# -Test test_mono: the MIDI modes (test_mono.cpp, issue #60). Needs your own data file (roms\out\d50_fm1base.fmd5: README.md) and the WASI SDK.
+# -Test test_mono: the MIDI modes (test_mono.cpp, issue #60); -Test test_sep: the Separate key modes (test_sep.cpp, issue #62). Needs your own data file (roms\out\d50_fm1base.fmd5: README.md) and the WASI SDK.
 param(
     [string]$Test = 'test_sysex',
     [string]$Data = 'roms\out\d50_fm1base.fmd5',

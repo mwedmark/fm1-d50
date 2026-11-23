@@ -103,7 +103,10 @@ static void midi_in(void)                    /* audio interrupt: the packets tha
         if (st == 0xF8u || st == 0xFEu)
             continue;
         if (st < 0xF0u) {                        /* the D-50's channel test (0x4B81, #51, #60): the channel less the basic channel is the part */
-            const uint32_t basic = set.midi & MIDI_CHANNEL;
+            const uint32_t basic = set.midi & MIDI_CHANNEL, sc = d50_sep_channel(), t = st & 0xF0u;
+            if (sc && (st & 0x0Fu) == sc - 1u && t != 0xA0u && t != 0xC0u)
+                d50_sep(st, d1, d2);             /* SEP, SEP-S: the patch's SepCH plays the Upper (0x5DB7, #62). As on the D-50 the message also
+                                                  * goes through the test below: on the basic channel, or with omni on, it plays the Lower too */
             if (set.midi & MIDI_OMNI_OFF) {      /* (omni on: every channel is the basic channel's, part 0) */
                 const uint32_t last = mono_m ? mono_m - 1u : 0u;
                 part = ((st & 0x0Fu) - basic) & 0x0Fu;

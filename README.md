@@ -83,6 +83,13 @@ part a channel. With omni on, Mono plays polyphonically. **CC 127 (Poly)** ends 
 Split-US and so on) play polyphonically too, as on a D-50, until Mono or MdeOff. Each turns the notes off. The mode is not kept over a
 power cycle (a D-50's is not either); the screen says MONO or POLY.
 
+**The Separate key modes** (SEP and SEP-S), as on a D-50: the FM-1's keys and the basic channel play the patch's Lower tone,
+polyphonically. The patch's own SepCH (a patch setting, OFF or 1 to 16) plays the Upper: polyphonically in SEP, one note at a time in SEP-S. Each
+tone has its own bender, modulation, aftertouch, portamento and hold pedal. SepCH takes notes, the bender, aftertouch and CC 1, 5, 6, 64, 65,
+98 to 101 and 123, but no volume and no program change. As on a D-50, a message on SepCH also goes through the basic channel's test, so with
+omni on (or SepCH the basic channel) it plays both tones. With SepCH OFF only the Lower sounds. None of the six banks has such a patch;
+a librarian can make one.
+
 | Message | What it does |
 | --- | --- |
 | Note on and off | Play, with velocity |

@@ -484,19 +484,20 @@ inline PatchSpec patch_from_bytes(const uint8_t* patch, const int16_t* blob) {
     //  - 0x58CE sets the separate flag (0xFE30.0) for 3 and 8; 0x2C74 and 0x5850 take 2, 6 and 7 as the splits; 0x2447 and 0x247E take
     //    0, 1, 4 and 5 as the modes without a split; 0x4FA6, 0x61C5 and 0x6464 take 0 and 4 as the whole modes (the 16-voice pool);
     //  - fm1-d50's banks: 4 is Warbler Solo and Moog Solo, 5 seven 8va basses (Read 8va Bass, Sub 8va Bass, ...).
-    // The reading above has 3..7 one place off (its 5, SPL-US, is DUAL-S). SEP and SEP-S, which on the D-50 take a second channel,
-    // stay what that reading made of one channel: a split with a monophonic Lower.
+    // The reading above has 3..7 one place off (its 5, SPL-US, is DUAL-S). SEP and SEP-S take two channels, as the firmware plays them
+    // (PatchSpec::separate, FM-1 issue #62): the basic channel the Lower, the patch's SepCH (pb[38]) the Upper, one note at a time in SEP-S.
     switch (pb[18]) {
         case 1:  p.key_mode = KeyMode::kDual;  break;
         case 2:  p.key_mode = KeyMode::kSplit; break;
         case 4:  p.key_mode = KeyMode::kWhole; p.solo = true; break;   // WHOL-S
         case 5:  p.key_mode = KeyMode::kDual;  p.solo = true; break;   // DUAL-S
         case 6:  p.key_mode = KeyMode::kSplit; p.solo_upper = true; break;   // SPL-US
-        case 3:                                                        // SEP
-        case 7:                                                        // SPL-LS
-        case 8:  p.key_mode = KeyMode::kSplit; p.solo_lower = true; break;   // SEP-S
+        case 7:  p.key_mode = KeyMode::kSplit; p.solo_lower = true; break;   // SPL-LS
+        case 3:  p.key_mode = KeyMode::kSplit; p.separate = true; break;     // SEP
+        case 8:  p.key_mode = KeyMode::kSplit; p.separate = true; p.solo = true; break;   // SEP-S
         default: p.key_mode = KeyMode::kWhole; break;
     }
+    p.sep_channel = pb[38] <= 16 ? pb[38] : 0;
     p.split_point = 36 + pb[19];                 // panel C2..C7
     p.upper.voice.master_cents = static_cast<float>(pb[24]) - 50.0f;
     p.lower.voice.master_cents = static_cast<float>(pb[25]) - 50.0f;

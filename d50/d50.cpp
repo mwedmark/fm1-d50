@@ -120,7 +120,8 @@ d5::Patch::Split split;
 unsigned guard_hold, guard_calm;
 int guard_cap = 16;
 
-enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kEvTune = 6, kEvTranspose = 7, kEvMode = 8, kQueue = 64 };
+enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kEvTune = 6, kEvTranspose = 7, kEvMode = 8, kEvSep = 9,
+                  kQueue = 64 };
 // The mono mode (issue #60): up to 8 parts, each one note at a time with its own bend. The audio interrupt's.
 constexpr unsigned kMonoParts = 8;
 struct Mono {
@@ -130,6 +131,17 @@ struct Mono {
     int note[kMonoParts];                        // the note it sounds (after Key Transpose)
     unsigned bend[kMonoParts];
 } mono;
+// The patch's SepCH in SEP and SEP-S (issue #62): the Upper tone's own controller set, as the firmware's 0xD308 set. The audio interrupt's.
+struct Sep {
+    unsigned bend = 8192;
+    unsigned rpn = 0x3FFF;
+    bool hold = false;
+    bool porta_switch = false;
+    int porta_time = 0;
+    uint8_t sounded[128] = {};                   // the note a SepCH key sounded (Key Transpose)
+    uint32_t down[4] = {0, 0, 0, 0};
+    uint32_t held[4] = {0, 0, 0, 0};
+} sep;
 constexpr unsigned kChaseCc = 80;                // Chase Play on (>= 64) or off: ours, the D-50 has no CC for it (issue #18)
 
 // The controllers' state, the audio interrupt's (d50_render's events): what a program change keeps (the lever, the pressure, CC7: the
@@ -142,6 +154,7 @@ struct Controls {
     int bend_range = -1;                         // RPN 0's semitones, -1: the patch's (pb26)
     unsigned rpn = 0x3FFF;                       // CC101 << 7 | CC100; 0x3FFF: none (RPN null)
     unsigned volume = 127;                       // CC7
+    unsigned wheel = 0, pressure = 0;            // CC1, channel pressure (again after a program change: the separate modes route them, #62)
     bool porta_switch = false;
     int porta_time = 0;                          // 0..100
     bool hold = false;                           // CC64
@@ -336,6 +349,11 @@ extern "C" void d50_note_ch(unsigned part, unsigned note, unsigned velocity)
 extern "C" void d50_bend_ch(unsigned part, unsigned value) { push(kEvBend << 24 | (part & 15U) << 16 | (value & 16383U)); }
 extern "C" void d50_note(unsigned note, unsigned velocity) { d50_note_ch(0, note, velocity); }
 extern "C" void d50_bend(unsigned value) { d50_bend_ch(0, value); }
+extern "C" void d50_sep(unsigned status, unsigned d1, unsigned d2)
+{
+    push(kEvSep << 24 | (status >> 4 & 15U) << 16 | (d1 & 127U) << 8 | (d2 & 127U));
+}
+extern "C" unsigned d50_sep_channel(void) { return ready && patch ? static_cast<unsigned>(patch->sep_channel()) : 0U; }
 extern "C" void d50_mode(unsigned mode, unsigned channels)
 {
     push(kEvMode << 24 | (mode & 3U) << 8 | (channels > kMonoParts ? kMonoParts : channels));
@@ -368,7 +386,12 @@ void mono_bends()
 }
 void apply_bend()
 {
-    patch->set_bend_semis(bend_semis(ctl.bend));
+    if (patch->separate()) {                     // (#62: the basic channel's bender moves the Lower, SepCH's the Upper)
+        patch->set_tone_bend(1, bend_semis(ctl.bend));
+        patch->set_tone_bend(0, bend_semis(sep.bend));
+    } else {
+        patch->set_bend_semis(bend_semis(ctl.bend));
+    }
     mono_bends();
 }
 // Another part sounds this note too (mono): the engine's voices are the note's, so it ends with the last part's note-off
@@ -439,8 +462,112 @@ void after_configure()
     ctl.porta_time = s.upper.voice.porta_time;
     for (unsigned i = 0; i < 4; ++i) ctl.held[i] = 0;
     chase_clear();                               // (the mono parts stay, mode and notes: configure leaves the keys down, and a part's note-off ends its note)
+    // The separate modes (#62): SepCH's set starts at rest when the patch is one (the firmware's 0x5BB7), the pedal up; the basic channel's
+    // lever and pressure go to the Lower only, or to both tones again
+    for (int n = 0; n < 128; ++n)
+        if (bit_of(sep.held, n)) patch->sep_note_off(n);
+    for (unsigned i = 0; i < 4; ++i) sep.held[i] = 0;
+    sep.hold = false;
+    sep.bend = 8192;
+    sep.rpn = 0x3FFF;
+    sep.porta_switch = s.upper.voice.porta_switch;
+    sep.porta_time = s.upper.voice.porta_time;
+    if (patch->separate()) {
+        patch->set_tone_wheel(0, 0.0f);
+        patch->set_tone_aftertouch(0, 0.0f);
+        patch->set_tone_wheel(1, static_cast<float>(ctl.wheel) / 127.0f);
+        patch->set_tone_aftertouch(1, static_cast<float>(ctl.pressure) / 127.0f);
+    } else {
+        patch->set_mod_wheel(static_cast<float>(ctl.wheel) / 127.0f);
+        patch->set_aftertouch(static_cast<float>(ctl.pressure) / 127.0f);
+    }
     apply_bend();
     apply_volume();
+}
+// The basic channel's lever, pressure and portamento: in the separate modes the Lower's only (#62)
+void apply_wheel()
+{
+    if (patch->separate()) patch->set_tone_wheel(1, static_cast<float>(ctl.wheel) / 127.0f);
+    else patch->set_mod_wheel(static_cast<float>(ctl.wheel) / 127.0f);
+}
+void apply_pressure()
+{
+    if (patch->separate()) patch->set_tone_aftertouch(1, static_cast<float>(ctl.pressure) / 127.0f);
+    else patch->set_aftertouch(static_cast<float>(ctl.pressure) / 127.0f);
+}
+void apply_porta()
+{
+    if (patch->separate()) patch->set_tone_porta(1, ctl.porta_switch, ctl.porta_time);
+    else patch->set_porta(ctl.porta_switch, ctl.porta_time);
+}
+// A message on SepCH (#62, the firmware's 0x5DB7): the Upper's notes and its own controllers. Taken only in the separate modes; a note-off
+// of a SepCH note still sounding is taken after a program change too, so that none is left on.
+void sep_note(int key, int velocity)
+{
+    if (velocity) {
+        if (!patch->separate()) return;
+        const int n = key + ctl.transpose < 0 ? 0 : key + ctl.transpose > 127 ? 127 : key + ctl.transpose;
+        sep.sounded[key] = static_cast<uint8_t>(n);
+        bit_set(sep.down, n, true);
+        bit_set(sep.held, n, false);
+        patch->sep_note_on(n, static_cast<float>(velocity) / 127.0f);
+        return;
+    }
+    const int n = sep.sounded[key];
+    if (!bit_of(sep.down, n)) return;
+    bit_set(sep.down, n, false);
+    if (sep.hold) bit_set(sep.held, n, true);
+    else patch->sep_note_off(n);
+}
+void sep_control(unsigned cc, unsigned v)
+{
+    switch (cc) {
+    case 1: patch->set_tone_wheel(0, static_cast<float>(v) / 127.0f); break;
+    case 5:
+        sep.porta_time = static_cast<int>((v * 100U + 63U) / 127U);
+        patch->set_tone_porta(0, sep.porta_switch, sep.porta_time);
+        break;
+    case 65:
+        sep.porta_switch = v >= 64U;
+        patch->set_tone_porta(0, sep.porta_switch, sep.porta_time);
+        break;
+    case 64:
+        sep.hold = v >= 64U;
+        if (!sep.hold) {
+            for (int n = 0; n < 128; ++n)
+                if (bit_of(sep.held, n)) patch->sep_note_off(n);
+            for (unsigned i = 0; i < 4; ++i) sep.held[i] = 0;
+        }
+        break;
+    case 123:                                    // All Notes Off, SepCH's tone (0x5F3C)
+        for (int n = 0; n < 128; ++n)
+            if (bit_of(sep.down, n) || bit_of(sep.held, n)) patch->sep_note_off(n);
+        for (unsigned i = 0; i < 4; ++i) sep.down[i] = sep.held[i] = 0;
+        break;
+    case 101: sep.rpn = (sep.rpn & 127U) | v << 7; break;
+    case 100: sep.rpn = (sep.rpn & ~127U) | v; break;
+    case 98: case 99: sep.rpn = 0x3FFF; break;   // (an NRPN: a data entry after it is not RPN 0's)
+    case 6:
+        if (sep.rpn == 0) {                      // RPN 0: the bender range (patch-common: both tones', as the basic channel's)
+            ctl.bend_range = v > 12U ? 12 : static_cast<int>(v);
+            apply_bend();
+        }
+        break;
+    }
+}
+void sep_event(unsigned type, unsigned d1, unsigned d2)
+{
+    switch (type) {
+    case 0x9: sep_note(static_cast<int>(d1), static_cast<int>(d2)); break;
+    case 0x8: sep_note(static_cast<int>(d1), 0); break;
+    case 0xE:
+        if (!patch->separate()) break;
+        sep.bend = d1 | d2 << 7;                 // (the MIDI bytes: the LSB, then the MSB)
+        patch->set_tone_bend(0, bend_semis(sep.bend));
+        break;
+    case 0xD: if (patch->separate()) patch->set_tone_aftertouch(0, static_cast<float>(d1) / 127.0f); break;
+    case 0xB: if (patch->separate()) sep_control(d1, d2); break;
+    }
 }
 void hold_release()
 {
@@ -453,14 +580,14 @@ void hold_release()
 void control(unsigned cc, unsigned v)
 {
     switch (cc) {
-    case 1: patch->set_mod_wheel(static_cast<float>(v) / 127.0f); break;
+    case 1: ctl.wheel = v; apply_wheel(); break;
     case 5:
         ctl.porta_time = static_cast<int>((v * 100U + 63U) / 127U);
-        patch->set_porta(ctl.porta_switch, ctl.porta_time);
+        apply_porta();
         break;
     case 65:
         ctl.porta_switch = v >= 64U;
-        patch->set_porta(ctl.porta_switch, ctl.porta_time);
+        apply_porta();
         break;
     case 7: ctl.volume = v; apply_volume(); break;
     case kChaseCc: ctl.chase = v >= 64U; break;
@@ -985,14 +1112,15 @@ extern "C" void d50_render(int32_t *out, unsigned n)
             break;
         }
         case kEvCc: control((e >> 8) & 127U, e & 127U); break;
-        case kEvPressure: patch->set_aftertouch(static_cast<float>(e & 127U) / 127.0f); break;
+        case kEvPressure: ctl.pressure = e & 127U; apply_pressure(); break;
+        case kEvSep: sep_event((e >> 16) & 15U, (e >> 8) & 127U, e & 127U); break;
         case kEvPanic:
         case kEvMode:                            // a mode message (#60): the notes off, as every one on the D-50, then the mode
             patch->silence();
             chase_clear();
             mono_clear();
-            ctl.hold = false;
-            for (unsigned i = 0; i < 4; ++i) ctl.held[i] = ctl.down[i] = 0;
+            ctl.hold = sep.hold = false;
+            for (unsigned i = 0; i < 4; ++i) ctl.held[i] = ctl.down[i] = sep.held[i] = sep.down[i] = 0;
             if (e >> 24 == kEvMode) {
                 mono_set((e >> 8) & 3U, e & 15U);
                 apply_bend();

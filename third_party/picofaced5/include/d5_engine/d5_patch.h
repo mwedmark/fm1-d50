@@ -414,6 +414,11 @@ struct PatchSpec {
     // D-50 firmware's SPL-US is byte 6 and SPL-LS byte 7: d5_patch_map.h.)
     bool solo_upper = false;
     bool solo_lower = false;
+    // fm1-d50: SEP and SEP-S (pb[18] 3 and 8, the D-50 firmware's separate flag 0xFE30.0; FM-1 issue #62): note_on plays the Lower tone
+    // polyphonically (the basic channel, 0x2B2F), sep_note_on the Upper (the patch's SepCH, 0x5DB7) -- one note at a time in SEP-S (solo).
+    // key_mode stays kSplit (two tones, eight voices each, mixed as a split).
+    bool separate = false;
+    int sep_channel = 0;          // fm1-d50: pb[38], SepCH: 0 OFF, 1..16
     int split_point = 60;         // panel "Split Point", C4 by default
     float balance = 0.5f;         // panel "Tone Balance", upper to lower
     // Panel "Bender Range", pb[26], 0..12 semitones. Patch-common: the
@@ -508,6 +513,11 @@ public:
         // click.
         bool sounded = false;
         const bool whole_solo = spec_.solo && !solo_off_;
+        if (spec_.separate) {                    // fm1-d50: SEP, SEP-S: the basic channel's tone, the Lower, polyphonically (0x2B2F)
+            lower_later(note, velocity, true, false);
+            reverb_.note_activity();
+            return;
+        }
         switch (spec_.key_mode) {
             case KeyMode::kDual: {
                 if (whole_solo) solo_cut(0, note);
@@ -544,10 +554,28 @@ public:
     }
 
     void note_off(int note) {
-        upper_.note_off(note);
-        if (note == solo_note_[0]) solo_note_[0] = -1;
+        if (!spec_.separate) {                   // (separate: the Upper is SepCH's, sep_note_off)
+            upper_.note_off(note);
+            if (note == solo_note_[0]) solo_note_[0] = -1;
+        }
         lower_later(note, 0.0f, false, false);
     }
+
+    // fm1-d50: the patch's SepCH in SEP and SEP-S (FM-1 issue #62, the firmware's 0x5DB7 and 0x29A7): the Upper, polyphonically in SEP
+    // (0x2B29), one note at a time in SEP-S (0x2B40, a fixed voice). A received Poly does not change it (the firmware's SepCH path has no
+    // rows). Outside the separate modes nothing.
+    void sep_note_on(int note, float velocity) {
+        if (!spec_.separate) return;
+        if (spec_.solo) solo_cut(0, note);
+        if (upper_.note_on(note, velocity)) reverb_.note_activity();
+        if (spec_.solo) solo_note_[0] = note;
+    }
+    void sep_note_off(int note) {
+        upper_.note_off(note);
+        if (note == solo_note_[0]) solo_note_[0] = -1;
+    }
+    bool separate() const { return spec_.separate; }
+    int sep_channel() const { return spec_.separate ? spec_.sep_channel : 0; }
 
     // fm1-d50: one tone's note on or off (0 Upper, 1 Lower), for the FM-1's Chase Play, which plays the tones apart (d50.cpp)
     void tone_note_on(int tone, int note, float velocity) {
@@ -873,6 +901,7 @@ public:
         lower_.set_note_bend(note, st);
     }
     int keys_down() const { return upper_.keys_down() + lower_.keys_down(); }   // (diagnostic)
+    int tone_keys_down(int tone) const { return tone ? lower_.keys_down() : upper_.keys_down(); }   // (diagnostic: 0 Upper, 1 Lower)
     void set_solo_off(bool off) {
         if (off && !solo_off_) solo_note_[0] = solo_note_[1] = -1;
         solo_off_ = off;
@@ -889,6 +918,12 @@ public:
         upper_.set_porta(sw, time);
         lower_.set_porta(sw, time);
     }
+    // fm1-d50: one tone's controls (0 Upper, 1 Lower), for the separate modes, where each tone has its own controller set (the
+    // firmware's 0xD300 and 0xD308 sets, FM-1 issue #62)
+    void set_tone_bend(int tone, float st) { if (tone) lower_.set_bend_semis(st); else upper_.set_bend_semis(st); }
+    void set_tone_wheel(int tone, float w) { if (tone) lower_.set_wheel(w); else upper_.set_wheel(w); }
+    void set_tone_aftertouch(int tone, float a) { if (tone) lower_.set_aftertouch(a); else upper_.set_aftertouch(a); }
+    void set_tone_porta(int tone, bool sw, int time) { if (tone) lower_.set_porta(sw, time); else upper_.set_porta(sw, time); }
 
 private:
     PatchSpec spec_{};
