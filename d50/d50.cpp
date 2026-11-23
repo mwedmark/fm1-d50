@@ -1262,6 +1262,13 @@ extern "C" const uint8_t *d50_internal(const uint8_t **reverb)
     if (reverb) *reverb = reverb_have ? reverb_data : nullptr;
     return ready && bank_now == 0 && bank_patches == D50_BANK_PATCHES ? bank : nullptr;
 }
+extern "C" int d50_write(void)
+{
+    if (!d50_internal(nullptr)) return 0;
+    memcpy(bank + program_now * D50_PATCH_BYTES, temp_patch, D50_PATCH_BYTES);
+    ++internal_serial;                           // (the app saves it: #22)
+    return 1;
+}
 extern "C" unsigned d50_programs(void) { return bank_patches ? bank_patches : 1U; }
 extern "C" unsigned d50_bank_patches(void) { return bank_patches; }
 extern "C" unsigned d50_current_program(void) { return program_now; }

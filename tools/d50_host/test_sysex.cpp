@@ -456,6 +456,13 @@ int main(int argc, char **argv)
         const unsigned s2 = d50_internal_serial();
         send(msg(kDt1, [] { Bytes b; b.put(0).put(0).put(0).put(1); return b; }(), true));
         check(d50_internal_serial() == s2, "a DT1 into the temporary area: the serial stays");
+        {                                         // WRITE (#83): the temporary area into the current patch's place
+            const unsigned s3 = d50_internal_serial();
+            check(d50_patch_bytes()[0] == 1U && d50_current_program() == 0U, "the temporary area edited, patch I-11 current");
+            check(d50_write() == 1 && d50_internal_serial() == s3 + 1U && !memcmp(mem, d50_patch_bytes(), D50_PATCH_BYTES),
+                  "d50_write: the serial moves, I-11 is the temporary area");
+            check(memcmp(mem + D50_PATCH_BYTES, d50_patch_bytes(), D50_PATCH_BYTES) != 0, "and only its own place");
+        }
 
         memcpy(saved, mem, sizeof saved);         // the app's copy: bank 0 with patch 1's first character 9, and reverb data
         saved[384] = factory == 9 ? 10 : 9;
@@ -464,6 +471,7 @@ int main(int argc, char **argv)
         d50_internal_from(&R::read);
         d50_bank(1);
         check(d50_internal(nullptr) == nullptr, "bank 1: no internal memory");
+        check(d50_write() == 0, "d50_write on bank 1 (a card): nothing");
         const unsigned s1 = d50_internal_serial();
         send(msg(kDt1, body, true));
         check(d50_internal_serial() == s1, "a DT1 into bank 1: the serial stays");

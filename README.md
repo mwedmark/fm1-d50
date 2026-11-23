@@ -75,7 +75,7 @@ The view and the colour are saved with SAVE.
 | K4 | The selected tone for K1, as the D-50's UPPER and LOWER keys: right the Lower, left the Upper (the Upper at start) |
 | SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12): the FM-1's keys only, as on a D-50; notes from MIDI are not moved. Not kept over a power cycle |
 | EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel: BasicCH, Omni, Control, Local; Data Transfer, below; FM-1 Setup, below), then the play screen |
-| SAVE | Saves the patch, bank, octave, view, colour, the MIDI settings and the FM-1 Setup page; and bank 1, when SysEx changed it and it is not yet saved (below) |
+| SAVE | Saves the patch, bank, octave, view, colour, the MIDI settings and the FM-1 Setup page; and bank 1, when SysEx changed it and it is not yet saved (below). Held 2 s: WRITE (below) |
 
 The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.
 
@@ -206,6 +206,11 @@ A save takes about a second; held notes end when it starts. It writes the flash 
 
 **FM-1 Setup** (the EDIT page after Data Transfer): the FM-1's own settings, which a D-50 has not; kept with SAVE. K1 is **Store**, Auto or
 SAVE (above).
+
+**WRITE**, as the D-50's: **SAVE held 2 seconds** writes the current patch, with its edits (the edit pages', the joystick's, SysEx into the
+temporary area `00 00 00`), into its own place in bank 1 (I-11 .. I-88), and bank 1 is saved in the flash at once, whatever Store is. The
+screen says WRITE I-xy, SAVING, then SAVED, and the LCD Complete . A short press of SAVE saves the settings as before, on its release. Bank 1
+only: on a card the screen says ONLY TO BANK I (the cards are read-only).
 
 **For measuring** (`F0 7D 'S' 'F' 02 ... F7`, six bytes):
 

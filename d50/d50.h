@@ -129,6 +129,10 @@ typedef unsigned (*d50_internal_reader)(uint8_t *patches, uint8_t *reverb);
 void d50_internal_from(d50_internal_reader reader);
 unsigned d50_internal_serial(void);
 const uint8_t *d50_internal(const uint8_t **reverb);
+/* WRITE (issue #83), as the D-50's: the temporary area (the current patch with its edits) into the current patch's place of the internal
+ * memory, so d50_internal_serial moves and the app saves it (#22). 1 done; 0 unless bank 0 is current and whole (the cards are read-only).
+ * Main loop. */
+int d50_write(void);
 /* The fault of the last D-50 frame d50_sysex took, then 0 until the next (main loop). The numbers are the D-50 firmware's error lines'
  * (v1.06, after "Error  Reject"): its screen shows them (issue #25). */
 #define D50_ERR_ADDRESS 4U                        /* Invalid Data Address: an RQ1 or RQD of nothing there */
