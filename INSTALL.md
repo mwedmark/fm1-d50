@@ -5,7 +5,7 @@ There are two ways to use the D-50 firmware, and both start by making the D-50's
 1. **In your browser**, with no FM-1 at all.
 2. **On your FM-1**, from the install page: the firmware and your data in one go.
 
-> **The D-50's sound is Roland's.** Its PCM wave ROM and its patch banks are not in this repository, not on the install page and not in any
+> **BYOR: Bring Your Own ROM. The D-50's sound is Roland's.** Its PCM wave ROM and its patch banks are not in this repository, not on the install page and not in any
 > release, and never will be. You make the data from your own D-50 (the ROM dumps and the SysEx bank dumps you read out of it), on your own
 > computer. The install page reads your file in your browser and writes it to your FM-1; nothing is uploaded.
 
