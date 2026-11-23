@@ -198,10 +198,11 @@ static const lcd_page_t lcd_pages[LCD_PAGES] = {
      {{29, 0, 3, 4, LCD_SHOW_NUM1}, {30, 0, 31, 12, LCD_SHOW_NUM1}, {31, 0, 100, 20, LCD_SHOW_NUM}, {32, 0, 100, 28, LCD_SHOW_NUM}}},
     {"Chase Edit", "Mode$$$ Levl$$$ Time$$$", 3,                         /* 0x6FC4 */
      {{34, 0, 2, 4, LCD_SHOW_CHASE}, {35, 0, 100, 12, LCD_SHOW_NUM}, {36, 0, 100, 20, LCD_SHOW_NUM}}},
-    /* the MIDI settings (issue #51), not the patch's: the basic channel (also the SysEx device ID), omni, and MIDI-1's Control (#60:
-     * B.CH, G.CH, MdeOff). The title is the firmware's (0xF900's list); the line is ours, K1 to K3 left to right */
-    {"MIDI Channel", "BasicCH$$$  Omni$$$  Control$$$$$$", 3,
-     {{0, 0, 15, 7, LCD_SHOW_NUM1}, {1, 0, 1, 16, LCD_SHOW_ONOFF}, {2, 0, 2, 28, LCD_SHOW_CONTROL}}, 1},
+    /* the MIDI settings (issue #51), not the patch's: the basic channel (also the SysEx device ID), omni, MIDI-1's Control (#60:
+     * B.CH, G.CH, MdeOff; "Ctrl" for the room) and Local (#67). The title is the firmware's (0xF900's list); the line is ours, K1 to K4
+     * left to right */
+    {"MIDI Channel", "BasicCH$$$ Omni$$$ Ctrl$$$$$$ Local$$$", 4,
+     {{0, 0, 15, 7, LCD_SHOW_NUM1}, {1, 0, 1, 15, LCD_SHOW_ONOFF}, {2, 0, 2, 23, LCD_SHOW_CONTROL}, {3, 0, 1, 35, LCD_SHOW_ONOFF}}, 1},
 };
 static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p, const uint8_t *own)
 {

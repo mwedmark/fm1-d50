@@ -478,8 +478,12 @@ The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps,
   keys; the Upper at start). CC82 follows K1 and CC81 K2.
 - With Lowr or Uppr (on a play screen) the D-50's stick sets the balances absolutely and linearly over 0..100, as CC81/CC82 do (0..127 over 0..100): those two follow the D-50. K1 and K2 are
   encoders without a position, so they step the balances from where they are; that is ours. The D-50 ignores a jump in the reading (0x30E7); MIDI CCs are taken as they come.
-- The FM-1 has no Local: its keys, K1-K4 and touch controls always play the engine, and CC 122 is not taken (`d50.h` has no Local). A Local off would matter only if
-  the FM-1 sent its keys and controls on MIDI, which it does not (it sends only SysEx answers); nothing to follow here for now.
+- **Local follows the D-50 (#67)**, now that the FM-1 sends its keys (#65). It is the MIDI page's K4, kept with SAVE (set.midi bit 7), and CC 122 sets it on
+  the basic channel (0 off, 127 on).
+  - With Local off the keys and their aftertouch are only sent (0x5FB4). A key pressed with Local on still ends its note when it is lifted.
+  - Turning Local off ends the keys' notes (0x5773).
+  - The encoders then only send a program change and leave the patch (0x25B6).
+  - K1-K4 and the joystick are the panel's own and stay local.
 - The D-50's stick moves the balances only after Lowr or Uppr, and leaves them on a screen change or a patch change; at power-on it is in Valu. The FM-1's K1/K2 move them on the play
   screen at any time, and K4's Upper at start matches the D-50's power-on P1.3 (set: 0x3EB4 would take the upper). Kept as ours: the FM-1 has no Lcal/Valu.
 - The mono mode and Control follow the D-50 (#60). `app.c` makes the channel test (the part, Control's channel), takes CC 126/127, and has Control as the MIDI

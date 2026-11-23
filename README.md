@@ -61,7 +61,7 @@ The view and the colour are saved with SAVE.
 | K3 | The LCD's dot height (true-size view) |
 | K4 | The selected tone for K1, as the D-50's UPPER and LOWER keys: right the Lower, left the Upper (the Upper at start) |
 | SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12): the FM-1's keys only, as on a D-50; notes from MIDI are not moved. Not kept over a power cycle |
-| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel: BasicCH, Omni, Control), then the play screen |
+| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel: BasicCH, Omni, Control, Local), then the play screen |
 | SAVE | Saves the patch, bank, octave, view, colour and the MIDI settings |
 
 The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.
@@ -76,6 +76,9 @@ It receives and sends over USB. The **MIDI Channel** page (EDIT) has the D-50's 
 - **Control** (K3), the D-50's MIDI-1 setting, default B.CH: the channel the program change, aftertouch and controllers come on in the
   mono mode (below). B.CH is the basic channel and G.CH the global channel, the one below it. MdeOff ignores Mono and Poly, and choosing it
   ends the mono mode.
+- **Local** (K4), default ON, as on a D-50: OFF lets the FM-1's keys only be sent (below), not sound, to play another instrument or a DAW.
+  Their aftertouch is only sent too. The encoders then send a program change without changing the patch (the screen says PROG OUT); MIDI
+  in plays as ever. CC 122 on the basic channel sets it (0 off, 127 on). Turning it off ends the notes the keys sound.
 
 **What it sends**, as a D-50 does, on the patch's **TxCH** (a patch setting: B, the basic channel, or 1 to 16):
 
@@ -117,6 +120,7 @@ a librarian can make one.
 | CC100, CC101, CC6, CC38 | RPN 0: the bender range (up to 12). RPN 1, Fine Tuning: Master Tune, as on a D-50, once both data entry bytes have come (the centre is 440.0 Hz, about ±50 cents over half the range; the TUNE/FUNCTION page shows it) |
 | CC98, CC99 | An NRPN: the data entries after it are not taken, until the next RPN |
 | CC120, CC123 | All sound off, all notes off |
+| CC122 | Local, as on a D-50: 0 off, 127 on, on the basic channel (above) |
 | CC124, CC125 | Omni off, omni on, as on a D-50: only on the basic channel and with the value 0. They set the MIDI Channel page's Omni (kept with SAVE) and turn the notes off |
 | CC126, CC127 | Mono (the value: the channels) and Poly (value 0), as on a D-50: only on the basic channel, not with Control MdeOff (above) |
 | SysEx DT1, RQ1 | Roland, model 14h: the temporary area at 00 00 00 and the internal memory at 02 00 00 (below) |
