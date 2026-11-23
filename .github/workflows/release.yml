@@ -53,11 +53,9 @@ jobs:
           version=${GITHUB_REF_NAME#v}
           python3 "$base/tools/build.py" fm1base --no-ble --release "$version"
           cp "fm1base/build/d50-$version.fwsc" build/release-assets/
-          cp fm1base/build/d50.bin "build/release-assets/d50-$version-app.bin"
         else
           python3 "$base/tools/build.py" fm1base --no-ble
           cp fm1base/build/d50.fwsc build/release-assets/
-          cp fm1base/build/d50.bin build/release-assets/d50-app.bin
         fi
         if ls fm1base/build/*-res.bin >/dev/null 2>&1; then echo 'a resource region was built'; exit 1; fi
         cp fm1base/build/firmware.json build/release-assets/
