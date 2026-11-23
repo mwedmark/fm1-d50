@@ -4,6 +4,7 @@
 //   test_reverb          prints a hash of the wet output of all 32 types (an impulse, then a burst of noise, 1.5 s each), to compare
 //                        before and after a change of the model that must not change the sound
 //   test_reverb --check  the pre-delay and damping checks (exit code 1 on a failure)
+// With -DD5_REVERB_TABLE_EXPERIMENT (d5_effects.h) the hash is another one, and --check also covers the experimental values.
 //
 // Build (host, 32 kHz, the FM-1's segments):
 //   g++ -std=c++17 -O1 -DD5_HOST_BUILD -DD5_REVERB_INT16 -DD5_REVERB_EXTERNAL_POOL -I third_party/picofaced5/include tools/d50_host/test_reverb.cpp -o test_reverb
@@ -89,7 +90,8 @@ int main(int argc, char **argv) {
     // 2. pre-delay: the same type with a pre-delay is the type without it, later by pre_ms (the first wet sample moves by that much)
     for (int t : {1, 2, 9}) {   // a hall, a hall, a room (rows)
         d5::Reverb a, b;
-        make(a, t);
+        a.attach(seg0, 12190, seg1, 12206);
+        { d5::ReverbSpec s0; s0.type = t; s0.balance = 0.5f; a.configure(s0, kSr, 0.0f); }   // the reference: no pre-delay, whatever the table says
         rng = 1; render(a, d5::kReverbTypes[t], false, out);
         static Render ref;
         ref = out;

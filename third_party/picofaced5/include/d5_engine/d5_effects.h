@@ -413,6 +413,23 @@ inline constexpr ReverbType kReverbTypes[32] = {
     {1, 6, 0.84f,   0,   0, 0.0f,   0.0f,   0.0f, 0.5600f}, // 32 Space (6.2 s)
 };
 
+#ifdef D5_REVERB_TABLE_EXPERIMENT
+// fm1-d50 (#9) EXPERIMENT, not measured: the pre-delay (ms) and the high-frequency damping (kHz) of an outside, unsourced table of the 32 types
+// (AI-compiled, no provenance; it also disagrees with the VST on several decay times, so only these two columns are tried). Rows as kReverbTypes;
+// 0 in kExpPreMs: no pre-delay; 0 in kExpDampKhz: the type's own `damp`. Pre-delays above the pool's free words (~54 ms at 32 kHz) are cut to it.
+// The damping becomes a scale on the Boss coefficient: sqrt(5 kHz / f), 5 kHz taken as the chip's own, within 0.6..1.5, on top of the type's `damp`.
+inline constexpr float kExpPreMs[32] = {
+    15, 25, 40, 35,  0,  2,  5, 10, 15, 20,   // 1..10
+     0,  0,  0,  0,  5, 10, 30, 65,  0,  0,   // 11..20 (delays: none; 15, 16 gates; 17 Bright Hall; 18 Large Cave; 19 Steel Pan)
+     0,  0,  0,  0,  5,  0,  0,  0,  0,  0,   // 21..30 (25 Gate Reverb)
+    45, 50};                                  // 31, 32
+inline constexpr float kExpDampKhz[32] = {
+    5.5f, 5.0f, 4.5f, 7.0f, 4.0f, 9.5f, 5.0f, 4.8f, 4.5f, 4.2f,
+    0, 0, 0, 0, 6.5f, 6.0f, 8.5f, 3.2f, 10.0f, 0,
+    0, 0, 0, 0, 6.5f, 7.0f, 7.0f, 0, 0, 0,
+    6.0f, 7.5f};
+#endif
+
 struct ReverbSpec {
     int type = 4;             // 0..31, panel 1..32
     float balance = 0.3f;     // 0..1, panel "Reverb Balance"
@@ -584,6 +601,12 @@ public:
             // cave's damping, and it rang at 140 Hz forever.)
             // fm1-d50 (#9): those two factors are the table's `damp` now (the same values).
             damp_ = damp >= 0.0f ? damp : t.damp;
+#ifdef D5_REVERB_TABLE_EXPERIMENT
+            if (damp < 0.0f && kExpDampKhz[clamp_index(spec.type, 32)] > 0.0f) {
+                float k = std::sqrt(5.0f / kExpDampKhz[clamp_index(spec.type, 32)]);
+                damp_ *= k < 0.6f ? 0.6f : (k > 1.5f ? 1.5f : k);
+            }
+#endif
             const float lpf = (spec.type == 16 ? 0x80 : m.lpf_amp) / 256.0f;
             const float scale = sr / 32000.0f;  // geometry is 32 kHz native
             for (int a = 0; a < 3; ++a) {
@@ -602,7 +625,10 @@ public:
             }
             // fm1-d50 (#9): the pre-delay line in the words the allpasses' slots leave free (after the third allpass, up to the entrance)
             pre_n_ = 0;
-            const float pre = pre_ms >= 0.0f ? pre_ms : t.pre_ms;
+            float pre = pre_ms >= 0.0f ? pre_ms : t.pre_ms;
+#ifdef D5_REVERB_TABLE_EXPERIMENT
+            if (pre_ms < 0.0f && pre == 0.0f) pre = kExpPreMs[clamp_index(spec.type, 32)];
+#endif
             if (pre > 0.0f) {
                 const int off = 3900 + static_cast<int>(m.all_sizes[2] * scale) + 2;
                 int room = 5850 - off - 2;               // the longest delay in samples
