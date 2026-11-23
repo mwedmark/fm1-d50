@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Checks the D-50's SysEx (d50/d50.cpp d50_sysex, d50_sysex_reply) as a computer would speak it: the one-way RQ1 and DT1, and the
-// handshake (issue #51: WSD, RQD, DAT, ACK, EOD, ERR, RJC). The real glue is compiled in, on your own data file.
+// handshake (issue #51: WSD, RQD, DAT, ACK, EOD, ERR, RJC), and the reverb data kept and sent back (#69). The real glue is compiled in, on
+// your own data file.
 //
 //   test_sysex <file.fmd5>            (tools/d50_host/test_sysex.ps1 builds and runs it)
 #include <stdint.h>
@@ -189,22 +190,83 @@ int main(int argc, char **argv)
         check(next().empty(), "done");
     }
 
-    printf("WSD, DAT, EOD: the reverb data of a whole bulk dump, taken and ignored\n");
+    printf("DT1: a byte above its parameter's maximum skipped, as the D-50 does (#58)\n");
     {
-        const uint32_t reverb = 3U << 14 | 0x60U << 7;   // 03 60 00, just after the bank (64 x 448 bytes from 02 00 00)
+        const uint32_t at = 6U * 64U + 32U;       // the patch block's bytes 32 and 33 (maxima 100: the firmware's 0x7DA0)
+        const uint8_t was = temp[at], to = temp[at + 1] == 40U ? 41U : 40U;
+        Bytes body;
+        body.put(at >> 14 & 127U).put(at >> 7 & 127U).put(at & 127U).put(101).put(to);
+        send(msg(kDt1, body, true));
+        check(temp[at] == was, "101 to a byte of 0..100: not written");
+        check(temp[at + 1] == to, "the next byte of the same DT1: written");
+        check(d50_sysex_error() == 0, "and no error on the screen");
+        Bytes zero;
+        const uint32_t past = 54U;                // partial 1's byte 54: past its parameters, only 0
+        const uint8_t old = temp[past];
+        zero.put(0).put(0).put(past).put(1);
+        send(msg(kDt1, zero, true));
+        check(temp[past] == old, "1 to a byte past the parameters: not written");
+    }
+
+    printf("The reverb data of a whole bulk dump (#69): kept, and sent back\n");
+    {
+        const uint32_t reverb = 3U << 14 | 0x60U << 7, rbytes = 0x1780;   // 03 60 00 - 04 0E 7F, just after the 64 patches
+        auto nib = [](uint32_t i) { return static_cast<uint8_t>((i * 7U + i / 16U) & 15U); };
         uint8_t before[448];
         memcpy(before, temp, 448);
-        send(msg(kWsd, addr_size(reverb, 16), true));
+        send(msg(kRq1, addr_size(reverb, 16), true));
+        check(next().empty() && d50_sysex_error() == D50_ERR_ADDRESS, "before a dump: nothing there to read");
+        send(msg(kWsd, addr_size(reverb, rbytes), true));
         check(is_short(next(), kAck), "WSD at 03 60 00: ACK");
-        Bytes body;
-        body.put(reverb >> 14 & 127U).put(reverb >> 7 & 127U).put(reverb & 127U);
-        for (unsigned i = 0; i < 16; ++i) body.put(0x55);
-        send(msg(kDat, body, true));
-        check(is_short(next(), kAck), "its DAT: ACK");
-        check(!memcmp(temp, before, 448), "nothing else changed");
+        bool acked = true;
+        for (uint32_t at = 0; at < rbytes; at += 256) {
+            const uint32_t a = reverb + at, len = rbytes - at < 256 ? rbytes - at : 256;
+            Bytes body;
+            body.put(a >> 14 & 127U).put(a >> 7 & 127U).put(a & 127U);
+            for (uint32_t i = 0; i < len; ++i) body.put(nib(at + i));
+            send(msg(kDat, body, true));
+            acked = acked && is_short(next(), kAck);
+        }
+        check(acked, "each DAT: ACK");
         send(msg(kEod, none(), false));
         check(is_short(next(), kAck), "EOD: ACK");
-        check(d50_sysex_error() == 0, "no error on the screen");
+        check(!memcmp(temp, before, 448) && d50_sysex_error() == 0, "nothing else changed, no error on the screen");
+
+        send(msg(kRq1, addr_size(reverb, rbytes), true));
+        bool same = true;
+        uint32_t got = 0;
+        for (Bytes f = next(); !f.empty(); f = next()) {
+            const unsigned len = f.n - 10U;
+            same = same && is_data(f, kDt1, reverb + got, len);
+            for (unsigned i = 0; i < len && same; ++i) same = f.b[8 + i] == nib(got + i);
+            got += len;
+        }
+        check(same && got == rbytes, "RQ1 at 03 60 00: the same nibbles back, 0x1780 of them");
+
+        if (d50_bank_patches() == D50_BANK_PATCHES) {
+            send(msg(kRqd, addr_size(kInternal, 0x8780), true));   // the D-50's own Bulk Load asks for 02 00 00, 02 0F 00
+            uint32_t sent = 0;
+            bool right = true;
+            for (Bytes f = next(); right && !f.empty() && f.b[4] == kDat; f = next()) {
+                const unsigned len = f.n - 10U;
+                right = is_data(f, kDat, kInternal + sent, len);
+                const uint32_t a = kInternal + sent;
+                if (a >= reverb) right = right && f.b[8] == nib(a - reverb);
+                sent += len;
+                send(msg(kAck, none(), false));
+            }
+            check(right && sent == 0x8780, "a whole-memory RQD: the bank, then the reverb data, 0x8780 bytes");
+            send(msg(kAck, none(), false));       // (the EOD's)
+        }
+
+        const unsigned b = d50_current_bank();
+        if (d50_banks() > 1) {
+            d50_bank(b ? 0 : 1);
+            d50_bank(b);
+            send(msg(kRq1, addr_size(reverb, 16), true));
+            check(next().empty(), "another bank chosen: the reverb data is gone with the dump");
+            (void)d50_sysex_error();
+        }
     }
 
     printf("RQ1 after an RQD left halfway: the one-way answer, not the handshake's\n");

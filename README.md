@@ -21,7 +21,8 @@ It is a work in progress. This README describes what works now and will grow wit
   - **Velocity**, from the FM-1's keys.
   - **Aftertouch**, from how hard a held key is pressed.
   - The **bender** and the **modulation**, from MIDI.
-  - **Portamento** and the **hold pedal**.
+  - **Portamento** and the **hold pedal**, with the patch's Portamento Mode and Hold Mode (U, L or both) as on a D-50: in the split and
+    separate modes the pedal holds only the tones Hold Mode names.
 - **Chase Play:** the D-50's echo of a note from one tone to the other.
 - **SysEx:** the D-50's DT1 and RQ1 for the current patch and the bank in RAM, so D-50 editors and librarians can read and send patches.
 - **The D-50's display:** the LCD of the original, its play screen as a real D-50 shows it.
@@ -55,21 +56,52 @@ The view and the colour are saved with SAVE.
 | SELECT / PRESET encoders | The patch, through all banks: 1-11 to 6-88 |
 | ARP | The D-50's CHASE button: Chase Play on or off |
 | HOME | The view; held 3 s, the LCD's colour |
-| K1 | The joystick's tone balance: the Upper against the Lower tone (the LCD's Bal) |
-| K2 | The joystick's partial balance: partial 1 against partial 2, in both tones |
+| K1 | The joystick's X, as on a D-50: the selected tone's partial balance, partial 1 against partial 2 |
+| K2 | The joystick's Y, as on a D-50: the tone balance, the Upper against the Lower tone (the LCD's Bal) |
 | K3 | The LCD's dot height (true-size view) |
-| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel), then the play screen |
+| K4 | The selected tone for K1, as the D-50's UPPER and LOWER keys: right the Lower, left the Upper (the Upper at start) |
+| SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12): the FM-1's keys only, as on a D-50; notes from MIDI are not moved. Not kept over a power cycle |
+| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel: BasicCH, Omni, Control, Local), then the play screen |
 | SAVE | Saves the patch, bank, octave, view, colour and the MIDI settings |
 
 The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.
 
 ## MIDI
 
-It receives over USB. The **MIDI Channel** page (EDIT) has the D-50's two settings, kept with SAVE:
+It receives and sends over USB. The **MIDI Channel** page (EDIT) has the D-50's settings, kept with SAVE:
 
 - **BasicCH** (K1), 1 to 16, default 1: the channel it plays on with omni off, and its SysEx device ID, as on a D-50 (the device ID is the
   basic channel less one: channel 1 is `00`).
 - **Omni** (K2), default ON: ON plays every channel, as before; OFF only the basic channel.
+- **Control** (K3), the D-50's MIDI-1 setting, default B.CH: the channel the program change, aftertouch and controllers come on in the
+  mono mode (below). B.CH is the basic channel and G.CH the global channel, the one below it. MdeOff ignores Mono and Poly, and choosing it
+  ends the mono mode.
+- **Local** (K4), default ON, as on a D-50: OFF lets the FM-1's keys only be sent (below), not sound, to play another instrument or a DAW.
+  Their aftertouch is only sent too. The encoders then send a program change without changing the patch (the screen says PROG OUT); MIDI
+  in plays as ever. CC 122 on the basic channel sets it (0 off, 127 on). Turning it off ends the notes the keys sound.
+
+**What it sends**, as a D-50 does, on the patch's **TxCH** (a patch setting: B, the basic channel, or 1 to 16):
+
+- **The keys:** note-on with velocity and note-off (as velocity 0), moved by Key Transpose. When the last key is released, CC 123 All Notes Off.
+- **Aftertouch**, from how hard a held key is pressed.
+- **A program change** (0 to 63, in the bank) when a patch is chosen with the encoders, but not when MIDI chose it.
+- **When TxCH changes** with a new patch: the held keys' note-offs and All Notes Off on the old channel, then CC 124 Omni Off and CC 127 Poly on the new one.
+
+The joystick (K1, K2) is not sent, as a D-50's is not. The FM-1 has no bender, lever or pedals of its own to send.
+
+**The mono mode** (CC 126 on the basic channel, with omni off), as on a D-50: the value is the number of channels, from the basic channel
+up (0 and 9 to 16 give 8, and no further than channel 16). Each channel is a monophonic part of its own, with its own bender, whatever the
+patch's key mode is: a new note on a channel ends that channel's last one. It is for a MIDI guitar, a channel a string, or a sequencer
+part a channel. With omni on, Mono plays polyphonically. **CC 127 (Poly)** ends it; from then on, the Solo key modes (Whole-S, Dual-S,
+Split-US and so on) play polyphonically too, as on a D-50, until Mono or MdeOff. Each turns the notes off. The mode is not kept over a
+power cycle (a D-50's is not either); the screen says MONO or POLY.
+
+**The Separate key modes** (SEP and SEP-S), as on a D-50: the FM-1's keys and the basic channel play the patch's Lower tone,
+polyphonically. The patch's own SepCH (a patch setting, OFF or 1 to 16) plays the Upper: polyphonically in SEP, one note at a time in SEP-S. Each
+tone has its own bender, modulation, aftertouch, portamento and hold pedal. SepCH takes notes, the bender, aftertouch and CC 1, 5, 6, 64, 65,
+98 to 101 and 123, but no volume and no program change. As on a D-50, a message on SepCH also goes through the basic channel's test, so with
+omni on (or SepCH the basic channel) it plays both tones. With SepCH OFF only the Lower sounds. None of the six banks has such a patch;
+a librarian can make one.
 
 | Message | What it does |
 | --- | --- |
@@ -83,8 +115,15 @@ It receives over USB. The **MIDI Channel** page (EDIT) has the D-50's two settin
 | CC7 | Volume |
 | CC64 | Hold pedal |
 | CC80 | Chase Play on (64 and up) or off |
-| CC100, CC101, CC6 | RPN 0: the bender range |
+| CC81 | The joystick's tone balance (K2, Y): 0 to 127 over 0 to 100, the Upper against the Lower tone. Ours: the D-50 has no controller for it |
+| CC82 | The joystick's partial balance (K1, X): 0 to 127 over 0 to 100, of the selected tone (K4). Ours |
+| CC100, CC101, CC6, CC38 | RPN 0: the bender range (up to 12). RPN 1, Fine Tuning: Master Tune, as on a D-50, once both data entry bytes have come (the centre is 440.0 Hz, about ±50 cents over half the range; the TUNE/FUNCTION page shows it) |
+| CC98, CC99 | An NRPN: the data entries after it are not taken, until the next RPN |
 | CC120, CC123 | All sound off, all notes off |
+| CC122 | Local, as on a D-50: 0 off, 127 on, on the basic channel (above) |
+| Active Sensing (FE) | As on a D-50: after an FE, about 0.7 s with no MIDI at all ends the notes and sets the bender, lever, aftertouch, volume, pedal and RPN back to rest (the screen says SENSING LOST), until the next FE |
+| CC124, CC125 | Omni off, omni on, as on a D-50: only on the basic channel and with the value 0. They set the MIDI Channel page's Omni (kept with SAVE) and turn the notes off |
+| CC126, CC127 | Mono (the value: the channels) and Poly (value 0), as on a D-50: only on the basic channel, not with Control MdeOff (above) |
 | SysEx DT1, RQ1 | Roland, model 14h: the temporary area at 00 00 00 and the internal memory at 02 00 00 (below) |
 
 ## SysEx
@@ -113,13 +152,21 @@ Without D-50 data on the FM-1, WSD and RQD are answered with RJC.
 
 | Address | What it is |
 | --- | --- |
-| `00 00 00` | The temporary area: the current patch's 448 bytes (upper partial 1 and 2, common, lower partial 1 and 2, common, patch; 64 bytes each). A DT1 or DAT here changes the sound at once. |
+| `00 00 00` | The temporary area: the current patch's 448 bytes (upper partial 1 and 2, common, lower partial 1 and 2, common, patch; 64 bytes each). A DT1 or DAT here changes the sound at once. A byte above its parameter's maximum is skipped, as on a D-50 (the rest of the message is written). |
 | `02 00 00` | The internal memory: the bank in RAM, 448 bytes a patch (64 patches, up to `03 60 00`). A power cycle brings back the bank from the flash. |
-| Anything else | For example the reverb data at `03 60 00`: taken and ignored, so a whole bulk dump goes through. |
+| `03 60 00` | The reverb data of a bulk dump, to `04 0E 7F` (a nibble a byte: the D-50's reverb types 17 to 32 for its reverb chip). Kept as the D-50 keeps it and sent back, after the patches when the whole memory is asked for (`02 00 00`, size `02 0F 00`), so a librarian's dump read back from the FM-1 is whole. The FM-1's reverb is a model and does not use it. Until another bank is chosen; a power cycle loses it, as the bank's edits. |
+| Anything else | Taken and ignored. The D-50 has no other area in SysEx: no system area, since its MIDI and function settings are not reachable by SysEx. |
 
 The FM-1 takes and answers only the D-50 messages for its own device ID (the basic channel less one, the MIDI Channel page); it answers
-with that ID. A faulty message shows its error on the screen (wrong format, checksum or address). Not yet: the system area, memory
-protect ([issue 51](https://github.com/mwedmark/fm1-d50/issues/51)).
+with that ID. A faulty message shows its error on the screen (wrong format, checksum or address).
+
+Where the FM-1 differs from a D-50 (docs/D50-FIRMWARE.md):
+
+- It takes more: the internal memory and the handshake at any time, both ways, where a D-50 takes them only on its Data Transfer screen in
+  the direction chosen there, and never answers an RQ1 there. It also takes more than 256 data bytes in one message.
+- It is stricter on a wrong checksum: nothing is written, where a D-50 has already written the data.
+- It has no Exclu switch (all SysEx is always taken) and no memory protect.
+- It cannot start a dump itself: a computer asks for one (RQ1, RQD).
 
 **For measuring** (`F0 7D 'S' 'F' 02 ... F7`, six bytes):
 

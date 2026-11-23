@@ -25,8 +25,10 @@ extern "C" {
 
 /* Look for the sample data in the data area and start the engine on it: 1 if it is there (the engine then plays), else 0. */
 int d50_bind_flash(void);
-/* velocity 0 is a note off */
+/* velocity 0 is a note off. d50_note is MIDI's (the basic channel); d50_key the instrument's own keys, which Key Transpose moves: as on
+ * the D-50, it moves only the keyboard's notes, not the ones received over MIDI (issue #64, the firmware's 0x2B46) */
 void d50_note(unsigned note, unsigned velocity);
+void d50_key(unsigned note, unsigned velocity);
 /* 0..d50_programs()-1, wraps */
 void d50_program(unsigned program);
 unsigned d50_programs(void);                             /* the bank's patches */
@@ -42,9 +44,39 @@ const char *d50_program_name(unsigned program);   /* the current program's; "" f
 const uint8_t *d50_patch_bytes(void);
 /* MIDI pitch bend, 0..16383, 8192 = centre; over the patch's bender range (pb26, 0..12 semitones), or RPN 0's */
 void d50_bend(unsigned value);
-/* A control change, as the D-50 receives them: 1 modulation lever, 5 portamento time, 6 data entry (RPN 0: the bender range),
- * 7 volume, 64 hold pedal, 65 portamento switch, 100/101 the RPN; the others are ignored. Issue #4. */
+/* A control change, as the D-50 receives them: 1 modulation lever, 5 portamento time, 6 and 38 data entry (RPN 0: the bender range;
+ * RPN 1: Fine Tuning, issue #66), 7 volume, 64 hold pedal, 65 portamento switch, 100/101 the RPN, 98/99 an NRPN (the data entries after it
+ * are not taken); the others are ignored. Issue #4. */
 void d50_cc(unsigned cc, unsigned value);
+/* The D-50's TUNE/FUNCTION (issue #54): Master Tune 0..100 (427.5 .. 452.6 Hz, 50 = 440.0 Hz, as the D-50's system byte; the pitch's offset, with the bend) and Key
+ * Transpose -12..12 semitones (a key of d50_key sounds its note moved, MIDI's notes are not: #64; its note-off ends the one it sounded). Both are kept over a program change. */
+void d50_tune(unsigned value);
+void d50_transpose(int semitones);
+/* RPN 1, Fine Tuning, sets Master Tune as on the D-50 (issue #66): d50_midi_tune is the tune now (the low 8 bits, 0..100) and a count of
+ * the times MIDI set it (the bits above), for the panel to follow. d50_rpn_reset: the RPN null and Fine Tuning's bytes not received, as the
+ * D-50 does on a basic channel change and when mono starts with Control G.CH. */
+unsigned d50_midi_tune(void);
+void d50_rpn_reset(void);
+/* Active Sensing lost (issue #68, the D-50's 0x574F): the notes off, the bender, lever, aftertouch, volume and pedal back to rest, the RPN
+ * null. The caller times it (app.c: an FE arms it, any message resets it). */
+void d50_sensing_lost(void);
+/* The D-50's MIDI modes (issue #60, its firmware's rows at 0x69EC): D50_MODE_NORMAL the power-on state (the patch's key mode, its Solo too);
+ * D50_MODE_POLY after a received Poly (the Solo key modes play polyphonically); D50_MODE_MONO, mode 4: channels 1..8 parts, each one note at
+ * a time with its own bender, in any key mode. A change turns the notes off. d50_note_ch and d50_bend_ch take the part, the channel less the
+ * basic channel (the caller's channel test): in mono a part's note ends the part's last one, and its bend moves only its note; otherwise the
+ * part is not looked at. d50_note and d50_bend are part 0's. */
+#define D50_MODE_NORMAL 0U
+#define D50_MODE_POLY 1U
+#define D50_MODE_MONO 2U
+void d50_mode(unsigned mode, unsigned channels);
+void d50_note_ch(unsigned part, unsigned note, unsigned velocity);
+void d50_bend_ch(unsigned part, unsigned value);
+/* The Separate key modes, SEP and SEP-S (issue #62, the firmware's 0x5DB7): the basic channel plays the Lower tone (d50_note and the rest),
+ * the patch's SepCH the Upper with a controller set of its own. d50_sep_channel: the current patch's SepCH, 1..16, or 0 when it is not a
+ * separate patch or SepCH is OFF (the audio interrupt's, for the channel test). d50_sep: a message on it, as MIDI has it (8x, 9x, Bx, Dx,
+ * Ex; the channel is not looked at): notes, the bender, aftertouch, CC 1, 5, 6, 64, 65, 98-101 and 123; nothing else (no volume). */
+unsigned d50_sep_channel(void);
+void d50_sep(unsigned status, unsigned d1, unsigned d2);
 /* Channel pressure (aftertouch), 0..127 */
 void d50_pressure(unsigned value);
 /* Chase Play (issue #18), on or off with d50_cc(D50_CHASE_CC, >= 64 / < 64): the D-50's CHASE button. 1 while it is on. */

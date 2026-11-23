@@ -16,6 +16,10 @@ typedef struct {
 #define SET_OLD_BYTES 8u                 /* the record before midi (one without it loads, with midi 0: channel 1, omni on) */
 #define MIDI_CHANNEL 0x0Fu               /* the basic channel, 0 .. 15 (1 .. 16 on the screen): also the SysEx device ID, as the D-50's */
 #define MIDI_OMNI_OFF 0x10u              /* omni off: only the basic channel plays. Omni on (the default): every channel, as before #51 */
+#define MIDI_CONTROL_SHIFT 5u            /* the D-50's MIDI-1 Control (system byte 14, #60): the control channel in mono, 0 in an older record */
+#define MIDI_CONTROL_MASK (3u << MIDI_CONTROL_SHIFT)
+#define MIDI_LOCAL_OFF 0x80u             /* the D-50's Local off (system byte 12, #67): the keys only sent on TxCH. Local on (0 in an older record) */
+enum { MIDI_CONTROL_BCH, MIDI_CONTROL_GCH, MIDI_CONTROL_MDEOFF };   /* the basic channel; the global one, below it; mode messages off */
 #define LCD_TRUE 0x80u                   /* the LCD at true size, 2 x 40 (#23) */
 #define LCD_FOLDED 0x40u                 /* the LCD folded, 4 x 20 (#26) */
 #define LCD_SHOWN (LCD_TRUE | LCD_FOLDED)
@@ -26,6 +30,11 @@ typedef struct {
 #define LCD_PITCH_DEFAULT 1u             /* square dots, as the D-50's */
 static settings_t set;
 static uint8_t set_dirty;
+static uint32_t midi_control(void)
+{
+    uint32_t c = (set.midi & MIDI_CONTROL_MASK) >> MIDI_CONTROL_SHIFT;
+    return c > MIDI_CONTROL_MDEOFF ? MIDI_CONTROL_BCH : c;
+}
 
 /* ------------------------------------------------------------------ the sound --- */
 /* The engine renders at 32 kHz; a block of APP_BLOCK output frames takes 92 or 93 of its frames, resampled here
@@ -70,31 +79,100 @@ static PLAT_RAM_CODE uint32_t resample(int32_t *lr, uint32_t n, uint32_t at, int
     return at;
 }
 
+/* The joystick's balances over MIDI (ours, as Chase Play's CC80: the D-50 has no controller for them), 0..127 over 0..100 (#58) */
+#define D50_BALANCE_CC 81u
+#define D50_PARTIAL_BALANCE_CC 82u
+static volatile int8_t joy_asked[2] = {-1, -1};
+static volatile int8_t omni_asked = -1;      /* CC 124 (0, omni off) or 125 (1, on), from midi_in (#59) */
+static volatile int8_t local_asked = -1;     /* CC 122: 0 Local off, 1 on, from midi_in (#67) */
+/* Active Sensing (#68), as the D-50's (0x4AE1, 0x4AFC, 0x2741, 0x574F): any message zeroes the time, an FE arms the watch, and 43 of the
+ * firmware's ticks without one (16 ms assumed: about 0.69 s) end the notes and set the controllers back (d50_sensing_lost); disarmed
+ * until the next FE */
+#define SENSING_MS 688u
+static volatile uint32_t sensing_ms;         /* plat_ms of the last message in */
+static volatile uint8_t sensing_on;          /* an FE came since the last loss */
+/* The D-50's mono mode (#60, docs/D50-FIRMWARE.md): MIDI's state, not kept (the D-50's is in RAM: power-on is neither mono nor poly) */
+static volatile uint8_t mono_m;              /* mono's channel count, 1..8 (CC 126); 0 not mono */
+static volatile uint8_t poly_rx;             /* a Poly (CC 127) came: the Solo key modes play polyphonically */
+static volatile uint8_t mode_said;           /* a mode message for the main loop to show */
+static void engine_mode(void)                /* the engine's mode from them and omni (the firmware's rows at 0x69EC): mono is mode 4 with omni off */
+{
+    if (mono_m && (set.midi & MIDI_OMNI_OFF))
+        d50_mode(D50_MODE_MONO, mono_m);
+    else
+        d50_mode(mono_m || poly_rx ? D50_MODE_POLY : D50_MODE_NORMAL, 0);
+}
 static void midi_in(void)                    /* audio interrupt: the packets that came in */
 {
     uint32_t pkt;
     int port;
     while (plat_midi_in(&pkt, &port)) {
-        uint32_t st = (pkt >> 8) & 0xFFu, d1 = (pkt >> 16) & 0x7Fu, d2 = (pkt >> 24) & 0x7Fu;
+        uint32_t st = (pkt >> 8) & 0xFFu, d1 = (pkt >> 16) & 0x7Fu, d2 = (pkt >> 24) & 0x7Fu, part = 0, play = 1, control = 1;
+        sensing_ms = plat_ms();                  /* (any message, the clock too: 0x4AE1) */
+        if (st == 0xFEu)
+            sensing_on = 1;                      /* Active Sensing: the watch armed (0x4AFC, #68) */
         if (st == 0xF8u || st == 0xFEu)
             continue;
-        if (st < 0xF0u && (set.midi & MIDI_OMNI_OFF) && (st & 0x0Fu) != (set.midi & MIDI_CHANNEL))
-            continue;                            /* omni off: another channel's (issue #51) */
+        if (st < 0xF0u) {                        /* the D-50's channel test (0x4B81, #51, #60): the channel less the basic channel is the part */
+            const uint32_t basic = set.midi & MIDI_CHANNEL, sc = d50_sep_channel(), t = st & 0xF0u;
+            if (sc && (st & 0x0Fu) == sc - 1u && t != 0xA0u && t != 0xC0u)
+                d50_sep(st, d1, d2);             /* SEP, SEP-S: the patch's SepCH plays the Upper (0x5DB7, #62). As on the D-50 the message also
+                                                  * goes through the test below: on the basic channel, or with omni on, it plays the Lower too */
+            if (set.midi & MIDI_OMNI_OFF) {      /* (omni on: every channel is the basic channel's, part 0) */
+                const uint32_t last = mono_m ? mono_m - 1u : 0u;
+                part = ((st & 0x0Fu) - basic) & 0x0Fu;
+                play = part <= last;             /* notes and the bender: the mono parts, or the basic channel */
+                control = part == (mono_m && midi_control() == MIDI_CONTROL_GCH ? 15u : 0u);   /* the rest: Control's channel in mono */
+            }
+            if (!play && !control)
+                continue;
+        }
         midi_count++;
         switch (st & 0xF0u) {
-        case 0x90u: d50_note(d1, d2); break;
-        case 0x80u: d50_note(d1, 0); break;
-        case 0xE0u: d50_bend(d1 | d2 << 7); break;
-        case 0xC0u: program_asked = (int32_t)d1; break;
+        case 0x90u: if (play) d50_note_ch(part, d1, d2); break;
+        case 0x80u: if (play) d50_note_ch(part, d1, 0); break;
+        case 0xE0u: if (play) d50_bend_ch(part, d1 | d2 << 7); break;
+        case 0xC0u: if (control) program_asked = (int32_t)d1; break;
         case 0xB0u:
-            if (d1 == 120u || d1 == 123u)
+            if (d1 == 120u || d1 == 123u) {      /* all sound off, all notes off: ours, a panic on any channel it plays (the D-50 ignores 120 and,
+                                                  * with omni on, 123) */
                 d50_panic();
+            } else if (d1 >= 122u) {             /* the mode messages: on the basic channel only (0x4D3F), each ending with the notes off */
+                if ((st & 0x0Fu) != (set.midi & MIDI_CHANNEL))
+                    break;
+                if ((d1 == 124u || d1 == 125u) && d2 == 0u) {
+                    d50_panic();                 /* Omni Off/On, the D-50's (0x4F5A, 0x4F39; #59): value 0, notes off */
+                    omni_asked = (int8_t)(d1 - 124u);   /* the main loop sets omni, and the engine's mode with it */
+                } else if (d1 == 126u && d2 <= 16u && midi_control() != MIDI_CONTROL_MDEOFF) {
+                    uint32_t m = d2 == 0u || d2 > 8u ? 8u : d2, basic = set.midi & MIDI_CHANNEL;   /* Mono (0x4EDF, 0x4F15) */
+                    if (basic + m > 16u)
+                        m = 16u - basic;         /* (no further than channel 16) */
+                    mono_m = (uint8_t)m;
+                    poly_rx = 0;
+                    engine_mode();
+                    if (midi_control() == MIDI_CONTROL_GCH && (set.midi & MIDI_OMNI_OFF))
+                        d50_rpn_reset();         /* (0x4F7E: with the global channel the RPN starts again, #66) */
+                    mode_said = 1;
+                } else if (d1 == 127u && d2 == 0u && midi_control() != MIDI_CONTROL_MDEOFF) {
+                    mono_m = 0;                  /* Poly (0x4EAC) */
+                    poly_rx = 1;
+                    engine_mode();
+                    mode_said = 1;
+                }
+                if (d1 == 122u && (d2 == 0u || d2 == 127u))
+                    local_asked = (int8_t)(d2 ? 1 : 0);   /* Local Control (0x5F20, #67): 0 off, 127 on, others ignored; the main loop */
+                break;
+            }
+            else if (!control)
+                break;
+            else if (d1 == D50_BALANCE_CC || d1 == D50_PARTIAL_BALANCE_CC)
+                joy_asked[d1 - D50_BALANCE_CC] = (int8_t)d2;   /* the joystick's two axes, absolute (#58); the main loop does it */
             else if (d1 == 0u)
                 bank_asked = (int32_t)d2;        /* (not the D-50's: its banks were cards; upstream PicoFaceD5's) */
             else
                 d50_cc(d1, d2);                  /* the D-50's controls: d50.h d50_cc (issue #4) */
             break;
-        case 0xD0u: d50_pressure(d1); break;     /* channel pressure: the D-50's aftertouch */
+        case 0xD0u: if (control) d50_pressure(d1); break;   /* channel pressure: the D-50's aftertouch */
         }
     }
 }
@@ -217,7 +295,7 @@ static void settings_load(void)
         memset(&set, 0, sizeof set);
         set.magic = SET_MAGIC;
     }
-    set.midi &= MIDI_CHANNEL | MIDI_OMNI_OFF;
+    set.midi &= MIDI_CHANNEL | MIDI_OMNI_OFF | MIDI_CONTROL_MASK | MIDI_LOCAL_OFF;   /* (Control was masked away before: #60, #67) */
     d50_device(set.midi & MIDI_CHANNEL);         /* the SysEx device ID: the basic channel's (issue #51) */
 }
 
@@ -312,6 +390,10 @@ static struct {
     uint8_t lcd_msg;                             /* the message in the LCD (#25): 0 the panel's, LCD_MSG_COMPLETE, LCD_MSG_ERROR | its number */
     uint8_t home_long;                         /* HOME held long enough to have changed the LCD's colours (this press) */
     uint32_t home_ms;                            /* when HOME was pressed */
+    int8_t tune_off;                            /* Master Tune 0..100 (#54) less 50 (so 0 = 440.0 Hz at start); not kept over a power cycle */
+    uint8_t tx_program;                         /* with Local off, the program change the encoders send (#67), 0..63 */
+    int8_t transpose;                            /* Key Transpose -12..12 (#54) */
+    uint8_t lower;                               /* the selected tone, the joystick's X: 0 the upper, 1 the lower (#58) */
     uint8_t page;                                /* the edit page (#31): d50_lcd.h LCD_PAGE_*, LCD_PAGE_PLAY none */
 } ui;
 #include "d50_lcd.h"
@@ -335,11 +417,38 @@ static int32_t patch_edit(uint32_t at, int32_t step, int32_t lo, int32_t hi)
     ui.redraw = 1;
     return v;
 }
-/* The MIDI page's values (issue #51, lcd_pages' own): 0 the basic channel (0..15), 1 omni (1 on) */
+/* The MIDI page's values (issue #51, lcd_pages' own): 0 the basic channel (0..15), 1 omni (1 on), 2 Control (#60), 3 Local (1 on, #67) */
 static void midi_values(uint8_t *v)
 {
     v[0] = (uint8_t)(set.midi & MIDI_CHANNEL);
     v[1] = (uint8_t)(set.midi & MIDI_OMNI_OFF ? 0u : 1u);
+    v[2] = (uint8_t)midi_control();
+    v[3] = (uint8_t)(set.midi & MIDI_LOCAL_OFF ? 0u : 1u);
+}
+static void local_keys_off(void);
+/* The MIDI settings changed (the page, or CC 124/125), main loop: the device ID, and the mode as the D-50 has it (#60). Control set to
+ * MdeOff returns to the power-on state (0x5829); mono's channels end at channel 16 (0x4F15). */
+static void midi_changed(uint32_t old)
+{
+    uint32_t f, m;
+    d50_device(set.midi & MIDI_CHANNEL);
+    if (set.midi == old)
+        return;
+    if ((set.midi & MIDI_LOCAL_OFF) && !(old & MIDI_LOCAL_OFF))
+        local_keys_off();                        /* Local off: the keys' notes end (0x5773, #67) */
+    f = plat_lock();
+    if ((set.midi ^ old) & MIDI_CHANNEL)
+        d50_rpn_reset();                         /* a basic channel change: the RPN null (0x5BEC, #66) */
+    m = mono_m;
+    if ((set.midi & MIDI_CONTROL_MASK) != (old & MIDI_CONTROL_MASK) && midi_control() == MIDI_CONTROL_MDEOFF) {
+        m = 0xFFu;                               /* (the notes off even when nothing was mono or poly) */
+        mono_m = poly_rx = 0;
+    }
+    if (mono_m && (set.midi & MIDI_CHANNEL) + mono_m > 16u)
+        mono_m = (uint8_t)(16u - (set.midi & MIDI_CHANNEL));
+    if (((set.midi ^ old) & MIDI_OMNI_OFF) || mono_m != m)
+        engine_mode();                           /* (the notes off, as a mode change does on the D-50) */
+    plat_unlock(f);
 }
 /* A parameter changed on an edit page: the patch block's (#31), or the MIDI page's settings (#51; kept with SAVE) */
 static void page_edit(uint32_t field, int32_t step)
@@ -348,11 +457,13 @@ static void page_edit(uint32_t field, int32_t step)
     if (field >= g->fields)
         return;
     if (g->own) {
-        uint8_t v[2];
+        uint8_t v[4];
+        const uint32_t old = set.midi;
         midi_values(v);
         v[field] = (uint8_t)clamp((int32_t)v[field] + (step > 0 ? 1 : -1), g->f[field].lo, g->f[field].hi);
-        set.midi = (uint8_t)((v[0] & MIDI_CHANNEL) | (v[1] ? 0u : MIDI_OMNI_OFF));
-        d50_device(set.midi & MIDI_CHANNEL);
+        set.midi = (uint8_t)((v[0] & MIDI_CHANNEL) | (v[1] ? 0u : MIDI_OMNI_OFF) | (uint32_t)v[2] << MIDI_CONTROL_SHIFT |
+                             (v[3] ? 0u : MIDI_LOCAL_OFF));
+        midi_changed(old);
         set_dirty = 1;
         ui.redraw = 1;
         return;
@@ -360,27 +471,39 @@ static void page_edit(uint32_t field, int32_t step)
     (void)patch_edit(6u * 64u + g->f[field].byte, step, g->f[field].lo, g->f[field].hi);
 }
 static void uint_text(uint32_t v, char *b);
-/* The D-50's joystick on the play screen (#43), K1 and K2: K1 the balance between the upper and the lower tone (the patch block's byte 33,
- * what the LCD shows as Bal), K2 the balance between the partials of both tones (each tone's common byte 47). Edits of the current patch,
- * as the edit pages' are: they last until another program is chosen, and SysEx reads them back. */
+/* The D-50's joystick on the play screen (#43), as its firmware has it (docs/D50-FIRMWARE.md, #58): K1 the stick's X, the balance between
+ * the partials of the selected tone (that tone's common byte 47, parameter 0x66), K2 its Y, the balance between the upper and the lower
+ * tone (the patch block's byte 33, parameter 0x8A, what the LCD shows as Bal). K4 selects the tone, as the D-50's UPPER and LOWER keys
+ * (the upper at start). Edits of the current patch, as the edit pages' are: they last until another program is chosen, and SysEx reads
+ * them back. */
 enum { PATCH_COMMON_UPPER = 2u * 64u, PATCH_COMMON_LOWER = 5u * 64u, COMMON_PARTIAL_BALANCE = 47u, PATCH_TONE_BALANCE = 6u * 64u + 33u };
+enum { JOY_X, JOY_Y };
+static uint32_t joystick_byte(uint32_t axis)
+{
+    if (axis == JOY_Y)
+        return PATCH_TONE_BALANCE;
+    return (ui.lower ? PATCH_COMMON_LOWER : PATCH_COMMON_UPPER) + COMMON_PARTIAL_BALANCE;
+}
 static void joystick(uint32_t axis, int32_t step)
 {
     char t[12];
-    int32_t v;
-    if (axis == 0u) {
-        v = patch_edit(PATCH_TONE_BALANCE, step, 0, 100);
-    } else {
-        v = patch_edit(PATCH_COMMON_UPPER + COMMON_PARTIAL_BALANCE, step, 0, 100);
-        if (v >= 0)
-            (void)patch_edit(PATCH_COMMON_LOWER + COMMON_PARTIAL_BALANCE, v - (int32_t)d50_patch_bytes()[PATCH_COMMON_LOWER + COMMON_PARTIAL_BALANCE], 0, 100);
-    }
+    int32_t v = patch_edit(joystick_byte(axis), step, 0, 100);
     if (v < 0)
         return;
-    if (axis == 0u && (set.lcd & LCD_SHOWN))     /* (the LCD shows the tone balance itself, as Bal; the partial balance it has no place for) */
+    if (axis == JOY_Y && (set.lcd & LCD_SHOWN))  /* (the LCD shows the tone balance itself, as Bal; the partial balance it has no place for) */
         return;
     uint_text((uint32_t)v, t);
-    app_say(axis == 0u ? "TONE BAL" : "PART BAL", t);
+    app_say(axis == JOY_Y ? "TONE BAL" : ui.lower ? "L PART BAL" : "U PART BAL", t);
+}
+static void joystick_to(uint32_t axis, int32_t v127)      /* a MIDI value of the axis: 0..127 over 0..100 */
+{
+    const uint8_t *p = d50_patch_bytes();
+    int32_t d;
+    if (!p)
+        return;
+    d = (v127 * 100 + 63) / 127 - (int32_t)p[joystick_byte(axis)];
+    if (d != 0)
+        joystick(axis, d);
 }
 #define HOME_LONG_MS 3000u
 #define LCD_MSG_COMPLETE 1u
@@ -442,11 +565,88 @@ void app_say(const char *a, const char *b)
     }
 }
 
-static void note(uint32_t note, uint32_t vel)    /* main loop: the queue is the interrupt's too */
+/* MIDI out (#65), what the D-50 sends on TxCH (docs/D50-FIRMWARE.md): the patch's byte 37, B (0: the basic channel) or 1..16. The
+ * FM-1's keys (0x5FA0, 0x603D: moved by Key Transpose, a note-off as velocity 0, CC 123 All Notes Off when the last is released), their
+ * aftertouch (0x3232), and a patch chosen with the encoders (0x551B; not one MIDI asked for). On a TxCH change (0x58AA) the held keys'
+ * note-offs and All Notes Off go out on the old channel, then CC 124 Omni Off and CC 127 Poly on the new (0x56FA). Over USB, main loop. */
+static uint8_t tx_ch = 0xFFu;                    /* the channel the last went out on, 0..15; 0xFF before the first look */
+static uint8_t tx_key[128];                      /* a key's sent note + 1, for its note-off; 0: none out */
+static void tx(uint32_t st, uint32_t d1, uint32_t d2)   /* a USB-MIDI packet, cable 0: CIN, status, data */
 {
-    uint32_t f = plat_lock();
-    d50_note(note, vel);
+    plat_midi_out((st >> 4 & 15u) | (st & 0xFFu) << 8 | (d1 & 127u) << 16 | (d2 & 127u) << 24);
+}
+static uint32_t tx_keys_out(void)
+{
+    uint32_t n, c = 0;
+    for (n = 0; n < 128u; n++)
+        c += tx_key[n] ? 1u : 0u;
+    return c;
+}
+static void tx_check(void)                       /* TxCH from the current patch, and its change */
+{
+    const uint8_t *p = d50_patch_bytes();
+    uint32_t t = p ? p[6u * 64u + 37u] : 0u, n;
+    t = t >= 1u && t <= 16u ? t - 1u : (set.midi & MIDI_CHANNEL);
+    if (tx_ch == 0xFFu) {                        /* (the first: nothing to change from) */
+        tx_ch = (uint8_t)t;
+        ui.tx_program = set.program;             /* (Local off: the encoders' program changes start here, #67) */
+        return;
+    }
+    if (t == tx_ch)
+        return;
+    if (tx_keys_out()) {                         /* the held keys end on the old channel (0x61D6) */
+        for (n = 0; n < 128u; n++)
+            if (tx_key[n]) {
+                tx(0x90u | tx_ch, tx_key[n] - 1u, 0);
+                tx_key[n] = 0;
+            }
+        tx(0xB0u | tx_ch, 123u, 0);
+    }
+    tx_ch = (uint8_t)t;
+    tx(0xB0u | tx_ch, 124u, 0);                  /* Omni Off, Poly: a receiver on it plays in mode 3 */
+    tx(0xB0u | tx_ch, 127u, 0);
+}
+static void tx_note(uint32_t n, uint32_t vel)
+{
+    if (vel) {
+        const int32_t s = clamp((int32_t)n + ui.transpose, 0, 127);
+        if (tx_key[n])                           /* (struck again before its note-off) */
+            tx(0x90u | tx_ch, tx_key[n] - 1u, 0);
+        tx_key[n] = (uint8_t)(s + 1);
+        tx(0x90u | tx_ch, (uint32_t)s, vel);
+    } else if (tx_key[n]) {
+        tx(0x90u | tx_ch, tx_key[n] - 1u, 0);
+        tx_key[n] = 0;
+        if (!tx_keys_out())
+            tx(0xB0u | tx_ch, 123u, 0);          /* the last key up: All Notes Off (0x602D) */
+    }
+}
+
+/* Local (#67, the D-50's system byte 12): with it off the keys are only sent (0x5FB4). local_key: the keys whose note sounds here, so that
+ * a key pressed with Local on ends its note when it is lifted after Local went off, and Local off ends them all at once (0x5773). */
+static uint8_t local_key[128];
+static uint32_t local_on(void) { return !(set.midi & MIDI_LOCAL_OFF); }
+static void local_keys_off(void)
+{
+    uint32_t n, f = plat_lock();
+    for (n = 0; n < 128u; n++)
+        if (local_key[n]) {
+            d50_key(n, 0);
+            local_key[n] = 0;
+        }
+    d50_pressure(0);
     plat_unlock(f);
+    ui.tx_program = set.program;                 /* (the encoders' program changes start from the patch that sounds) */
+}
+static void note(uint32_t note, uint32_t vel)    /* main loop: the queue is the interrupt's too. The FM-1's keys: Key Transpose moves them (#64) */
+{
+    if (vel ? local_on() : local_key[note]) {
+        uint32_t f = plat_lock();
+        d50_key(note, vel);
+        plat_unlock(f);
+        local_key[note] = (uint8_t)(vel != 0);
+    }
+    tx_note(note, vel);                          /* and on TxCH (#65), whatever Local is */
 }
 
 static void program_step(int32_t to)         /* to: the patch over every bank, bank * 64 + program (the encoders walk them all) */
@@ -465,6 +665,7 @@ static void input(void)
 {
     uint32_t keys, btn = plat_buttons(), k;
     int32_t e;
+    tx_check();                                  /* MIDI out's channel, TxCH (#65) */
     touch_poll();                                /* the sensed keys' presses and velocities (lib/touch.h) */
     keys = touch_keys();
     for (k = 0; k < NKEYS; k++) {                /* key 0 is F3 (MIDI 53) */
@@ -481,9 +682,12 @@ static void input(void)
             if ((keys & 1u << k) && touch_pressure(k) > p)
                 p = touch_pressure(k);
         if (p != ui.pressure) {
-            uint32_t f = plat_lock();
-            d50_pressure(p);
-            plat_unlock(f);
+            if (local_on()) {                    /* (Local off: only sent, #67) */
+                uint32_t f = plat_lock();
+                d50_pressure(p);
+                plat_unlock(f);
+            }
+            tx(0xD0u | tx_ch, p, 0);             /* and on TxCH (#65, 0x3232) */
             ui.pressure = (uint8_t)p;
         }
     }
@@ -503,7 +707,9 @@ static void input(void)
             plat_unlock(f);
             app_say("CHASE", on ? "ON" : "OFF");
         } else if (k == B_EDIT && bound) {       /* the edit pages in turn, then the play screen (#31) */
-            ui.page = (uint8_t)((ui.page + 1u) % LCD_PAGES);
+            ui.page = ui.page == LCD_PAGE_TUNE ? LCD_PAGE_PLAY : (uint8_t)((ui.page + 1u) % LCD_PAGES);
+        } else if (k == B_SEL && bound) {        /* the TUNE/FUNCTION page, and back to the play screen (#54) */
+            ui.page = ui.page == LCD_PAGE_TUNE ? LCD_PAGE_PLAY : LCD_PAGE_TUNE;
         } else if (k == B_HOME) {                /* (on its release, or after HOME_LONG_MS held: below) */
             ui.home_ms = plat_ms();
             ui.home_long = 0;
@@ -531,24 +737,124 @@ static void input(void)
         set_dirty = 1;
         ui.redraw = 1;
     }
-    if (ui.page != LCD_PAGE_PLAY) {              /* K1..K4: an edit page's parameters, left to right */
+    for (k = 0; k < 2u; k++) {                   /* CC81 the tone balance (Y), CC82 the selected tone's partial balance (X) (#58) */
+        int32_t v = joy_asked[k];
+        if (v >= 0) {
+            joy_asked[k] = -1;
+            joystick_to(k == 0u ? JOY_Y : JOY_X, v);
+        }
+    }
+    {                                            /* CC 124/125: the MIDI Channel page's Omni, as the D-50's MIDI-1 page (#59) */
+        int32_t o = omni_asked;
+        if (o >= 0) {
+            omni_asked = -1;
+            if ((uint32_t)o != ((set.midi & MIDI_OMNI_OFF) ? 0u : 1u)) {
+                const uint32_t old = set.midi;
+                set.midi = (uint8_t)(o ? set.midi & ~MIDI_OMNI_OFF : set.midi | MIDI_OMNI_OFF);
+                midi_changed(old);               /* (mono plays as mode 4 only with omni off: #60) */
+                set_dirty = 1;
+                ui.redraw = 1;
+            }
+            app_say("OMNI", o ? "ON" : "OFF");
+        }
+    }
+    {                                            /* Master Tune set by RPN 1 (#66): the TUNE/FUNCTION page follows */
+        static unsigned seen;
+        const unsigned v = d50_midi_tune();
+        if (v >> 8 != seen >> 8) {
+            seen = v;
+            ui.tune_off = (int8_t)((int32_t)(v & 255u) - 50);
+            ui.redraw = 1;
+        }
+    }
+    {                                            /* Active Sensing lost (#68): the sender or the cable is gone */
+        const uint32_t last = sensing_ms;        /* (read before the time: a message landing between them cannot look 4 billion ms old) */
+        if (sensing_on && (int32_t)(plat_ms() - last) >= (int32_t)SENSING_MS) {
+            uint32_t f = plat_lock(), lost = sensing_on && sensing_ms == last;
+            if (lost) {
+                sensing_on = 0;
+                d50_sensing_lost();
+            }
+            plat_unlock(f);
+            if (lost)
+                app_say("MIDI", "SENSING LOST");
+        }
+    }
+    {                                            /* CC 122: the MIDI Channel page's Local, as the D-50's MIDI-1 page (#67) */
+        int32_t l = local_asked;
+        if (l >= 0) {
+            local_asked = -1;
+            if ((uint32_t)l != local_on()) {
+                const uint32_t old = set.midi;
+                set.midi = (uint8_t)(l ? set.midi & ~MIDI_LOCAL_OFF : set.midi | MIDI_LOCAL_OFF);
+                midi_changed(old);
+                set_dirty = 1;
+                ui.redraw = 1;
+            }
+            app_say("LOCAL", l ? "ON" : "OFF");
+        }
+    }
+    if (mode_said) {                             /* CC 126/127 (#60) */
+        char t[8] = "POLY";
+        mode_said = 0;
+        if (mono_m) {
+            t[0] = (char)('0' + mono_m);
+            t[1] = ' ';
+            t[2] = 'C';
+            t[3] = 'H';
+            t[4] = 0;
+        }
+        app_say(mono_m ? "MONO" : "MIDI", t);
+        ui.redraw = 1;
+    }
+    if (ui.page == LCD_PAGE_TUNE) {              /* K1 Master Tune, K2 Key Transpose (#54) */
+        if ((e = plat_enc(EN_K1)) != 0) {
+            ui.tune_off = (int8_t)clamp((int32_t)ui.tune_off + e, -50, 50);
+            d50_tune((unsigned)(50 + ui.tune_off));
+            ui.redraw = 1;
+        }
+        if ((e = plat_enc(EN_K2)) != 0) {
+            ui.transpose = (int8_t)clamp((int32_t)ui.transpose + e, -12, 12);
+            d50_transpose(ui.transpose);
+            ui.redraw = 1;
+        }
+    } else if (ui.page != LCD_PAGE_PLAY) {       /* K1..K4: an edit page's parameters, left to right */
         static const uint8_t knob[4] = {EN_K1, EN_K2, EN_K3, EN_K4};
         for (k = 0; k < 4u; k++)
             if ((e = plat_enc(knob[k])) != 0)
                 page_edit(k, e);
-    } else {                                     /* the play screen: K1 and K2 the joystick (#43), K3 the dot height of the true-size LCD (was K1) */
+    } else {                                     /* the play screen: K1 and K2 the joystick's X and Y (#43, #58), K3 the dot height of the
+                                                  * true-size LCD (was K1), K4 the selected tone (right the lower, left the upper) */
         if ((e = plat_enc(EN_K1)) != 0)
-            joystick(0, e);
+            joystick(JOY_X, e);
         if ((e = plat_enc(EN_K2)) != 0)
-            joystick(1, e);
+            joystick(JOY_Y, e);
+        if ((e = plat_enc(EN_K4)) != 0 && (uint32_t)(e > 0) != ui.lower) {
+            ui.lower = (uint8_t)(e > 0);
+            app_say("TONE", ui.lower ? "LOWER" : "UPPER");
+        }
         if ((e = plat_enc(EN_K3)) != 0 && (set.lcd & LCD_TRUE)) {
             set.lcd = (uint8_t)((set.lcd & ~7u) | (uint32_t)clamp((int32_t)lcd_pitch() + (e > 0 ? 1 : -1), LCD_PITCH_MIN, LCD_PITCH_MAX));
             set_dirty = 1;
             ui.redraw = 1;
         }
     }
-    if ((e = plat_enc(EN_SELECT)) != 0 || (e = plat_enc(EN_PRESET)) != 0)
-        program_step((int32_t)(set.bank * d50_programs() + set.program) + e);
+    if ((e = plat_enc(EN_SELECT)) != 0 || (e = plat_enc(EN_PRESET)) != 0) {
+        if (local_on()) {
+            program_step((int32_t)(set.bank * d50_programs() + set.program) + e);
+            tx_check();                          /* the new patch's TxCH first, then its program change on it (0x25B6, #65) */
+            tx(0xC0u | tx_ch, set.program, 0);
+            ui.tx_program = set.program;
+        } else {                                 /* Local off: only the program change goes out, the sound stays (0x25B6, #67) */
+            char t[4];
+            ui.tx_program = (uint8_t)(((int32_t)ui.tx_program + e % 64 + 64) % 64);
+            tx(0xC0u | tx_ch, ui.tx_program, 0);
+            t[0] = (char)('1' + ui.tx_program / 8u);
+            t[1] = (char)('1' + ui.tx_program % 8u);
+            t[2] = 0;
+            app_say("PROG OUT", t);
+        }
+    }
     if (program_asked >= 0) {
         int32_t p = program_asked, b = bank_asked >= 0 ? bank_asked : (int32_t)set.bank;
         program_asked = -1;
@@ -596,8 +902,10 @@ static void draw(void)
         lcd_scheme = lcd_scheme_of();
         if (!pb)
             lcd_clear();
+        else if (ui.page == LCD_PAGE_TUNE)
+            lcd_tune_screen((uint32_t)(50 + ui.tune_off), ui.transpose);
         else if (ui.page != LCD_PAGE_PLAY) {
-            uint8_t own[2];
+            uint8_t own[4];
             midi_values(own);
             lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb, own);
         } else {

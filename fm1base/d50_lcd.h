@@ -180,8 +180,9 @@ static void lcd_message(const char *a, const char *b)
 
 /* The edit pages (issue #31, the first of #8): the firmware's title (16 characters, 0xF940 on) above its parameters line, each value in the
  * template's three $ columns from a byte of the patch block. The title line's layout (the patch number at the right) is ours. */
-enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_MIDI, LCD_PAGES };
-enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE, LCD_SHOW_ONOFF };   /* the value; the value + 1; the chase mode's name; ON or OFF */
+enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_MIDI, LCD_PAGES, LCD_PAGE_TUNE = LCD_PAGES };   /* (the tune page is SEL's, not EDIT's: #54) */
+enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE, LCD_SHOW_ONOFF, LCD_SHOW_CONTROL };   /* the value; the value + 1; the chase mode's name;
+                                                                                        * ON or OFF; MIDI-1's Control (#60: 0x7CB6, 6 each) */
 typedef struct {
     uint8_t byte, lo, hi, col, show;                      /* the patch block's byte, its range, its column on the lower line, how shown */
 } lcd_field_t;
@@ -197,10 +198,11 @@ static const lcd_page_t lcd_pages[LCD_PAGES] = {
      {{29, 0, 3, 4, LCD_SHOW_NUM1}, {30, 0, 31, 12, LCD_SHOW_NUM1}, {31, 0, 100, 20, LCD_SHOW_NUM}, {32, 0, 100, 28, LCD_SHOW_NUM}}},
     {"Chase Edit", "Mode$$$ Levl$$$ Time$$$", 3,                         /* 0x6FC4 */
      {{34, 0, 2, 4, LCD_SHOW_CHASE}, {35, 0, 100, 12, LCD_SHOW_NUM}, {36, 0, 100, 20, LCD_SHOW_NUM}}},
-    /* the MIDI settings (issue #51), not the patch's: the basic channel (also the SysEx device ID) and omni. The title is the firmware's
-     * (0xF900's list); the line is ours */
-    {"MIDI Channel", "BasicCH$$$     Omni$$$", 2,
-     {{0, 0, 15, 7, LCD_SHOW_NUM1}, {1, 0, 1, 19, LCD_SHOW_ONOFF}}, 1},
+    /* the MIDI settings (issue #51), not the patch's: the basic channel (also the SysEx device ID), omni, MIDI-1's Control (#60:
+     * B.CH, G.CH, MdeOff; "Ctrl" for the room) and Local (#67). The title is the firmware's (0xF900's list); the line is ours, K1 to K4
+     * left to right */
+    {"MIDI Channel", "BasicCH$$$ Omni$$$ Ctrl$$$$$$ Local$$$", 4,
+     {{0, 0, 15, 7, LCD_SHOW_NUM1}, {1, 0, 1, 15, LCD_SHOW_ONOFF}, {2, 0, 2, 23, LCD_SHOW_CONTROL}, {3, 0, 1, 35, LCD_SHOW_ONOFF}}, 1},
 };
 static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p, const uint8_t *own)
 {
@@ -224,6 +226,9 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
             lcd_put(1, f->col, chase + 3u * v, 3);
         } else if (f->show == LCD_SHOW_ONOFF) {
             lcd_put(1, f->col, v ? " ON" : "OFF", 3);
+        } else if (f->show == LCD_SHOW_CONTROL) {
+            static const char control[] = " B.CH  G.CH MdeOff";   /* (0x7CB6) */
+            lcd_put(1, f->col, control + 6u * v, 6);
         } else {
             v += f->show == LCD_SHOW_NUM1 ? 1u : 0u;
             t[0] = v >= 100u ? (char)('0' + v / 100u) : ' ';
@@ -232,6 +237,27 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
             lcd_put(1, f->col, t, 3);
         }
     }
+}
+
+/* The TUNE/FUNCTION page (issue #54, SEL): the firmware's Master Tune and Key Transpose lines (0x7515 on), the tune 0..100 as 427.5 .. 452.6 Hz (0.251 Hz a step) */
+static void lcd_tune_screen(uint32_t tune, int32_t transpose)
+{
+    char t[8];
+    uint32_t hz = 4275u + tune * 251u / 100u, a = (uint32_t)(transpose < 0 ? -transpose : transpose);
+    lcd_clear();
+    lcd_put(0, 0, "Master Tune", LCD_COLS);
+    t[0] = (char)('0' + hz / 1000u);
+    t[1] = (char)('0' + hz / 100u % 10u);
+    t[2] = (char)('0' + hz / 10u % 10u);
+    t[3] = '.';
+    t[4] = (char)('0' + hz % 10u);
+    lcd_put(0, 16, t, 5);
+    lcd_put(0, 22, "Hz", 2);
+    lcd_put(1, 0, "Key Transpose =", LCD_COLS);
+    t[0] = transpose < 0 ? '-' : transpose > 0 ? '+' : ' ';
+    t[1] = a >= 10u ? (char)('0' + a / 10u) : ' ';
+    t[2] = (char)('0' + a % 10u);
+    lcd_put(1, 16, t, 3);
 }
 
 /* The LCD's height in pixels for a dot pitch (a dot's height in pixels): a margin of glass, the two lines of 8 dot rows each with a pitch

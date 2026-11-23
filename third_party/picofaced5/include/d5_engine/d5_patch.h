@@ -281,6 +281,12 @@ public:
         return false;
     }
 
+    // fm1-d50, diagnostic: the slots whose key is down (the FM-1's mono test)
+    int keys_down() const {
+        int n = 0;
+        for (int i = 0; i < kVoices; ++i) n += key_[i] ? 1 : 0;
+        return n;
+    }
     // Diagnostic: how many slots are actually rendering right now.
     int voices_sounding() const {
         int n = 0;
@@ -339,6 +345,11 @@ public:
     void set_master_cents(float c) { spec_.voice.master_cents = c; }
     void set_bend_semis(float st) {
         for (int i = 0; i < kVoices; ++i) voices_[i].set_bend_semis(st);
+    }
+    // fm1-d50: the bend of one note's voices only (sounding or in their release), for the D-50's mono mode: a bender per MIDI channel
+    void set_note_bend(int note, float st) {
+        for (int i = 0; i < kVoices; ++i)
+            if (active_[i] && note_[i] == note) voices_[i].set_bend_semis(st);
     }
     void set_aftertouch(float a) {
         for (int i = 0; i < kVoices; ++i) voices_[i].set_aftertouch(a);
@@ -399,9 +410,18 @@ struct PatchSpec {
     bool solo = false;
     // The split solo modes (SPL-US, SPL-LS) hold one note per side only:
     // Roland's D-50 VST plays byte 5 as a split with a polyphonic Lower
-    // and a monophonic Upper, byte 6 the other way round.
+    // and a monophonic Upper, byte 6 the other way round. (fm1-d50: the
+    // D-50 firmware's SPL-US is byte 6 and SPL-LS byte 7: d5_patch_map.h.)
     bool solo_upper = false;
     bool solo_lower = false;
+    // fm1-d50: SEP and SEP-S (pb[18] 3 and 8, the D-50 firmware's separate flag 0xFE30.0; FM-1 issue #62): note_on plays the Lower tone
+    // polyphonically (the basic channel, 0x2B2F), sep_note_on the Upper (the patch's SepCH, 0x5DB7) -- one note at a time in SEP-S (solo).
+    // key_mode stays kSplit (two tones, eight voices each, mixed as a split).
+    bool separate = false;
+    int sep_channel = 0;          // fm1-d50: pb[38], SepCH: 0 OFF, 1..16
+    // fm1-d50: pb[21], Hold Mode: 0 U, 1 L, 2 UL. The tones the pedal holds in the split and separate modes (the firmware's 0x249F; the
+    // whole and dual modes hold both). The FM-1's glue keeps the pedal's notes (d50.cpp), so it is the glue that reads it (issue #63).
+    int hold_mode = 2;
     int split_point = 60;         // panel "Split Point", C4 by default
     float balance = 0.5f;         // panel "Tone Balance", upper to lower
     // Panel "Bender Range", pb[26], 0..12 semitones. Patch-common: the
@@ -495,18 +515,24 @@ public:
         // steal that no factory patch tells them apart, and it cannot
         // click.
         bool sounded = false;
+        const bool whole_solo = spec_.solo && !solo_off_;
+        if (spec_.separate) {                    // fm1-d50: SEP, SEP-S: the basic channel's tone, the Lower, polyphonically (0x2B2F)
+            lower_later(note, velocity, true, false);
+            reverb_.note_activity();
+            return;
+        }
         switch (spec_.key_mode) {
             case KeyMode::kDual: {
-                if (spec_.solo) solo_cut(0, note);
+                if (whole_solo) solo_cut(0, note);
                 const bool u = upper_.note_on(note, velocity);
-                if (spec_.solo) solo_note_[0] = note;
-                lower_later(note, velocity, true, spec_.solo);
+                if (whole_solo) solo_note_[0] = note;
+                lower_later(note, velocity, true, whole_solo);
                 sounded = u || true;
                 break;
             }
             case KeyMode::kSplit: {
                 const int side = note >= spec_.split_point ? 0 : 1;
-                const bool solo = side == 0 ? spec_.solo_upper : spec_.solo_lower;
+                const bool solo = !solo_off_ && (side == 0 ? spec_.solo_upper : spec_.solo_lower);
                 if (side == 0) {
                     if (solo) solo_cut(0, note);
                     sounded = upper_.note_on(note, velocity);
@@ -519,9 +545,9 @@ public:
             }
             case KeyMode::kWhole:
             default:
-                if (spec_.solo) solo_cut(0, note);
+                if (whole_solo) solo_cut(0, note);
                 sounded = upper_.note_on(note, velocity);
-                if (spec_.solo) solo_note_[0] = note;
+                if (whole_solo) solo_note_[0] = note;
                 break;
         }
         // The gate and reverse reverbs time their wet envelope against the
@@ -531,10 +557,28 @@ public:
     }
 
     void note_off(int note) {
-        upper_.note_off(note);
-        if (note == solo_note_[0]) solo_note_[0] = -1;
+        if (!spec_.separate) {                   // (separate: the Upper is SepCH's, sep_note_off)
+            upper_.note_off(note);
+            if (note == solo_note_[0]) solo_note_[0] = -1;
+        }
         lower_later(note, 0.0f, false, false);
     }
+
+    // fm1-d50: the patch's SepCH in SEP and SEP-S (FM-1 issue #62, the firmware's 0x5DB7 and 0x29A7): the Upper, polyphonically in SEP
+    // (0x2B29), one note at a time in SEP-S (0x2B40, a fixed voice). A received Poly does not change it (the firmware's SepCH path has no
+    // rows). Outside the separate modes nothing.
+    void sep_note_on(int note, float velocity) {
+        if (!spec_.separate) return;
+        if (spec_.solo) solo_cut(0, note);
+        if (upper_.note_on(note, velocity)) reverb_.note_activity();
+        if (spec_.solo) solo_note_[0] = note;
+    }
+    void sep_note_off(int note) {
+        upper_.note_off(note);
+        if (note == solo_note_[0]) solo_note_[0] = -1;
+    }
+    bool separate() const { return spec_.separate; }
+    int sep_channel() const { return spec_.separate ? spec_.sep_channel : 0; }
 
     // fm1-d50: one tone's note on or off (0 Upper, 1 Lower), for the FM-1's Chase Play, which plays the tones apart (d50.cpp)
     void tone_note_on(int tone, int note, float velocity) {
@@ -852,6 +896,19 @@ public:
         upper_.set_bend_semis(st);
         lower_.set_bend_semis(st);
     }
+    // fm1-d50: the D-50's mono mode (MIDI mode 4), for the FM-1's d50.cpp: one note's bend (a bender per channel), and the Solo key modes
+    // played polyphonically (the firmware's note-handler rows at 0x69EC: after a received Poly, and in mono, where the caller keeps each
+    // channel to one note itself)
+    void set_note_bend(int note, float st) {
+        upper_.set_note_bend(note, st);
+        lower_.set_note_bend(note, st);
+    }
+    int keys_down() const { return upper_.keys_down() + lower_.keys_down(); }   // (diagnostic)
+    int tone_keys_down(int tone) const { return tone ? lower_.keys_down() : upper_.keys_down(); }   // (diagnostic: 0 Upper, 1 Lower)
+    void set_solo_off(bool off) {
+        if (off && !solo_off_) solo_note_[0] = solo_note_[1] = -1;
+        solo_off_ = off;
+    }
     void set_mod_wheel(float w) {
         upper_.set_wheel(w);
         lower_.set_wheel(w);
@@ -864,6 +921,12 @@ public:
         upper_.set_porta(sw, time);
         lower_.set_porta(sw, time);
     }
+    // fm1-d50: one tone's controls (0 Upper, 1 Lower), for the separate modes, where each tone has its own controller set (the
+    // firmware's 0xD300 and 0xD308 sets, FM-1 issue #62)
+    void set_tone_bend(int tone, float st) { if (tone) lower_.set_bend_semis(st); else upper_.set_bend_semis(st); }
+    void set_tone_wheel(int tone, float w) { if (tone) lower_.set_wheel(w); else upper_.set_wheel(w); }
+    void set_tone_aftertouch(int tone, float a) { if (tone) lower_.set_aftertouch(a); else upper_.set_aftertouch(a); }
+    void set_tone_porta(int tone, bool sw, int time) { if (tone) lower_.set_porta(sw, time); else upper_.set_porta(sw, time); }
 
 private:
     PatchSpec spec_{};
@@ -874,6 +937,7 @@ private:
     Reverb reverb_{};
     float sr_ = 32000.0f;
     int solo_note_[2] = {-1, -1}; // the solo modes' held note per tone (0 upper, 1 lower)
+    bool solo_off_ = false;       // fm1-d50: the Solo key modes play polyphonically (set_solo_off)
 
     // The lower tone runs 128 samples (4.0 ms) behind the upper: Roland's
     // D-50 VST starts it exactly that much later on every note, key and

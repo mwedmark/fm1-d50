@@ -477,17 +477,28 @@ inline PatchSpec patch_from_bytes(const uint8_t* patch, const int16_t* blob) {
     // they are split basses whose muted Upper is silent above C4 in the VST
     // too (Hammer Feel, DoubleGritBs, MoonStroller Bs, MultiMod Ld,
     // Synthectric Bass).
+    //
+    // fm1-d50: the D-50 firmware (v1.06; fm1-d50's docs/D50-FIRMWARE.md, issue #58) has another order, and it is followed here:
+    // 0 WHOLE, 1 DUAL, 2 SPLIT, 3 SEP, 4 WHOL-S, 5 DUAL-S, 6 SPL-US, 7 SPL-LS, 8 SEP-S. pb[18] is RAM 0xC592, read as it is:
+    //  - the panel shows it as the name at 0x7C80 + 6 x value (parameter 0x7B, display type 0x69, 0x3D6B), in that order;
+    //  - 0x58CE sets the separate flag (0xFE30.0) for 3 and 8; 0x2C74 and 0x5850 take 2, 6 and 7 as the splits; 0x2447 and 0x247E take
+    //    0, 1, 4 and 5 as the modes without a split; 0x4FA6, 0x61C5 and 0x6464 take 0 and 4 as the whole modes (the 16-voice pool);
+    //  - fm1-d50's banks: 4 is Warbler Solo and Moog Solo, 5 seven 8va basses (Read 8va Bass, Sub 8va Bass, ...).
+    // The reading above has 3..7 one place off (its 5, SPL-US, is DUAL-S). SEP and SEP-S take two channels, as the firmware plays them
+    // (PatchSpec::separate, FM-1 issue #62): the basic channel the Lower, the patch's SepCH (pb[38]) the Upper, one note at a time in SEP-S.
     switch (pb[18]) {
         case 1:  p.key_mode = KeyMode::kDual;  break;
         case 2:  p.key_mode = KeyMode::kSplit; break;
-        case 3:  p.key_mode = KeyMode::kWhole; p.solo = true; break;   // WHOL-S
-        case 4:  p.key_mode = KeyMode::kDual;  p.solo = true; break;   // DUAL-S
-        case 5:  p.key_mode = KeyMode::kSplit; p.solo_upper = true; break;   // SPL-US
-        case 6:                                                        // SPL-LS
-        case 7:                                                        // SEP
-        case 8:  p.key_mode = KeyMode::kSplit; p.solo_lower = true; break;   // SEP-S
+        case 4:  p.key_mode = KeyMode::kWhole; p.solo = true; break;   // WHOL-S
+        case 5:  p.key_mode = KeyMode::kDual;  p.solo = true; break;   // DUAL-S
+        case 6:  p.key_mode = KeyMode::kSplit; p.solo_upper = true; break;   // SPL-US
+        case 7:  p.key_mode = KeyMode::kSplit; p.solo_lower = true; break;   // SPL-LS
+        case 3:  p.key_mode = KeyMode::kSplit; p.separate = true; break;     // SEP
+        case 8:  p.key_mode = KeyMode::kSplit; p.separate = true; p.solo = true; break;   // SEP-S
         default: p.key_mode = KeyMode::kWhole; break;
     }
+    p.sep_channel = pb[38] <= 16 ? pb[38] : 0;
+    p.hold_mode = pb[21] > 2 ? 2 : pb[21];       // fm1-d50: Hold Mode, U L UL (0x7B92, display type 0x53), issue #63
     p.split_point = 36 + pb[19];                 // panel C2..C7
     p.upper.voice.master_cents = static_cast<float>(pb[24]) - 50.0f;
     p.lower.voice.master_cents = static_cast<float>(pb[25]) - 50.0f;
