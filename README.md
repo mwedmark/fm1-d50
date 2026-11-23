@@ -68,7 +68,7 @@ The joystick's balances are edits of the current patch, as the edit pages' are: 
 
 ## MIDI
 
-It receives over USB. The **MIDI Channel** page (EDIT) has the D-50's two settings, kept with SAVE:
+It receives and sends over USB. The **MIDI Channel** page (EDIT) has the D-50's settings, kept with SAVE:
 
 - **BasicCH** (K1), 1 to 16, default 1: the channel it plays on with omni off, and its SysEx device ID, as on a D-50 (the device ID is the
   basic channel less one: channel 1 is `00`).
@@ -76,6 +76,15 @@ It receives over USB. The **MIDI Channel** page (EDIT) has the D-50's two settin
 - **Control** (K3), the D-50's MIDI-1 setting, default B.CH: the channel the program change, aftertouch and controllers come on in the
   mono mode (below). B.CH is the basic channel and G.CH the global channel, the one below it. MdeOff ignores Mono and Poly, and choosing it
   ends the mono mode.
+
+**What it sends**, as a D-50 does, on the patch's **TxCH** (a patch setting: B, the basic channel, or 1 to 16):
+
+- **The keys:** note-on with velocity and note-off (as velocity 0), moved by Key Transpose. When the last key is released, CC 123 All Notes Off.
+- **Aftertouch**, from how hard a held key is pressed.
+- **A program change** (0 to 63, in the bank) when a patch is chosen with the encoders, but not when MIDI chose it.
+- **When TxCH changes** with a new patch: the held keys' note-offs and All Notes Off on the old channel, then CC 124 Omni Off and CC 127 Poly on the new one.
+
+The joystick (K1, K2) is not sent, as a D-50's is not. The FM-1 has no bender, lever or pedals of its own to send.
 
 **The mono mode** (CC 126 on the basic channel, with omni off), as on a D-50: the value is the number of channels, from the basic channel
 up (0 and 9 to 16 give 8, and no further than channel 16). Each channel is a monophonic part of its own, with its own bender, whatever the

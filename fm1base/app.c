@@ -542,11 +542,68 @@ void app_say(const char *a, const char *b)
     }
 }
 
+/* MIDI out (#65), what the D-50 sends on TxCH (docs/D50-FIRMWARE.md): the patch's byte 37, B (0: the basic channel) or 1..16. The
+ * FM-1's keys (0x5FA0, 0x603D: moved by Key Transpose, a note-off as velocity 0, CC 123 All Notes Off when the last is released), their
+ * aftertouch (0x3232), and a patch chosen with the encoders (0x551B; not one MIDI asked for). On a TxCH change (0x58AA) the held keys'
+ * note-offs and All Notes Off go out on the old channel, then CC 124 Omni Off and CC 127 Poly on the new (0x56FA). Over USB, main loop. */
+static uint8_t tx_ch = 0xFFu;                    /* the channel the last went out on, 0..15; 0xFF before the first look */
+static uint8_t tx_key[128];                      /* a key's sent note + 1, for its note-off; 0: none out */
+static void tx(uint32_t st, uint32_t d1, uint32_t d2)   /* a USB-MIDI packet, cable 0: CIN, status, data */
+{
+    plat_midi_out((st >> 4 & 15u) | (st & 0xFFu) << 8 | (d1 & 127u) << 16 | (d2 & 127u) << 24);
+}
+static uint32_t tx_keys_out(void)
+{
+    uint32_t n, c = 0;
+    for (n = 0; n < 128u; n++)
+        c += tx_key[n] ? 1u : 0u;
+    return c;
+}
+static void tx_check(void)                       /* TxCH from the current patch, and its change */
+{
+    const uint8_t *p = d50_patch_bytes();
+    uint32_t t = p ? p[6u * 64u + 37u] : 0u, n;
+    t = t >= 1u && t <= 16u ? t - 1u : (set.midi & MIDI_CHANNEL);
+    if (tx_ch == 0xFFu) {                        /* (the first: nothing to change from) */
+        tx_ch = (uint8_t)t;
+        return;
+    }
+    if (t == tx_ch)
+        return;
+    if (tx_keys_out()) {                         /* the held keys end on the old channel (0x61D6) */
+        for (n = 0; n < 128u; n++)
+            if (tx_key[n]) {
+                tx(0x90u | tx_ch, tx_key[n] - 1u, 0);
+                tx_key[n] = 0;
+            }
+        tx(0xB0u | tx_ch, 123u, 0);
+    }
+    tx_ch = (uint8_t)t;
+    tx(0xB0u | tx_ch, 124u, 0);                  /* Omni Off, Poly: a receiver on it plays in mode 3 */
+    tx(0xB0u | tx_ch, 127u, 0);
+}
+static void tx_note(uint32_t n, uint32_t vel)
+{
+    if (vel) {
+        const int32_t s = clamp((int32_t)n + ui.transpose, 0, 127);
+        if (tx_key[n])                           /* (struck again before its note-off) */
+            tx(0x90u | tx_ch, tx_key[n] - 1u, 0);
+        tx_key[n] = (uint8_t)(s + 1);
+        tx(0x90u | tx_ch, (uint32_t)s, vel);
+    } else if (tx_key[n]) {
+        tx(0x90u | tx_ch, tx_key[n] - 1u, 0);
+        tx_key[n] = 0;
+        if (!tx_keys_out())
+            tx(0xB0u | tx_ch, 123u, 0);          /* the last key up: All Notes Off (0x602D) */
+    }
+}
+
 static void note(uint32_t note, uint32_t vel)    /* main loop: the queue is the interrupt's too. The FM-1's keys: Key Transpose moves them (#64) */
 {
     uint32_t f = plat_lock();
     d50_key(note, vel);
     plat_unlock(f);
+    tx_note(note, vel);                          /* and on TxCH (#65) */
 }
 
 static void program_step(int32_t to)         /* to: the patch over every bank, bank * 64 + program (the encoders walk them all) */
@@ -565,6 +622,7 @@ static void input(void)
 {
     uint32_t keys, btn = plat_buttons(), k;
     int32_t e;
+    tx_check();                                  /* MIDI out's channel, TxCH (#65) */
     touch_poll();                                /* the sensed keys' presses and velocities (lib/touch.h) */
     keys = touch_keys();
     for (k = 0; k < NKEYS; k++) {                /* key 0 is F3 (MIDI 53) */
@@ -584,6 +642,7 @@ static void input(void)
             uint32_t f = plat_lock();
             d50_pressure(p);
             plat_unlock(f);
+            tx(0xD0u | tx_ch, p, 0);             /* and on TxCH (#65, 0x3232) */
             ui.pressure = (uint8_t)p;
         }
     }
@@ -699,8 +758,11 @@ static void input(void)
             ui.redraw = 1;
         }
     }
-    if ((e = plat_enc(EN_SELECT)) != 0 || (e = plat_enc(EN_PRESET)) != 0)
+    if ((e = plat_enc(EN_SELECT)) != 0 || (e = plat_enc(EN_PRESET)) != 0) {
         program_step((int32_t)(set.bank * d50_programs() + set.program) + e);
+        tx_check();                              /* the new patch's TxCH first, then its program change on it (0x25B6, #65) */
+        tx(0xC0u | tx_ch, set.program, 0);
+    }
     if (program_asked >= 0) {
         int32_t p = program_asked, b = bank_asked >= 0 ? bank_asked : (int32_t)set.bank;
         program_asked = -1;
