@@ -42,3 +42,5 @@ licence = "GPL-3.0-or-later"
 author = "mwedmark"
 description = "The PicoFaceD5 D-50 engine on fm1-base, with a flash layout that has room for the D-50's sample data."
 tags = ["synth"]
+install = "https://mwedmark.github.io/fm1-d50/install/"
+screenshot = "docs/img/screen.png"
