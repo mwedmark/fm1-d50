@@ -101,12 +101,11 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
     0x298F with it, so channel basic + k plays as part k; a k above 0xFE42 is ignored. The bender too (0x4C65): in mono each relative channel has its own
     (0xD3D2[k], 0xD3DB[k]), and the basic channel's also sets the global one (0xD315).
   - **The voices, 0x29BE:** the note handler is picked from the 27-entry table at 0x69EC, in three rows of nine indexed by the patch's key mode (0xC592).
-    The columns are taken in the order of the key mode names (0x7C80: WHOLE, DUAL, SPLIT, SEP, WHOL-S, ...). 0x4FA6 and 0x61C5 test 0xC592 for 0 and 4 together, Whole and
-    Whole-S in that order, which supports it. PicoFaceD5 reads the patch byte (pb[18]) in another order (3 WHOL-S, 7 SEP), so the firmware may map one to the other (not checked):
+    0xC592 is the patch byte 18 as it is, in the order below (the key mode's order, next).
 
     | Row | When | Whole | Dual | Split | Sep | Whole-S | Dual-S | Split-US | Split-LS | Sep-S |
     | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-    | 0 | power-on state (neither mono nor poly received) | poly | poly | poly | poly | solo | solo | solo upper | solo lower | solo |
+    | 0 | power-on state (neither mono nor poly received) | poly | poly | poly | one tone (0x2B2F) | solo | solo | solo upper | solo lower | one tone (0x2B2F) |
     | 1 | mono, omni off | fixed voice | fixed, dual | fixed, split | fixed, lower | fixed voice | fixed, dual | fixed, split | fixed, split | fixed, lower |
     | 2 | poly received, or mono with omni on | poly | poly | poly | poly | poly | poly | poly | poly | poly |
 
@@ -114,8 +113,26 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
     lower tone is read from the key modes, not checked in the voice code). Dual plays both (0x2A75 copies the lower voice to the upper). Split picks one of the two by the key (0x2AB8). So in mono each of up to 8 channels is a monophonic
     part of its own, whatever the patch's key mode, and the Solo key modes have no further effect. **A received Poly (127) plays the Solo key modes polyphonically**
     until mono is chosen or Control is set to MdeOff. Mono with omni on (mode 2) plays as row 2, since every channel is relative channel 0.
+- **The key mode's order (patch byte 18, 0xC592 = the patch block 0xC580 + 18)** (verified 2026-11-23):
+  **0 WHOLE, 1 DUAL, 2 SPLIT, 3 SEP, 4 WHOL-S, 5 DUAL-S, 6 SPL-US, 7 SPL-LS, 8 SEP-S**. No code writes it by its address (the sweeps show only reads); it comes with the patch (a load, SysEx) and
+  is read as it is. The evidence:
+  - The panel: parameter 0x7B (0x69 + 18, as 0x8A is byte 33) has display type 0x69 (table 0x79BC). Types 0x64 and up are name lists (0x3D6B): the list's address from
+    0x7C20 + 2 × (type − 0x64), then the value × 6. List 5 is at 0x7C80: `WHOLE `, ` DUAL `, `SPLIT `, ` SEP  `, `WHOL-S`, `DUAL-S`, `SPL-US`, `SPL-LS`, `SEP-S `.
+  - The code's own groups:
+    - 0x58CE sets the separate flag 0xFE30.0 for 3 and 8.
+    - 0x2C74 and 0x5850 take 2, 6 and 7 as the splits.
+    - 0x2447 and 0x247E take 0, 1, 4 and 5, the modes without a split.
+    - 0x4FA6, 0x61C5 and 0x6464 (the value AND 0xFB) take 0 and 4, the whole modes with the 16-voice pool.
+    - 0x32DC is a table of 9 per mode: 8 for 0, 3, 4 and 8, 7 for the others.
+  - fm1-d50's six banks: 0 is used 44 times, 1 361, 2 34, 4 twice (Warbler Solo, Moog Solo), 5 seven times (Read 8va Bass, Sub 8va Bass, Mini 8va Bass 1,
+    S-Bass sinus, E-Bass, ...); 3, 6, 7 and 8 not at all.
+
+  PicoFaceD5 had 3 WHOL-S, 4 DUAL-S, 5 SPL-US, 6 SPL-LS and 7 SEP, read from Roland's D-50 VST by ear. That is one place off for 3..7, and its 5 (SPL-US) made the
+  8va basses a split with a monophonic Upper. Corrected in fm1-d50's copy (`d5_patch_map.h`, #58): 4 is WHOL-S and 5 DUAL-S. SEP and SEP-S, which on the D-50 take
+  the patch's separate channel (SepCH, the patch MIDI page) for one tone, stay a split with a monophonic Lower on one channel, as PicoFaceD5 had them.
+  The FM-1's LCD already showed the firmware's order (`d50_lcd.h`), so before this the screen said WHOL-S where the engine played DUAL-S.
 - **System byte 14 (0xC5CE) is the MIDI-1 page's "Control"** (verified 2026-11-23). The page has BasicCH, Control, Omni and Local (texts at 0x7474), and its values
-  are the strings at 0x7CB5, six characters each: `B.CH`, `G.CH` and `MdeOff`.
+  are the strings at 0x7CB6, six characters each: ` B.CH `, ` G.CH ` and `MdeOff`.
   - **It picks the control channel in mono, 0x4BE9:** the program change, channel pressure and controllers (CC 0-121) are taken in mono only on that channel; in
     poly, or with omni on, on the basic channel.
     - **B.CH (0):** the basic channel.

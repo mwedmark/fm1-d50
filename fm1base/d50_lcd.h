@@ -182,7 +182,7 @@ static void lcd_message(const char *a, const char *b)
  * template's three $ columns from a byte of the patch block. The title line's layout (the patch number at the right) is ours. */
 enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_MIDI, LCD_PAGES, LCD_PAGE_TUNE = LCD_PAGES };   /* (the tune page is SEL's, not EDIT's: #54) */
 enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE, LCD_SHOW_ONOFF, LCD_SHOW_CONTROL };   /* the value; the value + 1; the chase mode's name;
-                                                                                        * ON or OFF; MIDI-1's Control (#60: 0x7CB5, 6 each) */
+                                                                                        * ON or OFF; MIDI-1's Control (#60: 0x7CB6, 6 each) */
 typedef struct {
     uint8_t byte, lo, hi, col, show;                      /* the patch block's byte, its range, its column on the lower line, how shown */
 } lcd_field_t;
@@ -226,7 +226,7 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
         } else if (f->show == LCD_SHOW_ONOFF) {
             lcd_put(1, f->col, v ? " ON" : "OFF", 3);
         } else if (f->show == LCD_SHOW_CONTROL) {
-            static const char control[] = "  B.CH  G.CHMdeOff";
+            static const char control[] = " B.CH  G.CH MdeOff";   /* (0x7CB6) */
             lcd_put(1, f->col, control + 6u * v, 6);
         } else {
             v += f->show == LCD_SHOW_NUM1 ? 1u : 0u;

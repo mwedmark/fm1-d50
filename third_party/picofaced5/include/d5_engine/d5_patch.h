@@ -410,7 +410,8 @@ struct PatchSpec {
     bool solo = false;
     // The split solo modes (SPL-US, SPL-LS) hold one note per side only:
     // Roland's D-50 VST plays byte 5 as a split with a polyphonic Lower
-    // and a monophonic Upper, byte 6 the other way round.
+    // and a monophonic Upper, byte 6 the other way round. (fm1-d50: the
+    // D-50 firmware's SPL-US is byte 6 and SPL-LS byte 7: d5_patch_map.h.)
     bool solo_upper = false;
     bool solo_lower = false;
     int split_point = 60;         // panel "Split Point", C4 by default
