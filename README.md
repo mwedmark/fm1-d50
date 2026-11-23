@@ -61,7 +61,7 @@ The view and the colour are saved with SAVE.
 | K3 | The LCD's dot height (true-size view) |
 | K4 | The selected tone for K1, as the D-50's UPPER and LOWER keys: right the Lower, left the Upper (the Upper at start) |
 | SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12): the FM-1's keys only, as on a D-50; notes from MIDI are not moved. Not kept over a power cycle |
-| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel: BasicCH, Omni, Control, Local), then the play screen |
+| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel: BasicCH, Omni, Control, Local; Data Transfer, below), then the play screen |
 | SAVE | Saves the patch, bank, octave, view, colour and the MIDI settings |
 
 The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.
@@ -166,7 +166,18 @@ Where the FM-1 differs from a D-50 (docs/D50-FIRMWARE.md):
   the direction chosen there, and never answers an RQ1 there. It also takes more than 256 data bytes in one message.
 - It is stricter on a wrong checksum: nothing is written, where a D-50 has already written the data.
 - It has no Exclu switch (all SysEx is always taken) and no memory protect.
-- It cannot start a dump itself: a computer asks for one (RQ1, RQD).
+- It starts a dump itself from the Data Transfer page (below), as the D-50 does from its menu; a computer may also ask for one (RQ1, RQD) at any time.
+
+**Data Transfer** (the EDIT page after MIDI Channel), the D-50's own menu for a librarian that waits for the synth to begin, as D50 Librarian's download does. K1 chooses the item, SAVE starts it (as the D-50's Enter; on this page SAVE does not save the settings), and leaving the page (EDIT, SEL) ends a transfer under way. The items are the D-50's, of the whole internal memory (`02 00 00`: the bank in RAM, with the reverb data once a dump brought them):
+
+| Item | What the FM-1 sends |
+| --- | --- |
+| Bulk Dump | WSD, then a DAT of 256 bytes on each of the computer's ACKs, then EOD. Start the librarian's receive first, then this. |
+| Bulk Load | RQD; the computer answers with its WSD and DATs (any time, they are taken as ever). |
+| Bulk Dump.O | DT1s of 256 bytes one-way, the whole memory. Start the librarian's receive first. |
+| Bulk Load.O | Nothing: DT1s are taken as ever. |
+
+The screen says Complete . when it is done, and Error Reject when the computer gave up (RJC) or asked for something else. Not yet tried against a real librarian; the card items of the D-50's menu have no counterpart.
 
 **For measuring** (`F0 7D 'S' 'F' 02 ... F7`, six bytes):
 

@@ -395,6 +395,8 @@ static struct {
     int8_t transpose;                            /* Key Transpose -12..12 (#54) */
     uint8_t lower;                               /* the selected tone, the joystick's X: 0 the upper, 1 the lower (#58) */
     uint8_t page;                                /* the edit page (#31): d50_lcd.h LCD_PAGE_*, LCD_PAGE_PLAY none */
+    uint8_t xfer_item;                           /* the Data Transfer page's item: d50.h D50_XFER_* (K1) */
+    uint8_t xfer_on;                             /* a transfer started from the page is under way (d50_transfer) */
 } ui;
 #include "d50_lcd.h"
 /* A byte of the temporary area (the current patch, 7 blocks of 64: the upper's partial 1, partial 2 and common, the lower's, the patch block)
@@ -450,12 +452,39 @@ static void midi_changed(uint32_t old)
         engine_mode();                           /* (the notes off, as a mode change does on the D-50) */
     plat_unlock(f);
 }
+/* The Data Transfer page (the D-50's menu: d50.h d50_transfer): SAVE starts the chosen item, leaving the page or another item ends it */
+static void transfer_stop(void)
+{
+    if (ui.xfer_on)
+        d50_transfer_stop();
+    ui.xfer_on = 0;
+}
+static void transfer_start(void)
+{
+    transfer_stop();
+    if (d50_transfer(ui.xfer_item)) {
+        ui.xfer_on = 1;
+        app_say("TRANSFER", ui.xfer_item == D50_XFER_LOAD || ui.xfer_item == D50_XFER_LOAD_O ? "WAITING" : "SENDING");
+        ui.msg_until = 0;                        /* (the page says it: lcd_transfer_screen) */
+    } else {
+        app_say("NO D-50 DATA", "");
+    }
+}
 /* A parameter changed on an edit page: the patch block's (#31), or the MIDI page's settings (#51; kept with SAVE) */
 static void page_edit(uint32_t field, int32_t step)
 {
     const lcd_page_t *g = &lcd_pages[ui.page];
     if (field >= g->fields)
         return;
+    if (ui.page == LCD_PAGE_TRANSFER) {          /* K1 chooses the item; another one ends a transfer under way */
+        uint32_t item = (uint32_t)clamp((int32_t)ui.xfer_item + (step > 0 ? 1 : -1), 0, 3);
+        if (item != ui.xfer_item) {
+            transfer_stop();
+            ui.xfer_item = (uint8_t)item;
+            ui.redraw = 1;
+        }
+        return;
+    }
     if (g->own) {
         uint8_t v[4];
         const uint32_t old = set.midi;
@@ -713,6 +742,8 @@ static void input(void)
         } else if (k == B_HOME) {                /* (on its release, or after HOME_LONG_MS held: below) */
             ui.home_ms = plat_ms();
             ui.home_long = 0;
+        } else if (k == B_SAVE && ui.page == LCD_PAGE_TRANSFER) {   /* the D-50's Enter on its Data Transfer menu */
+            transfer_start();
         } else if (k == B_SAVE) {
             if (plat_store_save(OBJ_SETTINGS, &set, sizeof set) == 0) {
                 set_dirty = 0;
@@ -904,6 +935,8 @@ static void draw(void)
             lcd_clear();
         else if (ui.page == LCD_PAGE_TUNE)
             lcd_tune_screen((uint32_t)(50 + ui.tune_off), ui.transpose);
+        else if (ui.page == LCD_PAGE_TRANSFER)
+            lcd_transfer_screen(set.bank ? 'C' : 'I', p, ui.xfer_item, ui.xfer_on ? d50_transfer_state() : D50_XFER_IDLE);
         else if (ui.page != LCD_PAGE_PLAY) {
             uint8_t own[4];
             midi_values(own);
@@ -989,6 +1022,17 @@ void app_frame(void)
         if (fault) {
             app_say("ERROR", lcd_error_lines[fault < 8u ? fault : 0u]);
             ui.lcd_msg = (uint8_t)(LCD_MSG_ERROR | fault);
+            ui.msg_until = now + 2500u;
+        }
+    }
+    if (ui.xfer_on) {                            /* a transfer the Data Transfer page started: how it went, or the page left */
+        uint32_t st = d50_transfer_state();
+        if (ui.page != LCD_PAGE_TRANSFER) {
+            transfer_stop();
+        } else if (st == D50_XFER_DONE || st == D50_XFER_FAIL) {
+            transfer_stop();
+            app_say("TRANSFER", st == D50_XFER_DONE ? "COMPLETE" : "FAILED");
+            ui.lcd_msg = st == D50_XFER_DONE ? LCD_MSG_COMPLETE : (uint8_t)(LCD_MSG_ERROR | 0u);   /* (as the D-50: Complete, or Error Reject) */
             ui.msg_until = now + 2500u;
         }
     }
