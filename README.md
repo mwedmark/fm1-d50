@@ -177,7 +177,7 @@ Where the FM-1 differs from a D-50 (docs/D50-FIRMWARE.md):
 | Bulk Dump.O | DT1s of 256 bytes one-way, the whole memory. Start the librarian's receive first. |
 | Bulk Load.O | Nothing: DT1s are taken as ever. |
 
-The screen says Complete . when it is done, and Error Reject when the computer gave up (RJC) or asked for something else. Not yet tried against a real librarian; the card items of the D-50's menu have no counterpart.
+Bulk Dump and Bulk Dump.O always send the D-50's own size (`02 0F 00`); with no reverb data in the FM-1 (none was ever loaded by a dump) that part goes out as zeros, so a librarian that expects the whole memory takes it. The screen says Complete . when it is done, and Error Reject when the computer gave up (RJC) or asked for something else. Not yet tried against a real librarian; the card items of the D-50's menu have no counterpart.
 
 **For measuring** (`F0 7D 'S' 'F' 02 ... F7`, six bytes):
 

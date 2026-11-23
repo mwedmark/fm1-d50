@@ -1112,8 +1112,9 @@ extern "C" unsigned d50_sysex_reply(uint8_t *frame)
 }
 
 // The D-50's Data Transfer menu (docs/D50-FIRMWARE.md, the table at 0x3822): the FM-1 starts the transfer itself, which a librarian that
-// waits for the synth (D50 Librarian's download) needs. The whole memory, from 02 00 00: the bank, and the reverb data once a dump brought
-// them (the size says it, as an RQD's does).
+// waits for the synth (D50 Librarian's download) needs. The whole memory, from 02 00 00, always the D-50's own size (02 0F 00) when the bank
+// is whole: the 64 patches and the reverb data, which are sent as zeros (value_at) when no dump brought them, so that a librarian that
+// expects the whole memory takes the dump. (An RQ1 or RQD still answers only what is there.)
 extern "C" int d50_transfer(unsigned item)
 {
     if (!ready || !bank_patches || item > D50_XFER_LOAD_O) return 0;
@@ -1124,7 +1125,7 @@ extern "C" int d50_transfer(unsigned item)
     reply.dev = device_id;
     xfer.item = item;
     xfer.state = D50_XFER_RUN;
-    const uint32_t size = end_of(kInternal) - kInternal;
+    const uint32_t size = bank_patches == D50_BANK_PATCHES ? kReverbAt + kReverbBytes - kInternal : end_of(kInternal) - kInternal;
     switch (item) {
     case D50_XFER_DUMP:                           // WSD, then a DAT on each ACK, then EOD
         reply.cmd = kDat;

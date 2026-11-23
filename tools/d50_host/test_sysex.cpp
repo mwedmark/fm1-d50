@@ -307,7 +307,7 @@ int main(int argc, char **argv)
 
     printf("The Data Transfer menu (d50_transfer): the FM-1 starts the transfer\n");
     {
-        const uint32_t whole = end_of(2U << 14) - (2U << 14);   // the bank, and the reverb data when an earlier test left them
+        const uint32_t whole = 0x8780U;                          // the D-50's own 02 0F 00: the bank, and the reverb data (zeros when no dump brought them)
         auto same = [](const Bytes &f, uint32_t at, unsigned len) { for (unsigned i = 0; i < len; ++i) if (f.b[8 + i] != value_at(at + i)) return false; return true; };
         check(d50_transfer(7) == 0 && d50_transfer_state() == D50_XFER_IDLE, "an unknown item: not started");
 
