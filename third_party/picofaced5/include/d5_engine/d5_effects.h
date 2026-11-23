@@ -418,7 +418,10 @@ inline constexpr ReverbType kReverbTypes[32] = {
 // (AI-compiled, no provenance; it also disagrees with the VST on several decay times, so only these two columns are tried). Rows as kReverbTypes;
 // 0 in kExpPreMs: no pre-delay; 0 in kExpDampKhz: the type's own `damp`. Pre-delays above the pool's free words (~54 ms at 32 kHz) are cut to it.
 // -DD5_REVERB_TABLE_TOTAL_ONSET as well: the pre-delay is taken as the total onset, less the model's own entrance delay.
-// The damping becomes a scale on the Boss coefficient: sqrt(5 kHz / f), 5 kHz taken as the chip's own, within 0.6..1.5, on top of the type's `damp`.
+// The damping becomes a scale on the Boss coefficient: sqrt(D5_REVERB_TABLE_DAMP_REF / f), the reference (5 kHz by default) taken as the chip's own, within 0.6..1.5, on top of the type's `damp`.
+#ifndef D5_REVERB_TABLE_DAMP_REF
+#define D5_REVERB_TABLE_DAMP_REF 5.0f      // kHz taken as the chip's own damping (scale 1)
+#endif
 inline constexpr float kExpPreMs[32] = {
     15, 25, 40, 35,  0,  2,  5, 10, 15, 20,   // 1..10
      0,  0,  0,  0,  5, 10, 30, 65,  0,  0,   // 11..20 (delays: none; 15, 16 gates; 17 Bright Hall; 18 Large Cave; 19 Steel Pan)
@@ -604,7 +607,7 @@ public:
             damp_ = damp >= 0.0f ? damp : t.damp;
 #ifdef D5_REVERB_TABLE_EXPERIMENT
             if (damp < 0.0f && kExpDampKhz[clamp_index(spec.type, 32)] > 0.0f) {
-                float k = std::sqrt(5.0f / kExpDampKhz[clamp_index(spec.type, 32)]);
+                float k = std::sqrt(D5_REVERB_TABLE_DAMP_REF / kExpDampKhz[clamp_index(spec.type, 32)]);
                 damp_ *= k < 0.6f ? 0.6f : (k > 1.5f ? 1.5f : k);
             }
 #endif
