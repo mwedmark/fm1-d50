@@ -60,7 +60,8 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
 - **0x4ADF, the serial receive interrupt** (register bank 4): reads `RXB`. Real-time bytes are sorted here: 0xF1..0xF7 and 0xFE are handled or flagged (0xFE, active sensing, sets a flag in 0xFE31.1);
   everything else is queued by 0x527F into a ring buffer at 0xC100 (write index 0xFEAD, read index 0xFEAC). The `RXB` reads at 0x531F and 0x5492 are the SysEx side (to follow).
 - **0x4B09, the main loop's parser**: takes bytes from the ring buffer (0x4B22). A status byte (bit 7) goes to 0x4B30, a data byte to 0x4B9F. The running status is 0xFEAB (0 for none), the first data byte 0xFEA4, the second 0xFEA5;
-  0xFE45 holds the screen number (0x2A: the Data Transfer screen while it runs, where channel messages are ignored and SysEx takes the handshake: below) and 0xFE42 the basic channel (the channel test at 0x4C72 compares the status's low nibble with it, rejecting a higher one).
+  0xFE45 holds the screen number (0x2A: the Data Transfer screen while it runs, where channel messages are ignored and SysEx takes the handshake: below) the basic channel is 0xC5CD. The channel test at 0x4B81 makes the status's channel relative to it (below); 0xFE42 is the mono mode's last channel (relative), 0 in poly, and
+  notes and the bender on a relative channel above it are rejected (0x4CEB, 0x4C72).
 - **Status 0x80-0xEF** (0x4C3B): 0xE0 and up the pitch bender (0x4C65: 14 bits, stored at 0xD315/0xD316 and, per tone, 0xD3D2..), 0xB0 and up the control change (0x4D00), 0xA0 and up (polyphonic key pressure) ignored,
   0x90 and up note (0x4CE5), below that note off. Program change (0xC0) and channel pressure (0xD0) are one data byte (0x4BB8, 0x4BCC); program change is only taken when the MIDI page's Prog.C switch (0xC5C9 bit 0) is on.
 - **Control change, 0x4D00**: a number of 0x7A and up is a channel mode message (table dispatch at 0x4D3F). Below that the number is looked up in a table by routine 0x4039 (compare-and-find, then call through the address table):
@@ -89,11 +90,38 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
   | 123 All Notes Off | 0x4E8A | only with value 0, **omni off** and not mono, and not while P0.1 is set (an input, not decoded): the voices' notes off (0x6108, 8 voices at 0xC300, and 0x60E6). **With omni on it is ignored**, as Roland's instruments of the time did |
   | 124 Omni Off | 0x4F5A | value 0: omni off (0xC5CB = 0, which the MIDI-1 page shows); in mono 0x613B and 0x4F7E; then 0x4F92: all notes off (0x5CAD, 0x5CC1), the controllers again (0x327D), and the voices set up for the patch's key mode (0xC592: 0 and 4 one way, 0x60D5/0x613B/0x2396, the others 0x60F7, then 0x6119). Already off: only the notes off (0x4FBC) |
   | 125 Omni On | 0x4F39 | value 0: omni on (0xC5CB = 1), then as 124; already on: the notes off |
-  | 126 Mono | 0x4EDF | ignored when system byte 14 bit 1 is set (0xC5CE); the value (0..16, checked by 0x4F15; how it becomes a channel count is not fully decoded) to 0xFE42, mono on; with omni on, notes off only |
-  | 127 Poly | 0x4EAC | value 0, not with system byte 14 bit 1; poly (0xFE34.1), mono off, with omni off 0xFE42 = 0; then as 124 |
+  | 126 Mono | 0x4EDF | ignored when Control is MdeOff (system byte 14, below); the value is the channel count, made the last channel by 0x4F15 (below); poly off, mono on; with omni off and a new count the voices are set up again (0x613B, 0x4F7E, 0x4F92), otherwise the notes off only |
+  | 127 Poly | 0x4EAC | value 0, not with Control MdeOff; poly (0xFE34.1), mono off, with omni off 0xFE42 = 0; then as 124 |
 
-  Every mode message ends with the notes off, as the MIDI specification asks. System byte 14 (range 0..2) is not named yet: its bit 1 shuts out Mono and Poly, its bit 0
-  makes 0x4F7E set 0xFE60/0xFE62 to 0xFFFF.
+  Every mode message ends with the notes off, as the MIDI specification asks.
+- **The mono mode** (verified 2026-11-23), MIDI's mode 4 when omni is off.
+  - **The channels, 0x4F15:** the value of CC 126 is the number of channels M. 0 and 9..16 give 8, 1..8 give M, and above 16 the message is ignored. The last channel is
+    basic + M − 1; past channel 16 it stops at 16. 0xFE42 holds M − 1.
+  - **The channel test, 0x4B81:** a channel message's channel less the basic channel (mod 16) is its relative channel. Omni on makes it 0 for every channel. Notes go to
+    0x298F with it, so channel basic + k plays as part k; a k above 0xFE42 is ignored. The bender too (0x4C65): in mono each relative channel has its own
+    (0xD3D2[k], 0xD3DB[k]), and the basic channel's also sets the global one (0xD315).
+  - **The voices, 0x29BE:** the note handler is picked from the 27-entry table at 0x69EC, in three rows of nine indexed by the patch's key mode (0xC592):
+
+    | Row | When | Whole | Dual | Split | Sep | Whole-S | Dual-S | Split-US | Split-LS | Sep-S |
+    | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+    | 0 | power-on state (neither mono nor poly received) | poly | poly | poly | poly | solo | solo | solo upper | solo lower | solo |
+    | 1 | mono, omni off | fixed voice | fixed, dual | fixed, split | fixed, lower | fixed voice | fixed, dual | fixed, split | fixed, split | fixed, lower |
+    | 2 | poly received, or mono with omni on | poly | poly | poly | poly | poly | poly | poly | poly | poly |
+
+    "Fixed voice" (0x2BC1 with B = the relative channel): channel k always plays voice k (0xC300 + k), or voice k + 8 (0x2B39, for Sep; that these are the upper and the
+    lower tone is read from the key modes, not checked in the voice code). Dual plays both (0x2A75 copies the lower voice to the upper). Split picks one of the two by the key (0x2AB8). So in mono each of up to 8 channels is a monophonic
+    part of its own, whatever the patch's key mode, and the Solo key modes have no further effect. **A received Poly (127) plays the Solo key modes polyphonically**
+    until mono is chosen or Control is set to MdeOff. Mono with omni on (mode 2) plays as row 2, since every channel is relative channel 0.
+- **System byte 14 (0xC5CE) is the MIDI-1 page's "Control"** (verified 2026-11-23). The page has BasicCH, Control, Omni and Local (texts at 0x7474), and its values
+  are the strings at 0x7CB5, six characters each: `B.CH`, `G.CH` and `MdeOff`.
+  - **It picks the control channel in mono, 0x4BE9:** the program change, channel pressure and controllers (CC 0-121) are taken in mono only on that channel; in
+    poly, or with omni on, on the basic channel.
+    - **B.CH (0):** the basic channel.
+    - **G.CH (1):** the global channel, the basic channel less one (relative channel 15), as MIDI's mode 4 later had it. With G.CH, 0x4F7E also sets 0xFE60/0xFE62 to
+      0xFFFF when mono starts (not decoded).
+    - **MdeOff (2):** the mode messages Mono and Poly are ignored (126 and 127; 122-125 are not). Setting it (0x5829) turns the notes off and sets the voices up
+      again, clears mono and poly and sets 0xFE42 = 0: back to the power-on state.
+  - Mono and the global channel are what a MIDI guitar controller needs, one string a channel, which is the likely reason the D-50 has them.
   The FM-1 (`app.c`) takes 120 and 123 as `d50_panic()` (all voices off, in any omni), and 124/125 as the D-50 does (#59): on the basic channel with value 0 they
   set the MIDI page's Omni (#51) and turn the notes off. It ignores 122, 126 and 127.
 
@@ -312,6 +340,10 @@ The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps,
   the FM-1 sent its keys and controls on MIDI, which it does not (it sends only SysEx answers); nothing to follow here for now.
 - The D-50's stick moves the balances only after Lowr or Uppr, and leaves them on a screen change or a patch change; at power-on it is in Valu. The FM-1's K1/K2 move them on the play
   screen at any time, and K4's Upper at start matches the D-50's power-on P1.3 (set: 0x3EB4 would take the upper). Kept as ours: the FM-1 has no Lcal/Valu.
+- The FM-1 has no mono mode and no Control setting: it plays every channel polyphonically with the patch's key mode, ignores 126/127, and takes the program
+  change and the controllers on any channel it plays. Following the D-50 would mean up to 8 channels, each one fixed voice (one monophonic part), plus
+  the basic or the global channel for the controllers. That matters for a MIDI guitar or a multitimbral sequencer part per string. It is not done, and it is a
+  question for the maintainer.
 - Master Tune is 0..100, not 0..126 as PR #56 first had it: corrected (`d50_tune` 0..100, 50 = 440.0 Hz). Key Transpose's -12..+12 is confirmed.
 
 ## Coverage and what is next
@@ -319,7 +351,7 @@ The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps,
 First recursive descent from reset, the vectors and the two tables: 6 122 instructions in 367 functions, about 14.8 KB of the 56 KB above 0x2000/0x80 that are code and data
 together. The rest is reached by indirect jumps and by handlers installed into the RAM vectors at run time, which the descent does not follow. To do, in this order:
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
-2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 123-127 are done, mono's voice use and system byte 14 not), the reverb data's
+2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 122-127, the mono mode and system byte 14 (Control) are done; 0xFE60/0xFE62 and P0.1 not), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
 3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) (Done: 0x3EB4 is parameter
    0x66's access routine, Lowr/Uppr choose X's tone; 0xFE47/0xFE3F are LCD refresh requests.) (Done: power-on is Valu, 01.)
