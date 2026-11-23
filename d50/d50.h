@@ -102,6 +102,8 @@ int d50_edit_poll(void);
  * they always are). d50_transfer: 1 when it started, 0 without a bank or an unknown item. The frames go out through d50_sysex_reply.
  * d50_transfer_state: D50_XFER_RUN while under way, then _DONE (the last byte went, or came) or _FAIL (an RJC, or the computer asked for
  * something else); d50_transfer_stop leaves the menu: a handshake under way gives up with RJC, and the state goes idle. Main loop. */
+/* d50_handshake_poll: each main loop pass with the clock in ms; an ACK not seen for 200 ms is taken as given */
+void d50_handshake_poll(uint32_t ms);
 #define D50_XFER_DUMP 0U
 #define D50_XFER_LOAD 1U
 #define D50_XFER_DUMP_O 2U
