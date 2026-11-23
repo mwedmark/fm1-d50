@@ -8,6 +8,15 @@ PCM waves and effects, from the FM-1's keys or over MIDI.
 
 ![The D-50's play screen on the FM-1](docs/img/lcd_true_green.png)
 
+**BYOR: Bring Your Own ROM.** fm1-d50 contains no Roland data, and neither does any release or the install page. The D-50's PCM waves and
+patch banks come from your own D-50, and you make a data file from them on your own computer. What you bring and do:
+
+- the D-50's **PCM ROM chips** (the two 256 KB chips, or the late boards' one 512 KB chip) and its **program EPROM**, dumped to files;
+- **one to six bank dumps** (`.syx`, a D-50 bulk dump of 64 patches each);
+- Python 3 and Node.js, and a checkout of this repository, to run two commands that make the data file `d50_fm1base.fmd5`.
+
+The steps, with the chips' CRC-32s, are in [INSTALL.md](INSTALL.md). Without the data file the firmware starts and the screen says `NO D-50 DATA`.
+
 It is a work in progress. This README describes what works now and will grow with it.
 
 ## What works
