@@ -305,6 +305,106 @@ int main(int argc, char **argv)
         dev = 0x00;
     }
 
+    printf("The Data Transfer menu (d50_transfer): the FM-1 starts the transfer\n");
+    {
+        const uint32_t whole = 0x8780U;                          // the D-50's own 02 0F 00: the bank, and the reverb data (zeros when no dump brought them)
+        auto same = [](const Bytes &f, uint32_t at, unsigned len) { for (unsigned i = 0; i < len; ++i) if (f.b[8 + i] != value_at(at + i)) return false; return true; };
+        check(d50_transfer(7) == 0 && d50_transfer_state() == D50_XFER_IDLE, "an unknown item: not started");
+
+        // Bulk Dump: WSD 02 00 00 and the size, a DAT on each ACK, then EOD, then done on its ACK
+        check(d50_transfer(D50_XFER_DUMP) == 1 && d50_transfer_state() == D50_XFER_RUN, "Bulk Dump starts");
+        {
+            Bytes w = next();
+            Bytes want;
+            want.put(0xF0).put(0x41).put(dev).put(0x14).put(kWsd);
+            const Bytes as = addr_size(2U << 14, whole);
+            for (unsigned i = 0; i < as.n; ++i) want.put(as.b[i]);
+            want.put(sum7(as.b, as.n)).put(0xF7);
+            check(w == want, "a WSD for 02 00 00 and the bank's size, the checksum right");
+            check(next().empty(), "nothing more before the computer's ACK");
+            uint32_t at = 2U << 14;
+            bool bytes_ok = true;
+            unsigned dats = 0;
+            send(msg(kAck, none(), false));
+            for (;;) {
+                Bytes f = next();
+                if (f.empty() || is_short(f, kEod)) { check(is_short(f, kEod), "EOD after the last DAT"); break; }
+                const unsigned len = f.n - 10U;
+                if (!is_data(f, kDat, at, len) || !same(f, at, len)) bytes_ok = false;
+                at += len;
+                ++dats;
+                check(next().empty(), "no second DAT before the ACK");
+                send(msg(kAck, none(), false));
+            }
+            check(bytes_ok && at == (2U << 14) + whole, "the DATs carry the whole bank, in order, 256 bytes at most");
+            check(d50_transfer_state() == D50_XFER_RUN, "not done before the EOD's ACK");
+            send(msg(kAck, none(), false));
+            check(d50_transfer_state() == D50_XFER_DONE && next().empty(), "done on the EOD's ACK");
+            d50_transfer_stop();
+            check(d50_transfer_state() == D50_XFER_IDLE, "leaving the menu: idle");
+        }
+
+        // an ERR makes the last DAT go again; an RJC ends it
+        d50_transfer(D50_XFER_DUMP);
+        next();
+        send(msg(kAck, none(), false));
+        {
+            Bytes a = next();
+            send(msg(kErr, none(), false));
+            check(next() == a, "ERR: the same DAT again");
+            send(msg(kRjc, none(), false));
+            check(d50_transfer_state() == D50_XFER_FAIL && next().empty(), "RJC from the computer: failed, nothing more");
+            d50_transfer_stop();
+        }
+
+        // leaving the menu halfway gives up with RJC
+        d50_transfer(D50_XFER_DUMP);
+        next();
+        d50_transfer_stop();
+        check(is_short(next(), kRjc) && d50_transfer_state() == D50_XFER_IDLE, "stop: RJC, idle");
+
+        // Bulk Dump.O: DT1s one-way, no waiting
+        check(d50_transfer(D50_XFER_DUMP_O) == 1, "Bulk Dump.O starts");
+        {
+            uint32_t at = 2U << 14;
+            bool ok = true;
+            for (;;) {
+                Bytes f = next();
+                if (f.empty()) break;
+                const unsigned len = f.n - 10U;
+                if (!is_data(f, kDt1, at, len) || !same(f, at, len)) ok = false;
+                at += len;
+            }
+            check(ok && at == (2U << 14) + whole, "DT1s of the whole bank, in order");
+            check(d50_transfer_state() == D50_XFER_DONE, "done with the last DT1");
+            d50_transfer_stop();
+        }
+
+        // Bulk Load: an RQD for 02 00 00 / 02 0F 00; the computer's WSD, DATs and EOD are taken and answered
+        check(d50_transfer(D50_XFER_LOAD) == 1, "Bulk Load starts");
+        {
+            Bytes w = next();
+            Bytes want;
+            want.put(0xF0).put(0x41).put(dev).put(0x14).put(kRqd);
+            const Bytes as = addr_size(2U << 14, 2U * 16384U + 15U * 128U);
+            for (unsigned i = 0; i < as.n; ++i) want.put(as.b[i]);
+            want.put(sum7(as.b, as.n)).put(0xF7);
+            check(w == want, "an RQD for 02 00 00, size 02 0F 00");
+            send(msg(kWsd, addr_size(2U << 14, 16), true));
+            check(is_short(next(), kAck) && d50_transfer_state() == D50_XFER_RUN, "its WSD: ACK, still under way");
+            send(msg(kEod, none(), false));
+            check(is_short(next(), kAck) && d50_transfer_state() == D50_XFER_DONE, "its EOD: ACK, done");
+            d50_transfer_stop();
+        }
+
+        // a computer's own request ends ours
+        d50_transfer(D50_XFER_DUMP_O);
+        send(msg(kRq1, addr_size(0, 448), true));
+        check(d50_transfer_state() == D50_XFER_FAIL, "an RQ1 meanwhile: the transfer failed");
+        while (!next().empty()) {}
+        d50_transfer_stop();
+    }
+
     printf("%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;
 }

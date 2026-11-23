@@ -95,6 +95,24 @@ void d50_device(unsigned id);
 int d50_sysex(const uint8_t *p, uint32_t n);
 unsigned d50_sysex_reply(uint8_t *frame);
 int d50_edit_poll(void);
+/* The D-50's Data Transfer menu (docs/D50-FIRMWARE.md, the table at 0x3822): the FM-1 starts a transfer of the whole internal memory (02 00 00:
+ * the bank in RAM, and the reverb data once a dump brought them), which a librarian that waits for the synth needs. D50_XFER_DUMP: Bulk Dump,
+ * a WSD, then a DAT of 256 bytes on each of the computer's ACKs, then EOD. D50_XFER_LOAD: Bulk Load, an RQD; the computer answers with its
+ * WSD and DATs. D50_XFER_DUMP_O: Bulk Dump.O, DT1s of 256 bytes one-way. D50_XFER_LOAD_O: Bulk Load.O, nothing is sent (DT1s are taken as
+ * they always are). d50_transfer: 1 when it started, 0 without a bank or an unknown item. The frames go out through d50_sysex_reply.
+ * d50_transfer_state: D50_XFER_RUN while under way, then _DONE (the last byte went, or came) or _FAIL (an RJC, or the computer asked for
+ * something else); d50_transfer_stop leaves the menu: a handshake under way gives up with RJC, and the state goes idle. Main loop. */
+#define D50_XFER_DUMP 0U
+#define D50_XFER_LOAD 1U
+#define D50_XFER_DUMP_O 2U
+#define D50_XFER_LOAD_O 3U
+#define D50_XFER_IDLE 0U
+#define D50_XFER_RUN 1U
+#define D50_XFER_DONE 2U
+#define D50_XFER_FAIL 3U
+int d50_transfer(unsigned item);
+unsigned d50_transfer_state(void);
+void d50_transfer_stop(void);
 /* The fault of the last D-50 frame d50_sysex took, then 0 until the next (main loop). The numbers are the D-50 firmware's error lines'
  * (v1.06, after "Error  Reject"): its screen shows them (issue #25). */
 #define D50_ERR_ADDRESS 4U                        /* Invalid Data Address: an RQ1 or RQD of nothing there */

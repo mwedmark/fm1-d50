@@ -830,6 +830,14 @@ uint8_t reverb_data[kReverbBytes / 2U] D50_POOL;
 bool reverb_have;
 bool in_reverb(uint32_t a) { return a >= kReverbAt && a - kReverbAt < kReverbBytes; }
 
+// A transfer the FM-1 itself started, as the D-50's Data Transfer menu does (d50_transfer): the item, and how it stands.
+struct Xfer {
+    unsigned item;
+    unsigned state;                               // D50_XFER_IDLE, _RUN, _DONE, _FAIL
+} xfer;
+void xfer_end(unsigned state) { if (xfer.state == D50_XFER_RUN) xfer.state = state; }
+bool xfer_loads() { return xfer.state == D50_XFER_RUN && (xfer.item == D50_XFER_LOAD || xfer.item == D50_XFER_LOAD_O); }
+
 uint32_t addr_of(const uint8_t *a) { return static_cast<uint32_t>(a[0]) << 14 | static_cast<uint32_t>(a[1]) << 7 | a[2]; }
 // the byte at an address, nullptr where nothing is
 uint8_t *byte_at(uint32_t a)
@@ -889,6 +897,7 @@ void write_at(uint32_t a, const uint8_t *d, unsigned len)
             const uint32_t r = a + i - kReverbAt;
             uint8_t &w = reverb_data[r / 2U];
             w = static_cast<uint8_t>((r & 1U) ? (w & 15U) | (d[i] & 15U) << 4 : (w & 0xF0U) | (d[i] & 15U));
+            if (r == kReverbBytes - 1U && xfer_loads()) xfer.state = D50_XFER_DONE;   // (the last byte of a whole memory: Bulk Load.O is done)
             continue;
         }
         uint8_t *b = byte_at(a + i);
@@ -913,10 +922,13 @@ struct Reply {
     unsigned sent;
     // the receiving side: a WSD was taken (DATs and the EOD are expected)
     bool receiving;
+    // the Data Transfer menu's own start (d50_transfer): the WSD or RQD that goes out first (kWsd, kRqd), 0 none; its size
+    uint8_t first;
+    uint32_t first_size;
 } reply;
 
 void answer(uint8_t dev, uint8_t cmd) { reply.answer = cmd; reply.answer_dev = dev; }   // (dev: the frame's, which is ours: d50_sysex)
-void hs_stop() { reply.go = reply.eod = reply.waiting = reply.receiving = false; reply.sent = 0; if (reply.cmd == kDat) reply.left = 0; }
+void hs_stop() { reply.go = reply.eod = reply.waiting = reply.receiving = false; reply.first = 0; reply.sent = 0; if (reply.cmd == kDat) reply.left = 0; }
 }  // namespace
 
 static uint8_t device_id;                       // d50_device: the basic channel less one (issue #51)
@@ -940,6 +952,7 @@ static void d50_handshake(const uint8_t *p, uint32_t n)
     case kRqd: {                                  // 41 dev 14 41 a a a s s s sum: the other side asks for data
         if (n != 11U) { sysex_error = D50_ERR_FORMAT; answer(dev, kRjc); return; }
         if (roland_sum(p + 4, 6U) != p[10]) { sysex_error = D50_ERR_SUM; answer(dev, kErr); return; }
+        if (cmd == kRqd || !xfer_loads()) xfer_end(D50_XFER_FAIL);   // (the computer's own request ends ours; its WSD answers our Bulk Load's RQD)
         hs_stop();
         reply.left = 0;                           // (an RQ1's answer under way ends too)
         const uint32_t a = addr_of(p + 4);
@@ -969,13 +982,14 @@ static void d50_handshake(const uint8_t *p, uint32_t n)
         return;
     }
     case kEod:                                    // 41 dev 14 45: the other side's data ends
+        if (xfer_loads()) xfer.state = D50_XFER_DONE;
         reply.receiving = false;
         answer(dev, kAck);
         return;
     case kAck:                                    // our DAT (or EOD) arrived
         if (!reply.waiting) return;
         reply.waiting = false;
-        if (reply.eod) { hs_stop(); return; }     // (the EOD's ACK: done)
+        if (reply.eod) { xfer_end(D50_XFER_DONE); hs_stop(); return; }     // (the EOD's ACK: done)
         reply.at += reply.sent;
         reply.left -= reply.sent;
         reply.sent = 0;
@@ -986,6 +1000,7 @@ static void d50_handshake(const uint8_t *p, uint32_t n)
         if (reply.waiting) { reply.waiting = false; reply.go = true; }
         return;
     case kRjc:                                    // the other side ends the transfer
+        xfer_end(D50_XFER_FAIL);
         hs_stop();
         return;
     default:
@@ -1027,6 +1042,7 @@ extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
             return 1;
         }
         if (size > end_of(a) - a) size = end_of(a) - a;
+        xfer_end(D50_XFER_FAIL);
         hs_stop();                                // (a handshake under way ends)
         reply.dev = p[1];
         reply.cmd = kDt1;
@@ -1047,6 +1063,22 @@ extern "C" unsigned d50_sysex_reply(uint8_t *frame)
         frame[5] = 0xF7;
         reply.answer = 0;
         return 6U;
+    }
+    if (reply.first) {                            // the Data Transfer menu's WSD (Bulk Dump) or RQD (Bulk Load): F0 41 dev 14 cmd a a a s s s sum F7
+        const uint32_t at = kInternal, size = reply.first_size;
+        frame[2] = reply.dev;
+        frame[4] = reply.first;
+        frame[5] = static_cast<uint8_t>(at >> 14 & 127U);
+        frame[6] = static_cast<uint8_t>(at >> 7 & 127U);
+        frame[7] = static_cast<uint8_t>(at & 127U);
+        frame[8] = static_cast<uint8_t>(size >> 14 & 127U);
+        frame[9] = static_cast<uint8_t>(size >> 7 & 127U);
+        frame[10] = static_cast<uint8_t>(size & 127U);
+        frame[11] = roland_sum(frame + 5, 6U);
+        frame[12] = 0xF7;
+        if (reply.first == kWsd) reply.waiting = true;   // (the computer's ACK lets the first DAT go: kAck)
+        reply.first = 0;
+        return 13U;
     }
     if (reply.cmd == kDat && !reply.go) return 0; // (the handshake: waiting for the other side's ACK)
     if (reply.cmd == kDat && reply.eod) {         // F0 41 dev 14 45 F7
@@ -1074,8 +1106,59 @@ extern "C" unsigned d50_sysex_reply(uint8_t *frame)
     } else {
         reply.at += len;
         reply.left -= len;
+        if (!reply.left) xfer_end(D50_XFER_DONE); // (Bulk Dump.O's last DT1; an RQ1's answer is no transfer)
     }
     return 10U + len;
+}
+
+// The D-50's Data Transfer menu (docs/D50-FIRMWARE.md, the table at 0x3822): the FM-1 starts the transfer itself, which a librarian that
+// waits for the synth (D50 Librarian's download) needs. The whole memory, from 02 00 00, always the D-50's own size (02 0F 00) when the bank
+// is whole: the 64 patches and the reverb data, which are sent as zeros (value_at) when no dump brought them, so that a librarian that
+// expects the whole memory takes the dump. (An RQ1 or RQD still answers only what is there.)
+extern "C" int d50_transfer(unsigned item)
+{
+    if (!ready || !bank_patches || item > D50_XFER_LOAD_O) return 0;
+    xfer_end(D50_XFER_FAIL);
+    hs_stop();
+    reply.left = 0;
+    reply.answer = 0;
+    reply.dev = device_id;
+    xfer.item = item;
+    xfer.state = D50_XFER_RUN;
+    const uint32_t size = bank_patches == D50_BANK_PATCHES ? kReverbAt + kReverbBytes - kInternal : end_of(kInternal) - kInternal;
+    switch (item) {
+    case D50_XFER_DUMP:                           // WSD, then a DAT on each ACK, then EOD
+        reply.cmd = kDat;
+        reply.at = kInternal;
+        reply.left = size;
+        reply.first = kWsd;
+        reply.first_size = size;
+        break;
+    case D50_XFER_LOAD:                           // RQD: the computer answers with its WSD and DATs (d50_handshake takes them)
+        reply.first = kRqd;
+        reply.first_size = kReverbAt + kReverbBytes - kInternal;   // (the D-50's own 02 0F 00)
+        break;
+    case D50_XFER_DUMP_O:                         // DT1s of 256 bytes
+        reply.cmd = kDt1;
+        reply.at = kInternal;
+        reply.left = size;
+        break;
+    default:                                      // Bulk Load.O: DT1s taken in order, as they always are
+        break;
+    }
+    return 1;
+}
+
+extern "C" unsigned d50_transfer_state(void) { return xfer.state; }
+
+extern "C" void d50_transfer_stop(void)           // the menu left: a handshake under way gives up (RJC), the state goes idle
+{
+    if (xfer.state == D50_XFER_RUN) {
+        if (xfer.item == D50_XFER_DUMP || xfer.item == D50_XFER_LOAD) answer(device_id, kRjc);
+        hs_stop();
+        reply.left = 0;
+    }
+    xfer.state = D50_XFER_IDLE;
 }
 
 extern "C" int d50_edit_poll(void)

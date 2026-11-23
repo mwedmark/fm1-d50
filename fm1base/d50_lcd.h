@@ -180,7 +180,7 @@ static void lcd_message(const char *a, const char *b)
 
 /* The edit pages (issue #31, the first of #8): the firmware's title (16 characters, 0xF940 on) above its parameters line, each value in the
  * template's three $ columns from a byte of the patch block. The title line's layout (the patch number at the right) is ours. */
-enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_MIDI, LCD_PAGES, LCD_PAGE_TUNE = LCD_PAGES };   /* (the tune page is SEL's, not EDIT's: #54) */
+enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_MIDI, LCD_PAGE_TRANSFER, LCD_PAGES, LCD_PAGE_TUNE = LCD_PAGES };   /* (the tune page is SEL's, not EDIT's: #54) */
 enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE, LCD_SHOW_ONOFF, LCD_SHOW_CONTROL };   /* the value; the value + 1; the chase mode's name;
                                                                                         * ON or OFF; MIDI-1's Control (#60: 0x7CB6, 6 each) */
 typedef struct {
@@ -203,6 +203,8 @@ static const lcd_page_t lcd_pages[LCD_PAGES] = {
      * left to right */
     {"MIDI Channel", "BasicCH$$$ Omni$$$ Ctrl$$$$$$ Local$$$", 4,
      {{0, 0, 15, 7, LCD_SHOW_NUM1}, {1, 0, 1, 15, LCD_SHOW_ONOFF}, {2, 0, 2, 23, LCD_SHOW_CONTROL}, {3, 0, 1, 35, LCD_SHOW_ONOFF}}, 1},
+    /* the Data Transfer menu (lcd_transfer_screen below; app.c's page_edit takes K1 as the item): its own screen, no fields here */
+    {"Data Transfer", "", 1, {{0, 0, 3, 0, LCD_SHOW_NUM}}, 0},
 };
 static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p, const uint8_t *own)
 {
@@ -237,6 +239,27 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
             lcd_put(1, f->col, t, 3);
         }
     }
+}
+
+/* The Data Transfer menu (docs/D50-FIRMWARE.md, the table at 0x3822: the D-50 shows it on its Tran key; here an EDIT page, K1 the item, SAVE
+ * as Enter): the items of the firmware's menu that go over MIDI, in the order of d50.h D50_XFER_*. state is d50.h's D50_XFER_*: a transfer
+ * under way says what it waits for. The D-50's own text is not read from the firmware, so the words are ours. */
+static void lcd_transfer_screen(char memory, uint32_t program, uint32_t item, uint32_t state)
+{
+    static const char *const items[4] = {"Bulk Dump", "Bulk Load", "Bulk Dump.O", "Bulk Load.O"};
+    char t[4];
+    lcd_clear();
+    lcd_put(0, 0, "Data Transfer", 16);
+    t[0] = memory;
+    t[1] = '-';
+    t[2] = (char)('1' + program / 8u % 8u);
+    t[3] = (char)('1' + program % 8u);
+    lcd_put(0, 36, t, 4);
+    lcd_put(1, 0, items[item < 4u ? item : 0u], 12);
+    if (state == 1u)                                      /* D50_XFER_RUN */
+        lcd_put(1, 14, item == 1u || item == 3u ? "Waiting for data" : "Sending ...", 20);
+    else
+        lcd_put(1, 14, "Press SAVE to start", 22);
 }
 
 /* The TUNE/FUNCTION page (issue #54, SEL): the firmware's Master Tune and Key Transpose lines (0x7515 on), the tune 0..100 as 427.5 .. 452.6 Hz (0.251 Hz a step) */
