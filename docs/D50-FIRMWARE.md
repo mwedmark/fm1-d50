@@ -153,8 +153,23 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
     - **Controllers** are looked up at 0x5E55 (11 keys, handlers at 0x5E60): 123 All Notes Off (0x5F3C), 1 lever (0x5E78), 5 portamento time (0x5EF9), 6 data entry
       (0x5EDE), 64 hold (0x5F0D), 65 portamento (0x5E83), 122 Local (0x5F20, the basic channel's own), 98/99 NRPN (0x5ECF), 100/101 RPN (0x5ED8, 0x5ED2), and any other
       to 0x5E8E (likely the assignable controllers). **There is no volume (CC 7) on SepCH**, and no program change.
-  - **Which tone is which (read from the pools, not checked in the voice code).** R7 = 2 is the 16-voice pool of the whole modes. R7 = 1 takes the slots 8..15, which
-    Dual mirrors to 0..7 (0x2A75). So the basic channel's 0x2B2F would be the Lower tone, and SepCH's 0x2B29 (R7 = 0) the Upper.
+  - **Which tone is which** (verified 2026-11-23): **the basic channel plays the Lower, SepCH the Upper.**
+    - **The pools.** R7 (0xFEF7) picks one. R7 = 2 is the 16-voice pool of the whole modes: the free list at 0xC330 with 16 entries (0x2DC4, 0x2DE8, 0x2D9E).
+      R7 = 0 is the same list with 8, and R7 = 1 the list at 0xC338 with 8. The R7 = 1 slots are 8..15, which Dual mirrors to 0..7 (0x2A75). 0x61A3 gives a voice's
+      R7 back as 1 when its slot has bit 3 set.
+    - **The pools' tones, from the patch's Hold Mode and Portamento Mode.** Both are U, L, UL (0, 1, 2): bytes 20 and 21 have display type 0x53, the 3-character list
+      at 0x7A70[3] = 0x7B92, ` U `, ` L `, ` UL`.
+      - In the split and separate modes, 0x249F gives the hold flag 0xFE33.2 the pedal unless Hold Mode is L, and 0xFE33.3 unless it is U. So 0xFE33.2 is
+        the Upper's and 0xFE33.3 the Lower's.
+      - A note-on (0x2D00) marks a voice with bit 3 of its slot (8..15) for 0xFE33.3, else for 0xFE33.2. **So slots 8..15, R7 = 1, are the Lower.**
+      - The portamento flags agree. 0x2462 gives 0xFE33.0 the switch unless Portamento Mode is L, and 0xFE33.1 when it is L or UL, so 0xFE33.0 is the Upper's and 0xFE33.1
+        the Lower's. 0x2B5C reads 0xFE33.1 for R7 = 1 and 0xFE33.0 otherwise.
+    - **The pedals and switches, by channel.** The basic channel's CC 64 (0x4E30) sets 0xFE33.7, the Lower's source in 0x249F. Outside separate mode it also sets
+      0xFE33.6, the Upper's. SepCH's CC 64 (0x5F0D) sets only 0xFE33.6. The portamento switch goes the same way: the basic channel's CC 65 (0x4E49, 0x435F) sets
+      0xFE33.5, the Lower's, and SepCH's (0x5E83, 0x5F5A) sets 0xFE33.4, the Upper's.
+    - So in SEP the basic channel's 0x2B2F (R7 = 1) is the Lower, and SepCH's 0x2B29 (R7 = 0) and SEP-S's fixed voice 0 (0x2B40) are the Upper.
+    - **Hold Mode (pb[21]) is not in PicoFaceD5**, where the pedal holds both tones. In the split and separate modes the D-50 holds only the tones Hold Mode names.
+      Portamento Mode (pb[20]) is in it (`porta_mode_on`).
   - **SepCH equal to the basic channel:** both paths take the message, so it plays both tones with separate controller sets (not tried). **SepCH OFF:** only the
     basic channel's tone sounds.
   - **The FM-1 follows this (#62).** PicoFaceD5 had played SEP and SEP-S on one channel as a split with a monophonic Lower, as the VST did.
@@ -163,7 +178,7 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
     - `d50.cpp`: `d50_sep` and `d50_sep_channel`, with SepCH's own bender, hold pedal, portamento and RPN. The basic channel's lever, aftertouch, bender and
       portamento go to the Lower only.
     - `app.c`: a message on SepCH goes to `d50_sep` and then through the normal channel test, as the firmware's two paths have it.
-    - It rests on the reading that the basic channel's pool is the Lower. No patch in fm1-d50's banks uses 3 or 8.
+    - The basic channel's tone is the Lower (verified, above). No patch in fm1-d50's banks uses 3 or 8.
 - **System byte 14 (0xC5CE) is the MIDI-1 page's "Control"** (verified 2026-11-23). The page has BasicCH, Control, Omni and Local (texts at 0x7474), and its values
   are the strings at 0x7CB6, six characters each: ` B.CH `, ` G.CH ` and `MdeOff`.
   - **It picks the control channel in mono, 0x4BE9:** the program change, channel pressure and controllers (CC 0-121) are taken in mono only on that channel; in
@@ -403,7 +418,7 @@ The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps,
 First recursive descent from reset, the vectors and the two tables: 6 122 instructions in 367 functions, about 14.8 KB of the 56 KB above 0x2000/0x80 that are code and data
 together. The rest is reached by indirect jumps and by handlers installed into the RAM vectors at run time, which the descent does not follow. To do, in this order:
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
-2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 122-127, the mono mode, system byte 14 (Control), the key modes' order and SepCH are done; 0xFE60/0xFE62, P0.1, TxCH's sending, and which tone each pool is (the voice code) not), the reverb data's
+2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 122-127, the mono mode, system byte 14 (Control), the key modes' order and SepCH are done; 0xFE60/0xFE62, P0.1, TxCH's sending and Hold Mode in the engine not; which tone each pool is, done), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
 3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) (Done: 0x3EB4 is parameter
    0x66's access routine, Lowr/Uppr choose X's tone; 0xFE47/0xFE3F are LCD refresh requests.) (Done: power-on is Valu, 01.)
