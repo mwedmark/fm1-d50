@@ -94,6 +94,23 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
   | 127 Poly | 0x4EAC | value 0, not with Control MdeOff; poly (0xFE34.1), mono off, with omni off 0xFE42 = 0; then as 124 |
 
   Every mode message ends with the notes off, as the MIDI specification asks.
+- **Active Sensing** (verified 2026-11-23, the tick's length assumed).
+  - **The watch:**
+    - The receive interrupt (0x4ADF) zeroes the counter 0xFE52 on every byte (0x4AE1), and an FE sets 0xFE31.1 (0x4AFC): the watch armed.
+    - The timer interrupt at 0x2734, the tick Chase Play's repeats run on, adds 6 to 0xFE52 while it is armed (0x2741). Its overflow, the 43rd tick without a
+      byte, sets 0xFE31.2.
+    - With Chase's tick taken as 16 ms (an assumption, see Chase Play), that is about 0.69 s. MIDI asks for 300 ms; the D-50 is slower.
+  - **The loss**, in the main loop (0x574F, from 0x240F), clears both flags, so the watch waits for the next FE. Then:
+    - the notes off (0x60D5);
+    - the running status, mono's last channel and the RPN back (0x5BEC);
+    - SepCH's controller set back (0x5BB7);
+    - the controllers from the panel's own again (0x5D5B, 0x327D): the bender, lever, aftertouch and volume where the panel's are;
+    - both tones' or each tone's chip registers (0x5D78, 0x5C7B).
+  - **The FM-1 follows this (#68):**
+    - `app.c` arms the watch on an FE and dates every message in `midi_in`. After 688 ms it calls `d50_sensing_lost`. `d50.cpp` `sensing_lost` releases every
+      note (the pedal's, the mono parts', SepCH's), centres the benders, sets the lever and aftertouch to 0 and volume to 127 (the FM-1 has no panel
+      controllers to read), lifts the pedals, and nulls the RPN.
+    - Mono's channel count is kept (the D-50's 0x5BEC zeroes 0xFE42; not followed).
 - **The RPNs, 0xFE60..0xFE63** (verified 2026-11-23).
   - **The state:** 0xFE60/0xFE61 hold the RPN's LSB and MSB (CC 100, 101), so the word 0xFE60 is MSB × 256 + LSB. 0xFE62/0xFE63 hold Fine Tuning's data entry, LSB
     and MSB. 0xFFFF in both words is "nothing": the RPN null, and no byte received (bit 7 set).

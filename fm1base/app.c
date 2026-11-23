@@ -85,6 +85,12 @@ static PLAT_RAM_CODE uint32_t resample(int32_t *lr, uint32_t n, uint32_t at, int
 static volatile int8_t joy_asked[2] = {-1, -1};
 static volatile int8_t omni_asked = -1;      /* CC 124 (0, omni off) or 125 (1, on), from midi_in (#59) */
 static volatile int8_t local_asked = -1;     /* CC 122: 0 Local off, 1 on, from midi_in (#67) */
+/* Active Sensing (#68), as the D-50's (0x4AE1, 0x4AFC, 0x2741, 0x574F): any message zeroes the time, an FE arms the watch, and 43 of the
+ * firmware's ticks without one (16 ms assumed: about 0.69 s) end the notes and set the controllers back (d50_sensing_lost); disarmed
+ * until the next FE */
+#define SENSING_MS 688u
+static volatile uint32_t sensing_ms;         /* plat_ms of the last message in */
+static volatile uint8_t sensing_on;          /* an FE came since the last loss */
 /* The D-50's mono mode (#60, docs/D50-FIRMWARE.md): MIDI's state, not kept (the D-50's is in RAM: power-on is neither mono nor poly) */
 static volatile uint8_t mono_m;              /* mono's channel count, 1..8 (CC 126); 0 not mono */
 static volatile uint8_t poly_rx;             /* a Poly (CC 127) came: the Solo key modes play polyphonically */
@@ -102,6 +108,9 @@ static void midi_in(void)                    /* audio interrupt: the packets tha
     int port;
     while (plat_midi_in(&pkt, &port)) {
         uint32_t st = (pkt >> 8) & 0xFFu, d1 = (pkt >> 16) & 0x7Fu, d2 = (pkt >> 24) & 0x7Fu, part = 0, play = 1, control = 1;
+        sensing_ms = plat_ms();                  /* (any message, the clock too: 0x4AE1) */
+        if (st == 0xFEu)
+            sensing_on = 1;                      /* Active Sensing: the watch armed (0x4AFC, #68) */
         if (st == 0xF8u || st == 0xFEu)
             continue;
         if (st < 0xF0u) {                        /* the D-50's channel test (0x4B81, #51, #60): the channel less the basic channel is the part */
@@ -756,6 +765,19 @@ static void input(void)
             seen = v;
             ui.tune_off = (int8_t)((int32_t)(v & 255u) - 50);
             ui.redraw = 1;
+        }
+    }
+    {                                            /* Active Sensing lost (#68): the sender or the cable is gone */
+        const uint32_t last = sensing_ms;        /* (read before the time: a message landing between them cannot look 4 billion ms old) */
+        if (sensing_on && (int32_t)(plat_ms() - last) >= (int32_t)SENSING_MS) {
+            uint32_t f = plat_lock(), lost = sensing_on && sensing_ms == last;
+            if (lost) {
+                sensing_on = 0;
+                d50_sensing_lost();
+            }
+            plat_unlock(f);
+            if (lost)
+                app_say("MIDI", "SENSING LOST");
         }
     }
     {                                            /* CC 122: the MIDI Channel page's Local, as the D-50's MIDI-1 page (#67) */

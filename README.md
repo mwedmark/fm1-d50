@@ -121,6 +121,7 @@ a librarian can make one.
 | CC98, CC99 | An NRPN: the data entries after it are not taken, until the next RPN |
 | CC120, CC123 | All sound off, all notes off |
 | CC122 | Local, as on a D-50: 0 off, 127 on, on the basic channel (above) |
+| Active Sensing (FE) | As on a D-50: after an FE, about 0.7 s with no MIDI at all ends the notes and sets the bender, lever, aftertouch, volume, pedal and RPN back to rest (the screen says SENSING LOST), until the next FE |
 | CC124, CC125 | Omni off, omni on, as on a D-50: only on the basic channel and with the value 0. They set the MIDI Channel page's Omni (kept with SAVE) and turn the notes off |
 | CC126, CC127 | Mono (the value: the channels) and Poly (value 0), as on a D-50: only on the basic channel, not with Control MdeOff (above) |
 | SysEx DT1, RQ1 | Roland, model 14h: the temporary area at 00 00 00 and the internal memory at 02 00 00 (below) |

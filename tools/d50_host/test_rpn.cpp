@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Checks the RPNs in the glue as the D-50 takes them (d50/d50.cpp control; issue #66, the firmware's 0x4D58..0x4DC8): RPN 0 the bender
 // range, RPN 1 Fine Tuning as Master Tune once both data entry bytes have come, an NRPN shutting out the data entries until the next RPN,
-// and d50_rpn_reset. The real glue is compiled in, on your own data.
+// d50_rpn_reset, and d50_sensing_lost (Active Sensing, #68). The real glue is compiled in, on your own data.
 //
 //   test_rpn <file.fmd5>            (tools/d50_host/test_sysex.ps1 -Test test_rpn builds and runs it)
 #include <stdint.h>
@@ -123,6 +123,34 @@ int main(int argc, char **argv)
     check(ctl.tune == 25, "then both: 25");
     d50_tune(50);
     run();
+
+    printf("Active Sensing lost (#68)\n");
+    d50_note(60, 100);
+    d50_cc(64, 127);
+    d50_note(64, 100);
+    d50_note(64, 0);                              // (held by the pedal)
+    d50_bend(16383);
+    d50_cc(1, 100);
+    d50_cc(7, 40);
+    d50_pressure(90);
+    cc(101, 0);
+    cc(100, 0);
+    run();
+    check(patch->keys_down() > 0 && ctl.hold && ctl.bend == 16383U && ctl.volume == 40U, "notes, the pedal, the bender and volume set");
+    d50_sensing_lost();
+    run();
+    run();                                        // (the lower tone's note-offs come 128 samples late)
+    check(patch->keys_down() == 0, "the notes ended, the held one too");
+    check(!ctl.hold && ctl.bend == 8192U && ctl.wheel == 0U && ctl.pressure == 0U && ctl.volume == 127U, "the pedal up, the bender centred, "
+          "the lever and aftertouch at rest, volume full");
+    const float range_before = bend_semis(16383);
+    cc(6, 5);                                     // (RPN 0 was selected before the loss)
+    run();
+    check(bend_semis(16383) == range_before, "the RPN null: a data entry does nothing");
+    d50_note(62, 100);
+    run();
+    check(patch->keys_down() > 0, "and it plays on");
+    d50_note(62, 0);
 
     printf("%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;

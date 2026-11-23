@@ -57,6 +57,9 @@ void d50_transpose(int semitones);
  * D-50 does on a basic channel change and when mono starts with Control G.CH. */
 unsigned d50_midi_tune(void);
 void d50_rpn_reset(void);
+/* Active Sensing lost (issue #68, the D-50's 0x574F): the notes off, the bender, lever, aftertouch, volume and pedal back to rest, the RPN
+ * null. The caller times it (app.c: an FE arms it, any message resets it). */
+void d50_sensing_lost(void);
 /* The D-50's MIDI modes (issue #60, its firmware's rows at 0x69EC): D50_MODE_NORMAL the power-on state (the patch's key mode, its Solo too);
  * D50_MODE_POLY after a received Poly (the Solo key modes play polyphonically); D50_MODE_MONO, mode 4: channels 1..8 parts, each one note at
  * a time with its own bender, in any key mode. A change turns the notes off. d50_note_ch and d50_bend_ch take the part, the channel less the

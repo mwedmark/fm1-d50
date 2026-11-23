@@ -121,7 +121,7 @@ unsigned guard_hold, guard_calm;
 int guard_cap = 16;
 
 enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kEvTune = 6, kEvTranspose = 7, kEvMode = 8, kEvSep = 9,
-                  kEvRpnReset = 10, kQueue = 64 };
+                  kEvRpnReset = 10, kEvSensing = 11, kQueue = 64 };
 // The mono mode (issue #60): up to 8 parts, each one note at a time with its own bend. The audio interrupt's.
 constexpr unsigned kMonoParts = 8;
 struct Mono {
@@ -368,6 +368,7 @@ extern "C" void d50_mode(unsigned mode, unsigned channels)
 }
 extern "C" void d50_panic(void) { push(kEvPanic << 24); }
 extern "C" void d50_rpn_reset(void) { push(kEvRpnReset << 24); }
+extern "C" void d50_sensing_lost(void) { push(kEvSensing << 24); }
 extern "C" void d50_cc(unsigned cc, unsigned value) { push(kEvCc << 24 | (cc & 127U) << 8 | (value & 127U)); }
 extern "C" unsigned d50_midi_tune(void) { return tune_serial << 8 | static_cast<unsigned>(ctl.tune); }
 extern "C" void d50_tune(unsigned value) { push(kEvTune << 24 | (value > 100U ? 100U : value)); }
@@ -576,6 +577,35 @@ void sep_control(unsigned cc, unsigned v)
         }
         break;
     }
+}
+// Active Sensing lost (#68, the firmware's 0x574F): the notes off (released, 0x60D5), the controllers back to the panel's (0x327D: the
+// bender centred, the lever and aftertouch at rest, volume full; the pedal up), the RPN null (0x5BEC), SepCH's set too (0x5BB7)
+void sensing_lost()
+{
+    for (unsigned k = 0; k < mono.parts; ++k)
+        if (mono.note[k] >= 0) patch->note_off(mono.note[k]);
+    mono_clear();
+    for (int n = 0; n < 128; ++n) {
+        if (bit_of(ctl.down, n) || bit_of(ctl.held, n)) release_note(n);
+        if (bit_of(sep.down, n) || bit_of(sep.held, n)) patch->sep_note_off(n);
+    }
+    for (unsigned i = 0; i < 4; ++i) ctl.down[i] = ctl.held[i] = sep.down[i] = sep.held[i] = 0;
+    ctl.hold = sep.hold = false;
+    ctl.bend = sep.bend = 8192;
+    for (unsigned k = 0; k < kMonoParts; ++k) mono.bend[k] = 8192;
+    ctl.wheel = ctl.pressure = 0;
+    ctl.volume = 127;
+    ctl.rpn = sep.rpn = 0x3FFF;
+    ctl.nrpn = sep.nrpn = false;
+    ctl.fine_msb = ctl.fine_lsb = 0xFF;
+    apply_wheel();
+    apply_pressure();
+    if (patch->separate()) {
+        patch->set_tone_wheel(0, 0.0f);
+        patch->set_tone_aftertouch(0, 0.0f);
+    }
+    apply_bend();
+    apply_volume();
 }
 void sep_event(unsigned type, unsigned d1, unsigned d2)
 {
@@ -1145,6 +1175,7 @@ extern "C" void d50_render(int32_t *out, unsigned n)
             break;
         }
         case kEvTune: ctl.tune = static_cast<int>(e & 127U); apply_bend(); break;
+        case kEvSensing: sensing_lost(); break;
         case kEvRpnReset:                        // (0x5BEC, 0x4F89: the RPN null, Fine Tuning's bytes not received; #66)
             ctl.rpn = 0x3FFF;
             ctl.fine_msb = ctl.fine_lsb = 0xFF;
