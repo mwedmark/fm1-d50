@@ -163,6 +163,13 @@ static void lcd_complete_screen(void)
     lcd_clear();
     lcd_put(1, 14, "Complete .", LCD_COLS);
 }
+/* The power-on message (issue #81), as the Owner's Manual shows it: the lower line under the upper's right half */
+static void lcd_boot_screen(void)
+{
+    lcd_clear();
+    lcd_put(0, 0, "******  Linear Synthesizer  D-50  ******", LCD_COLS);
+    lcd_put(1, 20, "Roland Corporation", LCD_COLS);
+}
 /* The panel's own messages (the D-50 has none of them: CHASE ON, LCD AMBER and so on): the lower line, from where "Complete ." stands,
  * over the screen that shows */
 static void lcd_message(const char *a, const char *b)
