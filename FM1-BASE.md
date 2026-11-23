@@ -94,6 +94,11 @@ The unchanged template builds to 90 608 B of image, 28 KB of RAM and 74 KB of po
 
 Without `data_lo` everything is as before. The template built with `data_lo = 0x5D000` runs in fm1-emu as the plain one does.
 
+**SysEx frames lost** (issue #84): fm1-base's main loop gave the updater (`ota_service`) a frame that came in after it had looked
+for one, and the updater dropped it, so 1 to 4 of a bank dump's 136 DT1s never reached the D-50 at any pace. The fix is on the
+fork's branch `sysex-race` (on `res-var`, mwedmark/fm1-base): build the D-50 with it. Measured after it: 0 of 2176 frames lost at
+100, 25, 5 and 0 ms between frames (README's cmd `0D` counts them).
+
 **Why 0x5B000.** The store may not use 0xE0000..0xFBFFF (the loader's staging) and the panel's calibration needs two sectors.
 The D-50's 534 088 bytes from 0x5B000 end at 0xDD648, so the panel's object is 0xDE000/0xDF000 and the settings 0xFC000/0xFD000.
 The app area is [0x4000, 0x5B000): 348 KB, an app slot of 352 188 B.

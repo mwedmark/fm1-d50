@@ -236,10 +236,63 @@ void app_panic(void) { d50_panic(); }
  *   F0 7D S F 02 0B 00 F7  ->  F0 7D S F 02 4B v0..v10 F7, each 5 x 7 bits (least significant first): v0..v8 d50_prof_sum (then from zero),
  *                              v9 CPU average | peak << 12 | CPU1's share << 24, v10 voices | limit << 8 | cores << 16,
  *                              v11 the audio blocks missed since the start (plat_xruns: a render past its half)
- *   F0 7D S F 02 0C bits F7 ->  F0 7D S F 02 4C 00 F7: leave out 1 the reverb, 2 the chorus, 4 the EQ */
+ *   F0 7D S F 02 0C bits F7 ->  F0 7D S F 02 4C 00 F7: leave out 1 the reverb, 2 the chorus, 4 the EQ
+ *   F0 7D S F 02 0D c F7    ->  F0 7D S F 02 4D v0..v5 m0..m19 u0..u19 F7 (issue #84: the SysEx that came in): v0 the frames that
+ *                              reached the app, v1 their DT1s, v2 the DT1s not of the D-50's 264 or 136 bytes; what the USB interrupt saw
+ *                              (app_sysex_byte): v3 the F0s, v4 the F7s, v5 the bytes (5 x 7 bits each, as cmd 11's). m the 256-byte
+ *                              places of the internal memory (02 00 00 + 256 k, k 0..135) a DT1 to the app began at, u those the
+ *                              interrupt saw, 7 a byte (k 0 the lowest bit of m0). c 1: all of it from zero after the answer */
 static uint32_t cpu_peak;                        /* the highest plat_cpu_pct since the last cmd 11 (app_frame) */
+#define SXLOG_PLACES 136u                        /* the internal memory and the reverb data in 256-byte DT1s: 02 00 00 .. 04 0E 7F */
+static struct {
+    uint32_t frames, dt1, odd;
+    uint8_t at[(SXLOG_PLACES + 6u) / 7u];
+} sxlog;
+static volatile struct {                         /* the USB interrupt's (app_sysex_byte) */
+    uint32_t f0, f7, bytes, pos, addr;
+    uint8_t at[(SXLOG_PLACES + 6u) / 7u];
+} sxisr;
+void app_sysex_byte(uint8_t b)                   /* every SysEx byte from USB, F0 and F7 too: USB interrupt (plat.h APP_SYSEX_BYTE) */
+{
+    const uint32_t pos = sxisr.pos;
+    sxisr.bytes++;
+    if (b == 0xF0u) {
+        sxisr.f0++;
+        sxisr.pos = 1;
+        return;
+    }
+    if (b == 0xF7u) {
+        sxisr.f7++;
+        sxisr.pos = 0;
+        return;
+    }
+    if (!pos)
+        return;
+    sxisr.pos = pos + 1u;                        /* F0 41 dev 14 12 a a a: the address in bytes 5..7 */
+    if (pos >= 5u && pos <= 7u)
+        sxisr.addr = (pos == 5u ? 0u : sxisr.addr << 7) | b;
+    if (pos == 7u && sxisr.addr >= 0x8000u && (sxisr.addr - 0x8000u) % 256u == 0u && (sxisr.addr - 0x8000u) / 256u < SXLOG_PLACES) {
+        const uint32_t k = (sxisr.addr - 0x8000u) / 256u;
+        sxisr.at[k / 7u] = (uint8_t)(sxisr.at[k / 7u] | 1u << (k % 7u));
+    }
+}
+static void sxlog_frame(const uint8_t *p, uint32_t n)   /* every frame app_sysex is given (#84) */
+{
+    sxlog.frames++;
+    if (n >= 8u && p[0] == 0x41u && p[2] == 0x14u && p[3] == 0x12u) {
+        const uint32_t a = (uint32_t)p[4] << 14 | (uint32_t)p[5] << 7 | p[6];
+        sxlog.dt1++;
+        if (n != 264u && n != 136u)
+            sxlog.odd++;
+        if (a >= 0x8000u && (a - 0x8000u) % 256u == 0u && (a - 0x8000u) / 256u < SXLOG_PLACES) {
+            const uint32_t k = (a - 0x8000u) / 256u;
+            sxlog.at[k / 7u] = (uint8_t)(sxlog.at[k / 7u] | 1u << (k % 7u));
+        }
+    }
+}
 int app_sysex(const uint8_t *p, uint32_t n)
 {
+    sxlog_frame(p, n);
     if (d50_sysex(p, n))                         /* the D-50's own: DT1 and RQ1 (d50.h, issue #6); its answers go out in app_frame */
         return 1;
     if (n != 6u || p[0] != 0x7Du || p[1] != 'S' || p[2] != 'F' || p[3] != 2u)
@@ -259,6 +312,33 @@ int app_sysex(const uint8_t *p, uint32_t n)
         for (i = 0; i < 12u; i++)
             for (k = 0; k < 5u; k++)
                 *d++ = (uint8_t)((v[i] >> (7u * k)) & 0x7Fu);
+        *d = 0xF7;
+        (void)plat_sysex_send(r, sizeof r);
+        return 1;
+    }
+    if (p[4] == 13u) {
+        uint8_t r[6 + 6 * 5 + 2 * sizeof sxlog.at + 1] = {0xF0, 0x7D, 'S', 'F', 2, 0x4D}, *d = r + 6;
+        uint32_t v[6], i, k, f = plat_lock();
+        v[0] = sxlog.frames;
+        v[1] = sxlog.dt1;
+        v[2] = sxlog.odd;
+        v[3] = sxisr.f0;
+        v[4] = sxisr.f7;
+        v[5] = sxisr.bytes;
+        for (i = 0; i < 6u; i++)
+            for (k = 0; k < 5u; k++)
+                *d++ = (uint8_t)((v[i] >> (7u * k)) & 0x7Fu);
+        for (i = 0; i < sizeof sxlog.at; i++)
+            *d++ = sxlog.at[i];
+        for (i = 0; i < sizeof sxlog.at; i++)
+            *d++ = sxisr.at[i];
+        if (p[5] == 1u) {
+            memset(&sxlog, 0, sizeof sxlog);
+            sxisr.f0 = sxisr.f7 = sxisr.bytes = 0;  /* (pos and addr go on: a frame may be coming in) */
+            for (i = 0; i < sizeof sxlog.at; i++)
+                sxisr.at[i] = 0;
+        }
+        plat_unlock(f);
         *d = 0xF7;
         (void)plat_sysex_send(r, sizeof r);
         return 1;
