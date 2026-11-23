@@ -397,7 +397,9 @@ static struct {
     uint8_t page;                                /* the edit page (#31): d50_lcd.h LCD_PAGE_*, LCD_PAGE_PLAY none */
     uint8_t xfer_item;                           /* the Data Transfer page's item: d50.h D50_XFER_* (K1) */
     uint8_t xfer_on;                             /* a transfer started from the page is under way (d50_transfer) */
+    uint32_t boot_until;                         /* the power-on message (#81) until this plat_ms; 0 when it has gone */
 } ui;
+#define BOOT_MS 2000u                            /* how long the power-on message stays (ours: the D-50's time is not known) */
 #include "d50_lcd.h"
 /* A byte of the temporary area (the current patch, 7 blocks of 64: the upper's partial 1, partial 2 and common, the lower's, the patch block)
  * changed by step within lo..hi: a DT1 (d50_sysex, #6), so the sound follows. Returns the new value, -1 where there is no patch. */
@@ -924,7 +926,12 @@ static void draw(void)
     }
     cv_blit(0, 0);
     cv_begin(240, 120, C_BLACK);
-    if (!bound) {
+    if (ui.boot_until) {                         /* the D-50's power-on message (#81): always the LCD at true size, whatever the view */
+        uint32_t pitch = lcd_pitch();
+        lcd_scheme = lcd_scheme_of();
+        lcd_boot_screen();
+        lcd_draw((int32_t)(120u - lcd_height(pitch)) / 2, pitch);
+    } else if (!bound) {
         cv_text(10, 20, &FONT_M, "NO D-50 DATA", C_HI);
     } else if ((set.lcd & LCD_SHOWN) || ui.page != LCD_PAGE_PLAY) {   /* the D-50's play screen or an edit page (the FM-1 view: folded);
                                                                        * bank 1 the internal memory, the others cards */
@@ -998,6 +1005,7 @@ void app_ui_init(void)
 {
     touch_on(1);                                 /* velocity: the keys' readings on */
     lcd_fill(0, 0, 240, 240, C_BLACK);
+    ui.boot_until = (plat_ms() + BOOT_MS) | 1u;  /* (| 1: never 0, which means gone) */
     ui.redraw = 1;
 }
 
@@ -1056,6 +1064,10 @@ void app_frame(void)
     }
     if (ui.msg_until && now >= ui.msg_until) {
         ui.msg_until = 0;
+        ui.redraw = 1;
+    }
+    if (ui.boot_until && (int32_t)(now - ui.boot_until) >= 0) {   /* the power-on message gone: the chosen view */
+        ui.boot_until = 0;
         ui.redraw = 1;
     }
     if (ui.redraw) {

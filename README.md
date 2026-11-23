@@ -39,6 +39,10 @@ It is a work in progress. This README describes what works now and will grow wit
 
 ## The screen
 
+At start the screen shows the D-50's power-on message for two seconds, always in the LCD at true size and whatever view is chosen:
+`******  Linear Synthesizer  D-50  ******` above `Roland Corporation`, as in the D-50's Owner's Manual. Then the chosen view
+follows.
+
 HOME steps through three views:
 
 1. **The FM-1 screen**, with the patch, its name and the load. Later this becomes a view that uses the FM-1's screen for the D-50 in its own way.
