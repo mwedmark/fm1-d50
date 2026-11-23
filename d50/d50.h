@@ -115,6 +115,20 @@ void d50_handshake_poll(uint32_t ms);
 int d50_transfer(unsigned item);
 unsigned d50_transfer_state(void);
 void d50_transfer_stop(void);
+/* The internal memory kept (issue #22): bank 0 is the D-50's internal memory (the screen's I), and the app keeps a copy of it in the flash.
+ * d50_internal_from gives the engine the app's reader, called whenever bank 0 is unpacked (the bind, a bank change back to it): it fills the
+ * 64 patches (D50_BANK_PATCHES * D50_PATCH_BYTES) and the reverb data (D50_REVERB_BYTES: the D-50's nibbles two a byte, the low first) from
+ * that copy and returns what it filled, D50_INT_PATCHES and D50_INT_REVERB, or 0 for the factory bank. It must not touch a buffer it does not
+ * fill. d50_internal_serial counts the writes into the internal memory (02 00 00 .. 04 0E 7F) while bank 0 is current; d50_internal: its
+ * bytes now, the 64 patches (and *reverb the reverb data, or NULL when no dump brought them), or NULL unless bank 0 is current and whole.
+ * The other banks are the cards, as before: an edit of one lasts until another bank is chosen. Main loop. */
+#define D50_REVERB_BYTES 3008U
+#define D50_INT_PATCHES 1U
+#define D50_INT_REVERB 2U
+typedef unsigned (*d50_internal_reader)(uint8_t *patches, uint8_t *reverb);
+void d50_internal_from(d50_internal_reader reader);
+unsigned d50_internal_serial(void);
+const uint8_t *d50_internal(const uint8_t **reverb);
 /* The fault of the last D-50 frame d50_sysex took, then 0 until the next (main loop). The numbers are the D-50 firmware's error lines'
  * (v1.06, after "Error  Reject"): its screen shows them (issue #25). */
 #define D50_ERR_ADDRESS 4U                        /* Invalid Data Address: an RQ1 or RQD of nothing there */

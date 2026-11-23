@@ -187,9 +187,12 @@ static void lcd_message(const char *a, const char *b)
 
 /* The edit pages (issue #31, the first of #8): the firmware's title (16 characters, 0xF940 on) above its parameters line, each value in the
  * template's three $ columns from a byte of the patch block. The title line's layout (the patch number at the right) is ours. */
-enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_MIDI, LCD_PAGE_TRANSFER, LCD_PAGES, LCD_PAGE_TUNE = LCD_PAGES };   /* (the tune page is SEL's, not EDIT's: #54) */
-enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE, LCD_SHOW_ONOFF, LCD_SHOW_CONTROL };   /* the value; the value + 1; the chase mode's name;
-                                                                                        * ON or OFF; MIDI-1's Control (#60: 0x7CB6, 6 each) */
+enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_MIDI, LCD_PAGE_TRANSFER, LCD_PAGE_SETUP, LCD_PAGES,
+       LCD_PAGE_TUNE = LCD_PAGES };                                                          /* (the tune page is SEL's, not EDIT's: #54) */
+enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE, LCD_SHOW_ONOFF, LCD_SHOW_CONTROL, LCD_SHOW_STORE };   /* the value; the value + 1; the
+                                                                                        * chase mode's name; ON or OFF; MIDI-1's Control (#60:
+                                                                                        * 0x7CB6, 6 each); Auto or SAVE (#22) */
+enum { LCD_OWN_PATCH, LCD_OWN_MIDI, LCD_OWN_SETUP };   /* whose the values are: the patch block's, or app.c's (lcd_page_screen own[]) */
 typedef struct {
     uint8_t byte, lo, hi, col, show;                      /* the patch block's byte, its range, its column on the lower line, how shown */
 } lcd_field_t;
@@ -197,7 +200,7 @@ typedef struct {
     const char *title, *line;
     uint8_t fields;
     lcd_field_t f[4];
-    uint8_t own;                                          /* the values are not the patch's but the caller's (lcd_page_screen own[]) */
+    uint8_t own;                                          /* LCD_OWN_*: the values are the patch's, or the caller's (lcd_page_screen own[]) */
 } lcd_page_t;
 static const lcd_page_t lcd_pages[LCD_PAGES] = {
     {"", "", 0, {{0}}},
@@ -209,9 +212,12 @@ static const lcd_page_t lcd_pages[LCD_PAGES] = {
      * B.CH, G.CH, MdeOff; "Ctrl" for the room) and Local (#67). The title is the firmware's (0xF900's list); the line is ours, K1 to K4
      * left to right */
     {"MIDI Channel", "BasicCH$$$ Omni$$$ Ctrl$$$$$$ Local$$$", 4,
-     {{0, 0, 15, 7, LCD_SHOW_NUM1}, {1, 0, 1, 15, LCD_SHOW_ONOFF}, {2, 0, 2, 23, LCD_SHOW_CONTROL}, {3, 0, 1, 35, LCD_SHOW_ONOFF}}, 1},
+     {{0, 0, 15, 7, LCD_SHOW_NUM1}, {1, 0, 1, 15, LCD_SHOW_ONOFF}, {2, 0, 2, 23, LCD_SHOW_CONTROL}, {3, 0, 1, 35, LCD_SHOW_ONOFF}}, LCD_OWN_MIDI},
     /* the Data Transfer menu (lcd_transfer_screen below; app.c's page_edit takes K1 as the item): its own screen, no fields here */
-    {"Data Transfer", "", 1, {{0, 0, 3, 0, LCD_SHOW_NUM}}, 0},
+    {"Data Transfer", "", 1, {{0, 0, 3, 0, LCD_SHOW_NUM}}, LCD_OWN_PATCH},
+    /* the FM-1's own settings, which a D-50 has not (issue #22; the words are ours): K1 Store, when the internal memory is kept in the flash,
+     * Auto (by itself after a dump) or SAVE (with SAVE) */
+    {"FM-1 Setup", "Store $$$$", 1, {{0, 0, 1, 6, LCD_SHOW_STORE}}, LCD_OWN_SETUP},
 };
 static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p, const uint8_t *own)
 {
@@ -235,6 +241,8 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
             lcd_put(1, f->col, chase + 3u * v, 3);
         } else if (f->show == LCD_SHOW_ONOFF) {
             lcd_put(1, f->col, v ? " ON" : "OFF", 3);
+        } else if (f->show == LCD_SHOW_STORE) {
+            lcd_put(1, f->col, v ? "SAVE" : "Auto", 4);
         } else if (f->show == LCD_SHOW_CONTROL) {
             static const char control[] = " B.CH  G.CH MdeOff";   /* (0x7CB6) */
             lcd_put(1, f->col, control + 6u * v, 6);

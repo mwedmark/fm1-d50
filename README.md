@@ -74,8 +74,8 @@ The view and the colour are saved with SAVE.
 | K3 | The LCD's dot height (true-size view) |
 | K4 | The selected tone for K1, as the D-50's UPPER and LOWER keys: right the Lower, left the Upper (the Upper at start) |
 | SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12): the FM-1's keys only, as on a D-50; notes from MIDI are not moved. Not kept over a power cycle |
-| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel: BasicCH, Omni, Control, Local; Data Transfer, below), then the play screen |
-| SAVE | Saves the patch, bank, octave, view, colour and the MIDI settings |
+| EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel: BasicCH, Omni, Control, Local; Data Transfer, below; FM-1 Setup, below), then the play screen |
+| SAVE | Saves the patch, bank, octave, view, colour, the MIDI settings and the FM-1 Setup page; and bank 1, when SysEx changed it and it is not yet saved (below) |
 
 The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.
 
@@ -166,8 +166,8 @@ Without D-50 data on the FM-1, WSD and RQD are answered with RJC.
 | Address | What it is |
 | --- | --- |
 | `00 00 00` | The temporary area: the current patch's 448 bytes (upper partial 1 and 2, common, lower partial 1 and 2, common, patch; 64 bytes each). A DT1 or DAT here changes the sound at once. A byte above its parameter's maximum is skipped, as on a D-50 (the rest of the message is written). |
-| `02 00 00` | The internal memory: the bank in RAM, 448 bytes a patch (64 patches, up to `03 60 00`). A power cycle brings back the bank from the flash. |
-| `03 60 00` | The reverb data of a bulk dump, to `04 0E 7F` (a nibble a byte: the D-50's reverb types 17 to 32 for its reverb chip). Kept as the D-50 keeps it and sent back, after the patches when the whole memory is asked for (`02 00 00`, size `02 0F 00`), so a librarian's dump read back from the FM-1 is whole. The FM-1's reverb is a model and does not use it. Until another bank is chosen; a power cycle loses it, as the bank's edits. |
+| `02 00 00` | The internal memory: the bank chosen, 448 bytes a patch (64 patches, up to `03 60 00`). Bank 1 (the screen's I) is the D-50's internal memory and is kept in the flash (below); on another bank (a card, C) what is written lasts until another bank is chosen. |
+| `03 60 00` | The reverb data of a bulk dump, to `04 0E 7F` (a nibble a byte: the D-50's reverb types 17 to 32 for its reverb chip). Kept as the D-50 keeps it and sent back, after the patches when the whole memory is asked for (`02 00 00`, size `02 0F 00`), so a librarian's dump read back from the FM-1 is whole. The FM-1's reverb is a model and does not use it. On bank 1 kept in the flash with the patches; on a card until another bank is chosen. |
 | Anything else | Taken and ignored. The D-50 has no other area in SysEx: no system area, since its MIDI and function settings are not reachable by SysEx. |
 
 The FM-1 takes and answers only the D-50 messages for its own device ID (the basic channel less one, the MIDI Channel page); it answers
@@ -191,6 +191,21 @@ Where the FM-1 differs from a D-50 (docs/D50-FIRMWARE.md):
 | Bulk Load.O | Nothing: DT1s are taken as ever. |
 
 Bulk Dump and Bulk Dump.O always send the D-50's own size (`02 0F 00`); with no reverb data in the FM-1 (none was ever loaded by a dump) that part goes out as zeros, so a librarian that expects the whole memory takes it. The screen says Complete . when it is done, and Error Reject when the computer gave up (RJC) or asked for something else. Not yet tried against a real librarian; the card items of the D-50's menu have no counterpart.
+
+**Bank 1 is kept**, as a D-50 keeps its internal memory: what SysEx writes into it (the patches at `02 00 00` and the reverb data) is saved
+in the flash and is there after a power cycle, an update and new D-50 data. Until the first save it is the factory bank of your data file.
+The other banks are cards: what is written into one lasts until another bank is chosen.
+
+- **Store Auto** (the default): it is saved by itself once SysEx has been quiet for 1.5 seconds after its last write into bank 1 (and no
+  Data Transfer is under way), so a whole dump is saved once. The screen says SAVING, then SAVED and Complete . on the LCD.
+- **Store SAVE**: it is saved only when you press SAVE (the SAVE key lights while there is something to save). Choosing another bank first
+  loses what was not saved.
+
+A save takes about a second; held notes end when it starts. It writes the flash in two copies, each time the older one, so a save cut short
+(the power, a new SysEx write) leaves the one before.
+
+**FM-1 Setup** (the EDIT page after Data Transfer): the FM-1's own settings, which a D-50 has not; kept with SAVE. K1 is **Store**, Auto or
+SAVE (above).
 
 **For measuring** (`F0 7D 'S' 'F' 02 ... F7`, six bytes):
 

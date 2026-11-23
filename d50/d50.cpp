@@ -292,6 +292,14 @@ unsigned unpack_bank(const uint8_t *header, unsigned which)
     if (d50_inflate(bank, raw, b, deflated) != static_cast<int>(raw)) return 0;
     return raw / D50_PATCH_BYTES;
 }
+// Bank 0 is the internal memory (issue #22): the app's copy in the flash over the factory bank, when it has one (internal_load, with the
+// SysEx code below: the reverb data are there). The other banks as they are in the data.
+unsigned internal_load(unsigned factory_patches);
+unsigned load_bank(const uint8_t *header, unsigned which)
+{
+    const unsigned n = unpack_bank(header, which);
+    return which == 0 ? internal_load(n) : n;
+}
 unsigned bind_bank(const uint8_t *header)
 {
     bank_count = 0;
@@ -301,7 +309,7 @@ unsigned bind_bank(const uint8_t *header)
         bank_count = sec ? u32(sec) : 0U;
     }
     if (bank_now >= bank_count) bank_now = 0;
-    return bank_count ? unpack_bank(header, bank_now) : 0;
+    return bank_count ? load_bank(header, bank_now) : 0;
 }
 
 inline int32_t to_q23(float x)
@@ -827,8 +835,21 @@ constexpr unsigned kChunk = 256;                  // the data bytes of one DT1 o
 constexpr uint32_t kReverbAt = kInternal + D50_BANK_PATCHES * D50_PATCH_BYTES, kReverbBytes = 0x1780;
 static_assert(kReverbAt == (3U << 14 | 0x60U << 7), "03 60 00");
 uint8_t reverb_data[kReverbBytes / 2U] D50_POOL;
+static_assert(sizeof reverb_data == D50_REVERB_BYTES, "d50.h D50_REVERB_BYTES");
 bool reverb_have;
 bool in_reverb(uint32_t a) { return a >= kReverbAt && a - kReverbAt < kReverbBytes; }
+
+// The internal memory kept (issue #22, d50.h d50_internal_from): bank 0 from the app's copy, its reverb data with it. A bank change always
+// comes here (load_bank), so the reverb data of another bank's dump go (#69).
+d50_internal_reader internal_reader;
+unsigned internal_serial;                        // writes into the internal memory while bank 0 is current
+unsigned internal_load(unsigned factory_patches)
+{
+    reverb_have = false;
+    const unsigned got = internal_reader ? internal_reader(bank, reverb_data) : 0U;
+    reverb_have = (got & D50_INT_REVERB) != 0;
+    return (got & D50_INT_PATCHES) ? D50_BANK_PATCHES : factory_patches;
+}
 
 // A transfer the FM-1 itself started, as the D-50's Data Transfer menu does (d50_transfer): the item, and how it stands.
 struct Xfer {
@@ -900,6 +921,7 @@ void write_at(uint32_t a, const uint8_t *d, unsigned len)
         if (a > xfer.next) xfer.gap = true;
         if (a + len > xfer.next) xfer.next = a + len;
     }
+    if (bank_now == 0 && a + len > kInternal && a < kReverbAt + kReverbBytes) ++internal_serial;   // (the internal memory changes: #22)
     for (unsigned i = 0; i < len; ++i) {
         if (in_reverb(a + i)) {                  // the reverb data (#69): a nibble, as the D-50 keeps it
             if (!reverb_have) memset(reverb_data, 0, sizeof reverb_data);
@@ -1215,16 +1237,22 @@ extern "C" int d50_bank(unsigned which)
     if (which == bank_now) return 1;
     const uint8_t *header = fm1_flash_map(0, D50_HEADER_BYTES);
     if (!header) return 0;
-    const unsigned n = unpack_bank(header, which);
+    const unsigned n = load_bank(header, which); // (the reverb data were the last bank's: #69; bank 0's own come with it, #22)
     if (!n) {                                    // (a damaged bank: the one before, back)
-        bank_patches = unpack_bank(header, bank_now);
+        bank_patches = load_bank(header, bank_now);
         return 0;
     }
     bank_now = which;
     bank_patches = n;
-    reverb_have = false;                         // (the reverb data was the last bank's dump: #69)
     if (program_now >= n) program_now = 0;
     return 1;                                    // (the caller then chooses the program: d50_program builds it)
+}
+extern "C" void d50_internal_from(d50_internal_reader reader) { internal_reader = reader; }
+extern "C" unsigned d50_internal_serial(void) { return internal_serial; }
+extern "C" const uint8_t *d50_internal(const uint8_t **reverb)
+{
+    if (reverb) *reverb = reverb_have ? reverb_data : nullptr;
+    return ready && bank_now == 0 && bank_patches == D50_BANK_PATCHES ? bank : nullptr;
 }
 extern "C" unsigned d50_programs(void) { return bank_patches ? bank_patches : 1U; }
 extern "C" unsigned d50_bank_patches(void) { return bank_patches; }
