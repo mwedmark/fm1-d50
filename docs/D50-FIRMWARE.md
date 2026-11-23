@@ -214,8 +214,8 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
     - If keys are down (0x61D6), their note-offs go out on the old channel, then All Notes Off.
     - Then the new channel gets **CC 124 Omni Off and CC 127 Poly** (0x56FA), so that a receiver set to it plays in mode 3.
   - **SysEx:** the answers to RQ1/RQD and the handshake (above).
-  - **The FM-1** sends only the SysEx answers: no keys, no controllers. Its Key Transpose (`d50_transpose`, #54) moves every note, the ones from MIDI too, where the
-    D-50's moves only its keyboard's.
+  - **The FM-1** sends only the SysEx answers: no keys, no controllers. Its Key Transpose (`d50_transpose`, #54) now moves only its own keys, as the D-50's
+    does (#64). The panel's keys go to `d50_key`; MIDI's notes (`d50_note`, `d50_note_ch`, `d50_sep`) are not moved.
 - **System byte 14 (0xC5CE) is the MIDI-1 page's "Control"** (verified 2026-11-23). The page has BasicCH, Control, Omni and Local (texts at 0x7474), and its values
   are the strings at 0x7CB6, six characters each: ` B.CH `, ` G.CH ` and `MdeOff`.
   - **It picks the control channel in mono, 0x4BE9:** the program change, channel pressure and controllers (CC 0-121) are taken in mono only on that channel; in

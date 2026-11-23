@@ -60,7 +60,7 @@ The view and the colour are saved with SAVE.
 | K2 | The joystick's Y, as on a D-50: the tone balance, the Upper against the Lower tone (the LCD's Bal) |
 | K3 | The LCD's dot height (true-size view) |
 | K4 | The selected tone for K1, as the D-50's UPPER and LOWER keys: right the Lower, left the Upper (the Upper at start) |
-| SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12). Not kept over a power cycle |
+| SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12): the FM-1's keys only, as on a D-50; notes from MIDI are not moved. Not kept over a power cycle |
 | EDIT | The edit pages in turn (Output Mode, Chase, MIDI Channel: BasicCH, Omni, Control), then the play screen |
 | SAVE | Saves the patch, bank, octave, view, colour and the MIDI settings |
 

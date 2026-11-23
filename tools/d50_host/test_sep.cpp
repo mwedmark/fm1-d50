@@ -171,6 +171,16 @@ int main(int argc, char **argv)
     d50_cc(64, 0);
     check(upper() == 0 && lower() == 0, "  the pedal up ends them");
 
+    printf("Key Transpose does not move SepCH's notes (MIDI's, #64)\n");
+    key_mode(3, sepch);
+    d50_transpose(5);
+    d50_sep(on, 64, 100);
+    run();
+    check(bit_of(sep.down, 64) && !bit_of(sep.down, 69), "SepCH's 64 sounds 64");
+    d50_sep(off, 64, 0);
+    check(upper() == 0, "and its note-off ends it");
+    d50_transpose(0);
+
     printf("SepCH OFF\n");
     key_mode(3, 0);
     check(patch->separate() && d50_sep_channel() == 0, "SEP with SepCH OFF: no channel to take");

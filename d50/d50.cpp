@@ -138,7 +138,7 @@ struct Sep {
     bool hold = false;
     bool porta_switch = false;
     int porta_time = 0;
-    uint8_t sounded[128] = {};                   // the note a SepCH key sounded (Key Transpose)
+    uint8_t sounded[128] = {};                   // the note a SepCH key sounded (itself: Key Transpose moves only the keyboard's, #64)
     uint32_t down[4] = {0, 0, 0, 0};
     uint32_t held[4] = {0, 0, 0, 0};
 } sep;
@@ -348,6 +348,10 @@ extern "C" void d50_note_ch(unsigned part, unsigned note, unsigned velocity)
 }
 extern "C" void d50_bend_ch(unsigned part, unsigned value) { push(kEvBend << 24 | (part & 15U) << 16 | (value & 16383U)); }
 extern "C" void d50_note(unsigned note, unsigned velocity) { d50_note_ch(0, note, velocity); }
+extern "C" void d50_key(unsigned note, unsigned velocity)       // (the keyboard's flag, bit 20: Key Transpose moves it, #64)
+{
+    push(kEvNote << 24 | 1U << 20 | (note & 127U) << 8 | (velocity & 127U));
+}
 extern "C" void d50_bend(unsigned value) { d50_bend_ch(0, value); }
 extern "C" void d50_sep(unsigned status, unsigned d1, unsigned d2)
 {
@@ -425,7 +429,7 @@ void mono_set(unsigned mode, unsigned parts)
     patch->set_solo_off(mode != D50_MODE_NORMAL);
 }
 // A part's note on or off in mono: one note a part, as the D-50's fixed voice per channel (0x2BC1), whatever the key mode; no Chase Play
-void mono_note(unsigned part, int key, int velocity)
+void mono_note(unsigned part, int key, int velocity, int shift)
 {
     if (part >= mono.parts) return;
     if (velocity) {
@@ -438,7 +442,7 @@ void mono_note(unsigned part, int key, int velocity)
                 patch->note_off(old);
             }
         }
-        const int n = key + ctl.transpose < 0 ? 0 : key + ctl.transpose > 127 ? 127 : key + ctl.transpose;
+        const int n = key + shift < 0 ? 0 : key + shift > 127 ? 127 : key + shift;   // (Key Transpose: the keyboard's only, #64)
         mono.key[part] = key;
         mono.note[part] = n;
         bit_set(ctl.down, n, true);
@@ -517,7 +521,7 @@ void sep_note(int key, int velocity)
 {
     if (velocity) {
         if (!patch->separate()) return;
-        const int n = key + ctl.transpose < 0 ? 0 : key + ctl.transpose > 127 ? 127 : key + ctl.transpose;
+        const int n = key;                       // (MIDI's: Key Transpose does not move it, #64)
         sep.sounded[key] = static_cast<uint8_t>(n);
         bit_set(sep.down, n, true);
         bit_set(sep.held, n, false);
@@ -1087,15 +1091,18 @@ extern "C" void d50_render(int32_t *out, unsigned n)
         case kEvNote: {
             int note = static_cast<int>((e >> 8) & 127U);
             const int velocity = static_cast<int>(e & 127U);
+            const bool keyboard = (e >> 20) & 1U;   // Key Transpose moves only the instrument's keys, as on the D-50 (#64, 0x2B46)
             if (mono.parts) {                    // mono (#60): the part's one note
-                mono_note((e >> 16) & 15U, note, velocity);
+                mono_note((e >> 16) & 15U, note, velocity, keyboard ? ctl.transpose : 0);
                 break;
             }
-            if (velocity) {                      // Key Transpose (issue #54): the note the key sounds, kept for its note-off
-                const int n = note + ctl.transpose;
-                ctl.sounded[note] = static_cast<uint8_t>(n < 0 ? 0 : n > 127 ? 127 : n);
+            if (keyboard) {
+                if (velocity) {                  // Key Transpose (issue #54): the note the key sounds, kept for its note-off
+                    const int n = note + ctl.transpose;
+                    ctl.sounded[note] = static_cast<uint8_t>(n < 0 ? 0 : n > 127 ? 127 : n);
+                }
+                note = ctl.sounded[note];
             }
-            note = ctl.sounded[note];
             bit_set(ctl.down, note, velocity != 0);
             if (velocity) {
                 bit_set(ctl.held, note, false);  // (struck again under the pedal: the new note is the one held now)

@@ -542,10 +542,10 @@ void app_say(const char *a, const char *b)
     }
 }
 
-static void note(uint32_t note, uint32_t vel)    /* main loop: the queue is the interrupt's too */
+static void note(uint32_t note, uint32_t vel)    /* main loop: the queue is the interrupt's too. The FM-1's keys: Key Transpose moves them (#64) */
 {
     uint32_t f = plat_lock();
-    d50_note(note, vel);
+    d50_key(note, vel);
     plat_unlock(f);
 }
 

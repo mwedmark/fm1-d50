@@ -173,6 +173,36 @@ int main(int argc, char **argv)
         printf("(no Solo patch in the %u bank(s): not checked)\n", d50_banks());
     }
 
+    printf("Key Transpose: the instrument's keys only, as on the D-50 (#64)\n");
+    d50_bank(0);
+    d50_program(p);
+    run();
+    d50_mode(D50_MODE_NORMAL, 0);
+    d50_transpose(5);
+    d50_key(60, 100);
+    run();
+    check(bit_of(ctl.down, 65) && !bit_of(ctl.down, 60), "a key of 60 sounds 65");
+    d50_note(60, 100);
+    run();
+    check(bit_of(ctl.down, 60), "MIDI's 60 sounds 60");
+    d50_transpose(0);
+    d50_key(60, 0);
+    run();
+    check(!bit_of(ctl.down, 65) && bit_of(ctl.down, 60), "the key's note-off ends its 65, after the transpose changed too");
+    d50_note(60, 0);
+    check(keys() == 0, "MIDI's note-off ends its 60");
+    d50_transpose(5);
+    d50_mode(D50_MODE_MONO, 2);
+    d50_key(60, 100);
+    d50_note_ch(1, 60, 100);
+    run();
+    check(mono.note[0] == 65 && mono.note[1] == 60, "mono: the key's part 0 moved, MIDI's part 1 not");
+    d50_key(60, 0);
+    d50_note_ch(1, 60, 0);
+    check(keys() == 0, "both ended");
+    d50_mode(D50_MODE_NORMAL, 0);
+    d50_transpose(0);
+
     printf("%s\n", fails ? "FAILED" : "all passed");
     return fails ? 1 : 0;
 }

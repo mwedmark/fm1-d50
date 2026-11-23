@@ -25,8 +25,10 @@ extern "C" {
 
 /* Look for the sample data in the data area and start the engine on it: 1 if it is there (the engine then plays), else 0. */
 int d50_bind_flash(void);
-/* velocity 0 is a note off */
+/* velocity 0 is a note off. d50_note is MIDI's (the basic channel); d50_key the instrument's own keys, which Key Transpose moves: as on
+ * the D-50, it moves only the keyboard's notes, not the ones received over MIDI (issue #64, the firmware's 0x2B46) */
 void d50_note(unsigned note, unsigned velocity);
+void d50_key(unsigned note, unsigned velocity);
 /* 0..d50_programs()-1, wraps */
 void d50_program(unsigned program);
 unsigned d50_programs(void);                             /* the bank's patches */
@@ -46,7 +48,7 @@ void d50_bend(unsigned value);
  * 7 volume, 64 hold pedal, 65 portamento switch, 100/101 the RPN; the others are ignored. Issue #4. */
 void d50_cc(unsigned cc, unsigned value);
 /* The D-50's TUNE/FUNCTION (issue #54): Master Tune 0..100 (427.5 .. 452.6 Hz, 50 = 440.0 Hz, as the D-50's system byte; the pitch's offset, with the bend) and Key
- * Transpose -12..12 semitones (a key sounds its note moved; its note-off ends the one it sounded). Both are kept over a program change. */
+ * Transpose -12..12 semitones (a key of d50_key sounds its note moved, MIDI's notes are not: #64; its note-off ends the one it sounded). Both are kept over a program change. */
 void d50_tune(unsigned value);
 void d50_transpose(int semitones);
 /* The D-50's MIDI modes (issue #60, its firmware's rows at 0x69EC): D50_MODE_NORMAL the power-on state (the patch's key mode, its Solo too);
