@@ -70,13 +70,13 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
   | --- | --- | --- |
   | 1 | 0x4DE4 | modulation lever (switch 0xC5C5.0: the MIDI page's Mod) |
   | 5 | 0x4E00 | portamento time |
-  | 6 | 0x4D67 | data entry MSB (RPN 0: the bender range) |
+  | 6 | 0x4D67 | data entry MSB: RPN 0 the bender range (clamped to 12), RPN 1 Fine Tuning's MSB (below) |
   | 7 | 0x4E1B | volume (switch 0xC5C6.0) |
-  | 38 | 0x4D96 | data entry LSB |
+  | 38 | 0x4D96 | data entry LSB: RPN 1 only |
   | 64 | 0x4E30 | hold pedal (switch 0xC5C7.0) |
   | 65 | 0x4E49 | portamento switch |
   | 98, 99 | 0x4D58 | NRPN: ignored (it only sets a flag so that a following data entry is not taken as an RPN's) |
-  | 100, 101 | 0x4D61, 0x4D5B | RPN LSB, MSB |
+  | 100, 101 | 0x4D61, 0x4D5B | RPN LSB, MSB (0xFE60, 0xFE61; each clears the NRPN flag 0xFE34.2) |
   | any other | 0x4DC9 | the two controller numbers set on the MIDI page (bytes 0xC5CF + 0x40 and 0xC5D0): they run the 0x4E54 and 0x4E6E tables (the assignable "Control" targets) |
 
   This is the whole table: **the D-50 takes no controller for the tone or partial balance**, which fits `d50.h`'s list of what the engine implements (issue #4). CC81 and CC82 (#58) are ours.
@@ -87,13 +87,40 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
   | CC | handler | what the D-50 does |
   | --- | --- | --- |
   | 122 Local Control | 0x4EA5 | Local (below) |
-  | 123 All Notes Off | 0x4E8A | only with value 0, **omni off** and not mono, and not while P0.1 is set (an input, not decoded): the voices' notes off (0x6108, 8 voices at 0xC300, and 0x60E6). **With omni on it is ignored**, as Roland's instruments of the time did |
+  | 123 All Notes Off | 0x4E8A | only with value 0, **omni off** and not mono, and not while Chase Play is on (P0.1, below): the voices' notes off (0x6108, 8 voices at 0xC300, and 0x60E6). **With omni on it is ignored**, as Roland's instruments of the time did |
   | 124 Omni Off | 0x4F5A | value 0: omni off (0xC5CB = 0, which the MIDI-1 page shows); in mono 0x613B and 0x4F7E; then 0x4F92: all notes off (0x5CAD, 0x5CC1), the controllers again (0x327D), and the voices set up for the patch's key mode (0xC592: 0 and 4 one way, 0x60D5/0x613B/0x2396, the others 0x60F7, then 0x6119). Already off: only the notes off (0x4FBC) |
   | 125 Omni On | 0x4F39 | value 0: omni on (0xC5CB = 1), then as 124; already on: the notes off |
   | 126 Mono | 0x4EDF | ignored when Control is MdeOff (system byte 14, below); the value is the channel count, made the last channel by 0x4F15 (below); poly off, mono on; with omni off and a new count the voices are set up again (0x613B, 0x4F7E, 0x4F92), otherwise the notes off only |
   | 127 Poly | 0x4EAC | value 0, not with Control MdeOff; poly (0xFE34.1), mono off, with omni off 0xFE42 = 0; then as 124 |
 
   Every mode message ends with the notes off, as the MIDI specification asks.
+- **The RPNs, 0xFE60..0xFE63** (verified 2026-11-23).
+  - **The state:** 0xFE60/0xFE61 hold the RPN's LSB and MSB (CC 100, 101), so the word 0xFE60 is MSB × 256 + LSB. 0xFE62/0xFE63 hold Fine Tuning's data entry, LSB
+    and MSB. 0xFFFF in both words is "nothing": the RPN null, and no byte received (bit 7 set).
+  - **The NRPN flag:** CC 98/99 set 0xFE34.2, and CC 100/101 clear it. While it is set, a data entry is ignored.
+  - **RPN 0, the bender range:** data entry MSB (CC 6), clamped to 12, goes to 0xD314 and the chip (0xFE0C, and 0xFE04 outside separate mode).
+  - **RPN 1, Fine Tuning:** sets **Master Tune** (system byte 0, 0xC5C0) at 0x4DA6, once both data entry bytes have come.
+    - The 14-bit value's top 8 bits (MSB × 2 + LSB's bit 6), less 64, are clamped to 0..127, then × 200 / 256 (0x417E) gives 0..99.
+    - The centre (0x2000) gives 50, 440.0 Hz. The 427.5..452.6 Hz range (about ±50 cents) is 0x1000..0x2FFF, a quarter of the RPN's range each way: MIDI's
+      ±100 cents.
+    - Any other RPN is ignored.
+  - **A reset:** a basic channel change (0x5BEC), and mono starting with Control G.CH (0x4F89), set both words to 0xFFFF.
+  - **The FM-1** (`d50.cpp`) takes RPN 0 only, on CC 100/101 and 6. It has no NRPN flag (CC 98/99 are not looked at on the basic channel) and no RPN 1.
+- **P0.0..P0.2 are the panel's mode states, kept in the port** (verified 2026-11-23). Port 0's mode register is 0x10 (0x221C): P0.4 is an input, the others outputs,
+  so these are outputs. The firmware sets them and reads them back as flags; they most likely light the buttons' LEDs (not checked against the schematic).
+  - **P0.0, Key Transpose:** set while Key Transpose is not 0 (0x23AE).
+  - **P0.1, Chase Play on:**
+    - The CHASE button toggles it (0x42C1, the key handler Case). In a split key mode it shows a message and stays off (0x42FA: 2 and up).
+    - A key mode change to a split mode turns it off (0x42AF, from 0x58C5).
+    - The pedal switch (0x42CB) and an assignable controller (0x42E3) set it, by its bit 6, when their target is CHASE. `P-SFT PORTA CHASE` (0x7C32) is the
+      list of targets.
+    - The note paths take Chase Play's when it is set (0x297D, 0x2995 to 0x29E0; 0x278F, 0x2E0A, the repeats).
+    - **All Notes Off (CC 123) is ignored while it is on** (0x4E8A), so that a sequencer's All Notes Off does not cut the echoes.
+  - **P0.2, Portamento:** the PORTA button toggles it, and it is copied to the portamento flags 0xFE33.4/0xFE33.5 (0x4403).
+  - **The FM-1:**
+    - Chase Play's state is `d50_chase_on`, the ARP key or CC 80 (ours).
+    - CC 123 stays a panic in any case (as decided for #59), so it does cut the echoes.
+    - The FM-1 has no PORTA button, and no assignable controller.
 - **The mono mode** (verified 2026-11-23), MIDI's mode 4 when omni is off.
   - **The channels, 0x4F15:** the value of CC 126 is the number of channels M. 0 and 9..16 give 8, 1..8 give M, and above 16 the message is ignored. The last channel is
     basic + M − 1; past channel 16 it stops at 16. 0xFE42 holds M − 1.
@@ -227,8 +254,8 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
   - **It picks the control channel in mono, 0x4BE9:** the program change, channel pressure and controllers (CC 0-121) are taken in mono only on that channel; in
     poly, or with omni on, on the basic channel.
     - **B.CH (0):** the basic channel.
-    - **G.CH (1):** the global channel, the basic channel less one (relative channel 15), as MIDI's mode 4 later had it. With G.CH, 0x4F7E also sets 0xFE60/0xFE62 to
-      0xFFFF when mono starts (not decoded).
+    - **G.CH (1):** the global channel, the basic channel less one (relative channel 15), as MIDI's mode 4 later had it. With G.CH, 0x4F7E also resets the RPN state when mono starts:
+      0xFE60/0xFE62 = 0xFFFF, the RPN null and Fine Tuning's two bytes unreceived (below). A basic channel change does the same (0x5BEC).
     - **MdeOff (2):** the mode messages Mono and Poly are ignored (126 and 127; 122-125 are not). Setting it (0x5829) turns the notes off and sets the voices up
       again, clears mono and poly and sets 0xFE42 = 0: back to the power-on state.
   - Mono and the global channel are what a MIDI guitar controller needs, one string a channel, which is the likely reason the D-50 has them.
@@ -461,7 +488,7 @@ The system table, by byte: 0: **100** (Master Tune: 427.5-452.6 Hz in 100 steps,
 First recursive descent from reset, the vectors and the two tables: 6 122 instructions in 367 functions, about 14.8 KB of the 56 KB above 0x2000/0x80 that are code and data
 together. The rest is reached by indirect jumps and by handlers installed into the RAM vectors at run time, which the descent does not follow. To do, in this order:
 1. (Done for the serial interrupt: it is at 0x4ADF.) Find where the other RAM vectors are rewritten (the writes into 0xDEC0-0xDEFF are by index, not by absolute address: look for loops over `[DE]`/`[HL+B]`), and add those handlers as entry points.
-2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 122-127, the mono mode, system byte 14 (Control), the key modes' order and SepCH are done; 0xFE60/0xFE62 and P0.1 not; which tone each pool is, Hold Mode and what the D-50 sends (TxCH), done), the reverb data's
+2. (Done: SysEx, 0x4FC6.) Still open: the channel and omni logic in full (the MIDI page's bytes at 0xC5C0..0xC5D0; 0x4B81 shows omni as 0xC5CB bit 0; Local, 0xC5CC, is done: CC 122; the mode messages 122-127, the mono mode, system byte 14 (Control), the key modes' order and SepCH are done; 0xFE60/0xFE62 (the RPN) and P0.1 (Chase Play), done; which tone each pool is, Hold Mode and what the D-50 sends (TxCH), done), the reverb data's
    layout at 03 60 00, and screen 0x05 (the RAM writes at 00 40 00: a service mode?).
 3. (Done: the A/D path, the stick's targets, the table at 0x3114, the key codes, and P1.3/P1.4 as the last of the keys Lcal, Valu, Lowr, Uppr.) (Done: 0x3EB4 is parameter
    0x66's access routine, Lowr/Uppr choose X's tone; 0xFE47/0xFE3F are LCD refresh requests.) (Done: power-on is Valu, 01.)
