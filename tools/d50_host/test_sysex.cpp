@@ -392,6 +392,13 @@ int main(int argc, char **argv)
             check(w == want, "an RQD for 02 00 00, size 02 0F 00");
             send(msg(kWsd, addr_size(2U << 14, 16), true));
             check(is_short(next(), kAck) && d50_transfer_state() == D50_XFER_RUN, "its WSD: ACK, still under way");
+            {                                     // the 16 bytes its WSD said (as they are: nothing changes); without them the EOD is an RJC (#75)
+                Bytes d;
+                d.put(2).put(0).put(0);
+                for (unsigned i = 0; i < 16U; ++i) d.put(d50_internal(nullptr) ? d50_internal(nullptr)[i] : 0);
+                send(msg(kDat, d, true));
+                check(is_short(next(), kAck), "its DAT: ACK");
+            }
             send(msg(kEod, none(), false));
             check(is_short(next(), kAck) && d50_transfer_state() == D50_XFER_DONE, "its EOD: ACK, done");
             d50_transfer_stop();
@@ -403,6 +410,64 @@ int main(int argc, char **argv)
         check(d50_transfer_state() == D50_XFER_FAIL, "an RQ1 meanwhile: the transfer failed");
         while (!next().empty()) {}
         d50_transfer_stop();
+    }
+
+    printf("The internal memory kept (#22): its serial, its bytes, bank 0 from the app's copy\n");
+    if (d50_banks() < 2U) {
+        printf("  (skipped: the data has one bank)\n");
+    } else {
+        static uint8_t saved[D50_BANK_PATCHES * D50_PATCH_BYTES], saved_rev[D50_REVERB_BYTES];
+        static unsigned give, asked;
+        struct R {
+            static unsigned read(uint8_t *p, uint8_t *r)
+            {
+                ++asked;
+                if (give & D50_INT_PATCHES) memcpy(p, saved, sizeof saved);
+                if (give & D50_INT_REVERB) memcpy(r, saved_rev, sizeof saved_rev);
+                return give;
+            }
+        };
+        d50_bank(0);
+        const uint8_t *rev = nullptr, *mem = d50_internal(&rev);
+        check(mem != nullptr, "bank 0: its bytes");
+        const unsigned s0 = d50_internal_serial();
+        const uint8_t factory = mem ? mem[384] : 0;
+        const uint8_t other = factory == 5 ? 6 : 5;
+        Bytes body;
+        body.put(2).put(3).put(0).put(other);     // 02 03 00: byte 384, patch 1's block, its name's first character
+        send(msg(kDt1, body, true));
+        check(d50_internal_serial() == s0 + 1U && mem && mem[384] == other, "a DT1 into 02 00 00: the serial moves, the byte is there");
+        send(msg(kDt1, [] { Bytes b; b.put(0).put(0).put(0).put(1); return b; }(), true));
+        check(d50_internal_serial() == s0 + 1U, "a DT1 into the temporary area: the serial stays");
+
+        memcpy(saved, mem, sizeof saved);         // the app's copy: bank 0 with patch 1's first character 9, and reverb data
+        saved[384] = factory == 9 ? 10 : 9;
+        for (unsigned i = 0; i < sizeof saved_rev; ++i) saved_rev[i] = static_cast<uint8_t>(i * 7U);
+        give = D50_INT_PATCHES | D50_INT_REVERB;
+        d50_internal_from(&R::read);
+        d50_bank(1);
+        check(d50_internal(nullptr) == nullptr, "bank 1: no internal memory");
+        const unsigned s1 = d50_internal_serial();
+        send(msg(kDt1, body, true));
+        check(d50_internal_serial() == s1, "a DT1 into bank 1: the serial stays");
+        asked = 0;
+        d50_bank(0);
+        mem = d50_internal(&rev);
+        check(asked == 1U && mem && !memcmp(mem, saved, sizeof saved), "back to bank 0: the reader asked once, the copy's patches");
+        check(rev != nullptr && !memcmp(rev, saved_rev, sizeof saved_rev), "and the copy's reverb data");
+        send(msg(kRq1, addr_size(3U << 14 | 0x60U << 7, 2), true));
+        {
+            Bytes f = next();
+            check(is_data(f, kDt1, 3U << 14 | 0x60U << 7, 2) && f.b[8] == (saved_rev[0] & 15U) && f.b[9] == (saved_rev[0] >> 4),
+                  "RQ1 of 03 60 00: the copy's reverb nibbles");
+            while (!next().empty()) {}
+        }
+        give = 0;                                 // no copy: the factory bank, no reverb data
+        d50_bank(1);
+        d50_bank(0);
+        mem = d50_internal(&rev);
+        check(mem && mem[384] == factory && rev == nullptr, "a reader with no copy: the factory bank 0, no reverb data");
+        d50_internal_from(nullptr);
     }
 
     printf("%s\n", fails ? "FAILED" : "all passed");

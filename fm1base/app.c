@@ -12,7 +12,9 @@ typedef struct {
     uint8_t bank;                        /* 0 .. d50_banks() - 1 (issue #7; was a reserved byte, 0) */
     uint8_t lcd;                         /* the D-50's display (issues #23, #26; was a reserved byte, 0): the view, the low bits its dot pitch */
     uint8_t midi;                        /* the D-50's MIDI (issue #51; a record without it reads 0): the basic channel, and MIDI_OMNI_OFF */
+    uint8_t setup;                       /* the FM-1 Setup page's (issue #22; was the record's padding, 0): SETUP_STORE_SAVE */
 } settings_t;
+#define SETUP_STORE_SAVE 0x01u           /* the internal memory kept in the flash only with SAVE; 0 (the default): by itself after a dump */
 #define SET_OLD_BYTES 8u                 /* the record before midi (one without it loads, with midi 0: channel 1, omni on) */
 #define MIDI_CHANNEL 0x0Fu               /* the basic channel, 0 .. 15 (1 .. 16 on the screen): also the SysEx device ID, as the D-50's */
 #define MIDI_OMNI_OFF 0x10u              /* omni off: only the basic channel plays. Omni on (the default): every channel, as before #51 */
@@ -50,6 +52,8 @@ static unsigned silent = RS_HISTORY;
 static volatile int32_t program_asked = -1;  /* a program change from MIDI, for the main loop (building a program takes a while) */
 static volatile int32_t bank_asked = -1;     /* CC0 (bank select): the bank the next program change picks (issue #7) */
 static volatile uint32_t midi_count;
+static volatile uint8_t xrun_forgive;            /* the flash was just busy (int_step, #22): the blocks it cost are not the CPU guard's */
+static volatile uint32_t xrun_forgive_ms;        /* when (plat_ms) */
 
 static inline __attribute__((always_inline)) int32_t sat24(int32_t v) { return v > 8388607 ? 8388607 : v < -8388608 ? -8388608 : v; }
 
@@ -218,7 +222,8 @@ void app_render(int32_t *lr, uint32_t n, uint32_t master_q12)
         uint32_t x = plat_xruns(), pct = plat_cpu_pct();
         if (x != xruns_seen) {
             xruns_seen = x;
-            pct = 100u;
+            if (!xrun_forgive || plat_ms() - xrun_forgive_ms > 100u)   /* (not the blocks a flash write cost: #22) */
+                pct = 100u;
         }
         d50_guard(pct);
     }
@@ -296,6 +301,7 @@ static void settings_load(void)
         set.magic = SET_MAGIC;
     }
     set.midi &= MIDI_CHANNEL | MIDI_OMNI_OFF | MIDI_CONTROL_MASK | MIDI_LOCAL_OFF;   /* (Control was masked away before: #60, #67) */
+    set.setup &= SETUP_STORE_SAVE;
     d50_device(set.midi & MIDI_CHANNEL);         /* the SysEx device ID: the basic channel's (issue #51) */
 }
 
@@ -310,17 +316,18 @@ static uint32_t lcd_pitch(void)
  * on the device. The browser emulator's data area is not plat_res's (the data you load: web/emu/app.js), so there the region is read as it
  * lies: the commit record (device/res.c: "RES1", the payload's length and CRC-32, the record's own CRC) and the payload checked against
  * it once. d50.cpp then checks its own header ("FMD5"). An update from GitHub keeps the data the FM-1 has and plays it. */
-static uint32_t res_crc32(const void *p, uint32_t n)   /* zlib's CRC-32, a bit at a time (once, at the start) */
+static uint32_t crc32_add(uint32_t c, const void *p, uint32_t n)   /* zlib's CRC-32, a bit at a time: c from 0xFFFFFFFF, the CRC its ~ */
 {
     const uint8_t *b = (const uint8_t *)p;
-    uint32_t c = 0xFFFFFFFFu, k;
+    uint32_t k;
     while (n--) {
         c ^= *b++;
         for (k = 0; k < 8u; k++)
             c = c >> 1 ^ (0xEDB88320u & (0u - (c & 1u)));
     }
-    return ~c;
+    return c;
 }
+static uint32_t res_crc32(const void *p, uint32_t n) { return ~crc32_add(0xFFFFFFFFu, p, n); }   /* (once, at the start) */
 const uint8_t *app_d50_data(uint32_t *len)
 {
 #if FM1B_RES
@@ -367,10 +374,179 @@ static uint32_t res_stamp(void)
     return crc;
 }
 
+/* The internal memory kept (issue #22): bank 0 is the D-50's internal memory (the screen's I), and what SysEx writes into it (02 00 00, the
+ * reverb data at 03 60 00 too) is kept in the flash, in PLAT_XDATA1, which an update and new D-50 data leave alone. Two copies, A and B; the
+ * start reads the newer whole one (d50.h d50_internal_from), and without one bank 0 is the factory bank. A copy is INT_SECTORS sectors read
+ * as one stream of INT_SPAN bytes a sector (0x000..0xEFF: bytes 0xF00..0xF07 of every sector in PLAT_XDATA1 stay erased, plat.h): a 32-byte
+ * head, the 64 patches, the reverb data when a dump brought them. A save writes the other copy a sector at a time (int_step: an erase stops
+ * the sound a moment, plat.h) and its head last, over a stream checked against RAM: a save cut short (the power, a new edit) leaves that copy
+ * without a head, and the one before is read. */
+#define INT_MAGIC 0x49303544u                    /* "D50I" */
+#define INT_BASE PLAT_XDATA1_LO
+#define INT_SECTORS 9u
+#define INT_SPAN 0xF00u
+#define INT_HEAD 32u
+#define INT_PATCHES (D50_BANK_PATCHES * D50_PATCH_BYTES)
+#define INT_FULL (INT_HEAD + INT_PATCHES + D50_REVERB_BYTES)   /* the stream with the reverb data; without them it ends after the patches */
+_Static_assert(INT_FULL <= INT_SECTORS * INT_SPAN, "a copy holds the internal memory");
+_Static_assert(INT_BASE + 2u * INT_SECTORS * 0x1000u <= PLAT_XDATA1_HI, "two copies in PLAT_XDATA1");
+typedef struct {
+    uint32_t magic, seq;                         /* seq: the newer of the two copies has the greater (as a wrapping count) */
+    uint32_t bytes;                              /* the stream's, the head's included: INT_FULL, or without the reverb data */
+    uint32_t crc;                                /* CRC-32 of the stream after the head */
+    uint32_t rsv[3];
+    uint32_t head_crc;                           /* CRC-32 of the 28 bytes before it */
+} int_head_t;
+_Static_assert(sizeof(int_head_t) == INT_HEAD, "the head");
+static struct {
+    int8_t now;                                  /* the copy that holds the internal memory, 0 (A) or 1 (B); -1 none: the factory bank */
+    int8_t step;                                 /* a save under way: the next sector of the other copy, INT_SECTORS its head; -1 none */
+    uint8_t failed_on;                           /* a save of serial failed: not tried again until the next edit */
+    uint32_t seq;                                /* the copy's */
+    uint32_t saved;                              /* d50_internal_serial that the copy holds (0 at the start: what was read) */
+    uint32_t serial;                             /* a save's */
+    uint32_t seen, seen_ms;                      /* the serial last seen, and when it changed (the quiet time before a save by itself) */
+    uint32_t failed;
+} istore = {-1, -1, 0, 0, 0, 0, 0, 0, 0};
+static uint32_t int_addr(uint32_t copy, uint32_t at) { return INT_BASE + (copy * INT_SECTORS + at / INT_SPAN) * 0x1000u + at % INT_SPAN; }
+/* n bytes of a copy's stream from at, in pieces that do not cross a sector's INT_SPAN: into dst, or (dst 0) into the CRC *c. 0: not readable */
+static int int_walk(uint32_t copy, uint32_t at, uint32_t n, uint8_t *dst, uint32_t *c)
+{
+    while (n) {
+        const uint8_t *p = plat_data(int_addr(copy, at));
+        uint32_t run = INT_SPAN - at % INT_SPAN;
+        if (!p)
+            return 0;
+        if (run > n)
+            run = n;
+        if (dst) {
+            memcpy(dst, p, run);
+            dst += run;
+        } else {
+            *c = crc32_add(*c, p, run);
+        }
+        at += run;
+        n -= run;
+    }
+    return 1;
+}
+static int int_head(uint32_t copy, int_head_t *h)   /* the copy's head, if it is one */
+{
+    if (!int_walk(copy, 0, INT_HEAD, (uint8_t *)h, 0))
+        return 0;
+    return h->magic == INT_MAGIC && h->head_crc == ~crc32_add(0xFFFFFFFFu, h, INT_HEAD - 4u) &&
+           (h->bytes == INT_FULL || h->bytes == INT_HEAD + INT_PATCHES);
+}
+static int int_whole(uint32_t copy, int_head_t *h)  /* the copy has a head, and the stream its CRC */
+{
+    uint32_t c = 0xFFFFFFFFu;
+    return int_head(copy, h) && int_walk(copy, INT_HEAD, h->bytes - INT_HEAD, 0, &c) && ~c == h->crc;
+}
+static void int_pick(void)                       /* at the start: the newer whole copy */
+{
+    uint32_t k;
+    int_head_t h;
+    istore.now = -1;
+    for (k = 0; k < 2u; k++)
+        if (int_whole(k, &h) && (istore.now < 0 || (int32_t)(h.seq - istore.seq) > 0)) {
+            istore.now = (int8_t)k;
+            istore.seq = h.seq;
+        }
+}
+static unsigned int_reader(uint8_t *patches, uint8_t *reverb)   /* d50.h d50_internal_from: bank 0 from the copy */
+{
+    int_head_t h;
+    if (istore.now < 0 || !int_head((uint32_t)istore.now, &h) || !int_walk((uint32_t)istore.now, INT_HEAD, INT_PATCHES, patches, 0))
+        return 0;
+    if (h.bytes == INT_FULL && int_walk((uint32_t)istore.now, INT_HEAD + INT_PATCHES, D50_REVERB_BYTES, reverb, 0))
+        return D50_INT_PATCHES | D50_INT_REVERB;
+    return D50_INT_PATCHES;
+}
+static int int_write(uint32_t off, const uint8_t *src, uint32_t n)   /* through a buffer on the stack (plat_data_write: the source in RAM) */
+{
+    uint8_t b[256];
+    while (n) {
+        const uint32_t run = n < sizeof b ? n : (uint32_t)sizeof b;
+        memcpy(b, src, run);
+        if (plat_data_write(off, b, run) != 0)
+            return 0;
+        off += run;
+        src += run;
+        n -= run;
+    }
+    return 1;
+}
+static void int_forgive(void)                    /* (main loop, after the flash was busy) */
+{
+    xrun_forgive_ms = plat_ms();
+    xrun_forgive = 1;
+}
+/* A save's next step, main loop: a sector of the other copy erased and written, then its head. 0: more to do; 1: saved; -1: the flash
+ * failed (or the stream did not read back as RAM has it); -2: given up, the internal memory changed or went (no harm: the copy has no head) */
+static int int_step(void)
+{
+    const uint8_t *rev, *pat = d50_internal(&rev);
+    const uint32_t to = istore.now == 0 ? 1u : 0u, bytes = rev ? INT_FULL : INT_HEAD + INT_PATCHES, k = (uint32_t)istore.step;
+    if (!pat || d50_internal_serial() != istore.serial) {
+        istore.step = -1;
+        return -2;
+    }
+    if (k < INT_SECTORS) {
+        uint32_t lo = k * INT_SPAN, hi = lo + INT_SPAN, a;
+        int ok = 1;
+        istore.step++;
+        if (lo >= bytes)
+            return 0;                            /* (past the stream: nothing to write) */
+        if (hi > bytes)
+            hi = bytes;
+        ok = plat_data_erase(int_addr(to, lo)) == 0;
+        a = lo < INT_HEAD ? INT_HEAD : lo;       /* (the head's bytes stay erased: written last) */
+        if (ok && a < INT_HEAD + INT_PATCHES) {
+            const uint32_t e = hi < INT_HEAD + INT_PATCHES ? hi : INT_HEAD + INT_PATCHES;
+            ok = int_write(int_addr(to, a), pat + (a - INT_HEAD), e - a);
+            a = e;
+        }
+        if (ok && a < hi)
+            ok = int_write(int_addr(to, a), rev + (a - INT_HEAD - INT_PATCHES), hi - a);
+        int_forgive();
+        if (!ok) {
+            istore.step = -1;
+            return -1;
+        }
+        return 0;
+    }
+    {                                            /* the head, once the stream reads back as RAM has it */
+        int_head_t h;
+        uint32_t c = 0xFFFFFFFFu, f = 0xFFFFFFFFu;
+        istore.step = -1;
+        c = crc32_add(c, pat, INT_PATCHES);
+        if (rev)
+            c = crc32_add(c, rev, D50_REVERB_BYTES);
+        if (!int_walk(to, INT_HEAD, bytes - INT_HEAD, 0, &f) || f != c)
+            return -1;
+        memset(&h, 0, sizeof h);
+        h.magic = INT_MAGIC;
+        h.seq = istore.now < 0 ? 1u : istore.seq + 1u;
+        h.bytes = bytes;
+        h.crc = ~c;
+        h.head_crc = ~crc32_add(0xFFFFFFFFu, &h, INT_HEAD - 4u);
+        f = (uint32_t)int_write(int_addr(to, 0), (const uint8_t *)&h, INT_HEAD);
+        int_forgive();
+        if (!f || !int_head(to, &h))             /* (read back: a head) */
+            return -1;
+        istore.now = (int8_t)to;
+        istore.seq = h.seq;
+        istore.saved = istore.serial;
+        return 1;
+    }
+}
+
 static int bound;                            /* the D-50's data found and the engine started */
 void app_init(void)
 {
     settings_load();
+    int_pick();                              /* the internal memory kept (#22): bank 0 from it, when there is one */
+    d50_internal_from(int_reader);
 #if FM1_CPU1
     plat_cpu2_set(1);                        /* the second core renders every second sounding voice (d50.cpp split_begin); else one core */
 #endif
@@ -485,6 +661,12 @@ static void page_edit(uint32_t field, int32_t step)
             ui.xfer_item = (uint8_t)item;
             ui.redraw = 1;
         }
+        return;
+    }
+    if (g->own == LCD_OWN_SETUP) {               /* the FM-1 Setup page (#22): K1 Store, Auto or SAVE */
+        set.setup = (uint8_t)(step > 0 ? set.setup | SETUP_STORE_SAVE : set.setup & ~SETUP_STORE_SAVE);
+        set_dirty = 1;
+        ui.redraw = 1;
         return;
     }
     if (g->own) {
@@ -680,6 +862,67 @@ static void note(uint32_t note, uint32_t vel)    /* main loop: the queue is the 
     tx_note(note, vel);                          /* and on TxCH (#65), whatever Local is */
 }
 
+/* The internal memory kept (#22, int_step above): by itself (the FM-1 Setup page's Store Auto, the default) once SysEx has been quiet
+ * INT_QUIET_MS after its last write into it and no transfer of the Data Transfer page is under way, so a whole dump is saved once; or with
+ * SAVE (Store SAVE). Leaving bank 0 saves first what Auto would have (with Store SAVE, what was not saved is lost, as on a card). */
+#define INT_QUIET_MS 1500u
+static int int_dirty(void) { return d50_internal(0) && d50_internal_serial() != istore.saved; }
+static void int_result(int r)
+{
+    if (r == 1) {
+        istore.failed_on = 0;
+        app_say("INTERNAL", "SAVED");
+        ui.lcd_msg = LCD_MSG_COMPLETE;           /* (the LCD says it as the D-50 after a write) */
+    } else if (r == -1) {
+        istore.failed = istore.serial;
+        istore.failed_on = 1;
+        app_say("INTERNAL", "SAVE FAILED");
+        ui.lcd_msg = LCD_MSG_ERROR;              /* (Error  Reject) */
+    }
+}
+static void int_save_start(void)
+{
+    uint32_t f;
+    if (istore.step >= 0 || !d50_internal(0))
+        return;
+    istore.serial = d50_internal_serial();
+    istore.step = 0;
+    f = plat_lock();
+    d50_panic();                                 /* (the notes end: each step stops the sound a moment) */
+    plat_unlock(f);
+    app_say("INTERNAL", "SAVING");
+}
+static void int_save_now(void)                   /* the whole save at once (before bank 0 is left) */
+{
+    int r = 0;
+    int_save_start();
+    while (istore.step >= 0)
+        r = int_step();
+    int_result(r);
+}
+static void int_poll(uint32_t now)               /* each main loop pass */
+{
+    const uint32_t s = d50_internal_serial();
+    if (s != istore.seen) {
+        istore.seen = s;
+        istore.seen_ms = now;
+    }
+    if (istore.step >= 0) {
+        int_result(int_step());
+        return;
+    }
+    if ((set.setup & SETUP_STORE_SAVE) || !int_dirty() || now - istore.seen_ms < INT_QUIET_MS || (istore.failed_on && s == istore.failed) ||
+        (ui.xfer_on && d50_transfer_state() == D50_XFER_RUN))
+        return;
+    int_save_start();
+}
+static void bank_to(uint32_t b)                  /* d50_bank, bank 0's edits kept first (Store Auto, or a save under way) */
+{
+    if (b != d50_current_bank() && (istore.step >= 0 || (int_dirty() && !(set.setup & SETUP_STORE_SAVE))))
+        int_save_now();
+    d50_bank(b);
+}
+
 static void program_step(int32_t to)         /* to: the patch over every bank, bank * 64 + program (the encoders walk them all) */
 {
     uint32_t per = d50_programs(), banks = d50_banks() ? d50_banks() : 1u, n = per * banks, i;
@@ -687,7 +930,7 @@ static void program_step(int32_t to)         /* to: the patch over every bank, b
     set.bank = (uint8_t)(i / per);
     set.program = (uint8_t)(i % per);
     set_dirty = 1;
-    d50_bank(set.bank);
+    bank_to(set.bank);
     d50_program(set.program);
     ui.redraw = 1;
 }
@@ -747,6 +990,8 @@ static void input(void)
         } else if (k == B_SAVE && ui.page == LCD_PAGE_TRANSFER) {   /* the D-50's Enter on its Data Transfer menu */
             transfer_start();
         } else if (k == B_SAVE) {
+            if (int_dirty())                     /* the internal memory too, when SysEx changed it (#22; then it says SAVED) */
+                int_save_start();
             if (plat_store_save(OBJ_SETTINGS, &set, sizeof set) == 0) {
                 set_dirty = 0;
                 app_say("SAVED", "");
@@ -900,7 +1145,7 @@ static void input(void)
     ui.keys = keys;
     ui.btn = btn;
     plat_glow(1);
-    plat_leds(btn | (set_dirty ? 1u << B_SAVE : 0u), keys);
+    plat_leds(btn | (set_dirty || ((set.setup & SETUP_STORE_SAVE) && int_dirty()) ? 1u << B_SAVE : 0u), keys);
 }
 
 void app_input_only(void) { input(); }
@@ -945,8 +1190,11 @@ static void draw(void)
         else if (ui.page == LCD_PAGE_TRANSFER)
             lcd_transfer_screen(set.bank ? 'C' : 'I', p, ui.xfer_item, ui.xfer_on ? d50_transfer_state() : D50_XFER_IDLE);
         else if (ui.page != LCD_PAGE_PLAY) {
-            uint8_t own[4];
-            midi_values(own);
+            uint8_t own[4] = {0, 0, 0, 0};
+            if (lcd_pages[ui.page].own == LCD_OWN_SETUP)
+                own[0] = (uint8_t)(set.setup & SETUP_STORE_SAVE ? 1u : 0u);
+            else
+                midi_values(own);
             lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb, own);
         } else {
             lcd_play_screen(set.bank ? 'C' : 'I', p, pb);
@@ -1045,6 +1293,7 @@ void app_frame(void)
         }
     }
     d50_handshake_poll(now);                     /* (an ACK that never came in: the dump goes on after 200 ms) */
+    int_poll(now);                               /* the internal memory kept in the flash (#22) */
     while (plat_sysex_room() >= D50_SYSEX_REPLY_MAX) {   /* an RQ1's answer, a DT1 at a time as the computer reads */
         static uint8_t f[D50_SYSEX_REPLY_MAX];
         uint32_t len = d50_sysex_reply(f);
