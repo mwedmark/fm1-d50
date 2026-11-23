@@ -236,6 +236,7 @@ bool spec_live[2];
 // Chase Play's patch parameters (the patch block's bytes 34..36: mode 0 U-L, 1 U-L-L, 2 U-L-U; level 0..100; time 0..100), with the spec
 struct ChaseSpec { uint8_t mode, level, time; } chase_spec[2];
 bool temp_dirty;                                 // DT1 changed the temporary area since its spec was built (main loop)
+bool program_dirty;                              // DT1 or DAT wrote the current patch's place in the bank: it is taken again (#86)
 
 void build_spec(bool live)
 {
@@ -251,7 +252,7 @@ void build_program(unsigned program)
 {
     memcpy(temp_patch, bank + program * D50_PATCH_BYTES, D50_PATCH_BYTES);
     program_now = program;
-    temp_dirty = false;
+    temp_dirty = program_dirty = false;
     build_spec(false);
 }
 
@@ -937,6 +938,8 @@ void write_at(uint32_t a, const uint8_t *d, unsigned len)
         if (a + i < D50_PATCH_BYTES) {
             if ((d[i] & 127U) > temp_max(a + i)) continue;
             temp_dirty = true;
+        } else if ((a + i - kInternal) / D50_PATCH_BYTES == program_now) {
+            program_dirty = true;                // (the sounding patch's place in the bank: d50_edit_poll takes it again, #86)
         }
         *b = d[i] & 127U;
     }
@@ -1221,7 +1224,12 @@ extern "C" void d50_transfer_stop(void)           // the menu left: a handshake 
 
 extern "C" int d50_edit_poll(void)
 {
-    if (!temp_dirty || !ready || spec_done != spec_serial) return 0;   // (the last spec not applied yet: next time)
+    if ((!temp_dirty && !program_dirty) || !ready || spec_done != spec_serial) return 0;   // (the last spec not applied yet: next time)
+    if (program_dirty) {                         // the bank's copy of the current patch was written (#86): taken again, as a program change
+        program_dirty = false;                   // takes it (the temporary area's own edits give way to it)
+        build_program(program_now);
+        return 1;
+    }
     temp_dirty = false;
     build_spec(true);
     return 1;

@@ -437,8 +437,25 @@ int main(int argc, char **argv)
         body.put(2).put(3).put(0).put(other);     // 02 03 00: byte 384, patch 1's block, its name's first character
         send(msg(kDt1, body, true));
         check(d50_internal_serial() == s0 + 1U && mem && mem[384] == other, "a DT1 into 02 00 00: the serial moves, the byte is there");
+        d50_program(0);                           // (#86: the sounding patch is the one written: taken again from the bank)
+        d50_edit_poll();
+        spec_done = spec_serial;                  // (no interrupt here: the spec taken as applied)
+        check(d50_patch_bytes()[384] == other, "the program change: the temporary area has it");
+        body.n = 3;
+        body.put(other == 7 ? 8 : 7);
+        send(msg(kDt1, body, true));
+        check(d50_patch_bytes()[384] == other, "a DT1 into the sounding patch's place: the temporary area not yet");
+        check(d50_edit_poll() == 1 && d50_patch_bytes()[384] == body.b[3], "d50_edit_poll: the sounding patch taken again from the bank (#86)");
+        spec_done = spec_serial;
+        check(d50_edit_poll() == 0, "and only once");
+        body.n = 3;
+        body.put(other);                          // (back as it was, for the checks below)
+        send(msg(kDt1, body, true));
+        d50_edit_poll();
+        spec_done = spec_serial;
+        const unsigned s2 = d50_internal_serial();
         send(msg(kDt1, [] { Bytes b; b.put(0).put(0).put(0).put(1); return b; }(), true));
-        check(d50_internal_serial() == s0 + 1U, "a DT1 into the temporary area: the serial stays");
+        check(d50_internal_serial() == s2, "a DT1 into the temporary area: the serial stays");
 
         memcpy(saved, mem, sizeof saved);         // the app's copy: bank 0 with patch 1's first character 9, and reverb data
         saved[384] = factory == 9 ? 10 : 9;
