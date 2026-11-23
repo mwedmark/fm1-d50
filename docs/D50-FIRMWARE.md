@@ -108,19 +108,20 @@ balances' 0..100, set as K2 and K1 set them (an edit of the current patch). Thei
   - **The FM-1** (`d50.cpp`) takes RPN 0 only, on CC 100/101 and 6. It has no NRPN flag (CC 98/99 are not looked at on the basic channel) and no RPN 1.
 - **P0.0..P0.2 are the panel's mode states, kept in the port** (verified 2026-11-23). Port 0's mode register is 0x10 (0x221C): P0.4 is an input, the others outputs,
   so these are outputs. The firmware sets them and reads them back as flags; they most likely light the buttons' LEDs (not checked against the schematic).
-  - **P0.0, Key Transpose:** set while Key Transpose is not 0 (0x23AE).
+  - **P0.0, Key Transpose:** set while Key Transpose is not 0 (0x23AE; the key handler Tran is 0x4865).
   - **P0.1, Chase Play on:**
-    - The CHASE button toggles it (0x42C1, the key handler Case). In a split key mode it shows a message and stays off (0x42FA: 2 and up).
+    - The CHASE button toggles it (0x42C1, the key handler Case, the table at 0x6BFE). In a split key mode it shows a message and stays off (0x42FA: 2 and up).
     - A key mode change to a split mode turns it off (0x42AF, from 0x58C5).
     - The pedal switch (0x42CB) and an assignable controller (0x42E3) set it, by its bit 6, when their target is CHASE. `P-SFT PORTA CHASE` (0x7C32) is the
       list of targets.
     - The note paths take Chase Play's when it is set (0x297D, 0x2995 to 0x29E0; 0x278F, 0x2E0A, the repeats).
     - **All Notes Off (CC 123) is ignored while it is on** (0x4E8A), so that a sequencer's All Notes Off does not cut the echoes.
-  - **P0.2, Portamento:** the PORTA button toggles it, and it is copied to the portamento flags 0xFE33.4/0xFE33.5 (0x4403).
+  - **P0.2:** 0x4403 toggles it and copies it to the portamento flags 0xFE33.4/0xFE33.5, but no caller of 0x4403 was found. The PORTA button itself (the key
+    handler Prta, 0x431F in the table at 0x6BFE) toggles 0xFE32.2. It applies the change with Local on (0x4352) and sends CC 65 with the MIDI page's Porta (0x4340).
   - **The FM-1:**
     - Chase Play's state is `d50_chase_on`, the ARP key or CC 80 (ours).
     - CC 123 stays a panic in any case (as decided for #59), so it does cut the echoes.
-    - The FM-1 has no PORTA button, and no assignable controller.
+    - The FM-1 has no PORTA button and no assignable controller.
 - **The mono mode** (verified 2026-11-23), MIDI's mode 4 when omni is off.
   - **The channels, 0x4F15:** the value of CC 126 is the number of channels M. 0 and 9..16 give 8, 1..8 give M, and above 16 the message is ignored. The last channel is
     basic + M − 1; past channel 16 it stops at 16. 0xFE42 holds M − 1.
