@@ -33,7 +33,9 @@ void app_backup_restored(void);
 
 /* the time per block (d50.cpp FM1_D50_PROF), app.c app_sysex: F0 7D S F 02 0B 00 F7 and 0C bits F7 */
 #define APP_SYSEX
+#define APP_SYSEX_BYTE                   /* every SysEx byte from USB, in the USB interrupt: what came in, for issue #84 (app_sysex_byte) */
 int app_sysex(const uint8_t *p, uint32_t n);
+void app_sysex_byte(uint8_t b);
 
 void app_init(void);
 void app_render(int32_t *lr, uint32_t n, uint32_t master_q12);
