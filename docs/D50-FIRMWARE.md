@@ -364,7 +364,7 @@ SysEx addresses as one number, `a2 << 14 | a1 << 7 | a0` (so 00 03 40 is 0x1C0),
 | more than 256 data bytes | a fault | taken |
 | DT1 / RQ1 to internal memory (02 00 00) | only on the Data Transfer screen (Bulk Load.O: DT1 in order); RQ1 never | any time, also RQ1 |
 | the handshake | only on the Data Transfer screen, in the item's direction | any time, both directions |
-| internal memory's map | 64 × 448 bytes as sent, then the reverb data at 03 60 00 - 04 0E 7F as nibbles | the bank; 03 60 00 and on taken and ignored |
+| internal memory's map | 64 × 448 bytes as sent, then the reverb data at 03 60 00 - 04 0E 7F as nibbles | the same since #69: the bank, then the reverb data kept as nibbles (two a byte, as 0x56C5) and sent back, also after the bank on a whole-memory RQD; the engine does not sound it (its reverb is a model) |
 | RQ1's answer | DT1s of up to 256 bytes, the temporary area only | the same chunk, cut at the area's end |
 
 The engine takes more than the D-50 does (the switch, the screen and the direction it does not ask for), and on a wrong checksum it is stricter. On the values it follows the

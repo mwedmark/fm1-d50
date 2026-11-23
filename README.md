@@ -154,11 +154,19 @@ Without D-50 data on the FM-1, WSD and RQD are answered with RJC.
 | --- | --- |
 | `00 00 00` | The temporary area: the current patch's 448 bytes (upper partial 1 and 2, common, lower partial 1 and 2, common, patch; 64 bytes each). A DT1 or DAT here changes the sound at once. A byte above its parameter's maximum is skipped, as on a D-50 (the rest of the message is written). |
 | `02 00 00` | The internal memory: the bank in RAM, 448 bytes a patch (64 patches, up to `03 60 00`). A power cycle brings back the bank from the flash. |
-| Anything else | For example the reverb data at `03 60 00`: taken and ignored, so a whole bulk dump goes through. |
+| `03 60 00` | The reverb data of a bulk dump, to `04 0E 7F` (a nibble a byte: the D-50's reverb types 17 to 32 for its reverb chip). Kept as the D-50 keeps it and sent back, after the patches when the whole memory is asked for (`02 00 00`, size `02 0F 00`), so a librarian's dump read back from the FM-1 is whole. The FM-1's reverb is a model and does not use it. Until another bank is chosen; a power cycle loses it, as the bank's edits. |
+| Anything else | Taken and ignored. The D-50 has no other area in SysEx: no system area, since its MIDI and function settings are not reachable by SysEx. |
 
 The FM-1 takes and answers only the D-50 messages for its own device ID (the basic channel less one, the MIDI Channel page); it answers
-with that ID. A faulty message shows its error on the screen (wrong format, checksum or address). Not yet: the system area, memory
-protect ([issue 51](https://github.com/mwedmark/fm1-d50/issues/51)).
+with that ID. A faulty message shows its error on the screen (wrong format, checksum or address).
+
+Where the FM-1 differs from a D-50 (docs/D50-FIRMWARE.md):
+
+- It takes more: the internal memory and the handshake at any time, both ways, where a D-50 takes them only on its Data Transfer screen in
+  the direction chosen there, and never answers an RQ1 there. It also takes more than 256 data bytes in one message.
+- It is stricter on a wrong checksum: nothing is written, where a D-50 has already written the data.
+- It has no Exclu switch (all SysEx is always taken) and no memory protect.
+- It cannot start a dump itself: a computer asks for one (RQ1, RQD).
 
 **For measuring** (`F0 7D 'S' 'F' 02 ... F7`, six bytes):
 

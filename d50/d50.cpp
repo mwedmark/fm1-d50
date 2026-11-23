@@ -813,12 +813,22 @@ void chase_clear()
 //   protocol, not yet checked against a real D-50.
 // Addresses are three 7-bit bytes, here one 21-bit number: the temporary area at 00 00 00 (448 bytes: upper partial 1, partial 2, common,
 // lower partial 1, partial 2, common, patch, 64 bytes each), internal memory at 02 00 00 (the bank, 448 bytes a patch, held in RAM: a
-// power cycle brings back the bank in the flash). Anything else (the reverb data at 03 60 00) is taken and ignored.
+// power cycle brings back the bank in the flash), and the reverb data at 03 60 00 - 04 0E 7F right after it (#69). Anything else is taken
+// and ignored.
 namespace {
 constexpr uint8_t kRoland = 0x41, kModel = 0x14, kRq1 = 0x11, kDt1 = 0x12;
 constexpr uint8_t kWsd = 0x40, kRqd = 0x41, kDat = 0x42, kAck = 0x43, kEod = 0x45, kErr = 0x4E, kRjc = 0x4F;
 constexpr uint32_t kInternal = 2U << 14;
 constexpr unsigned kChunk = 256;                  // the data bytes of one DT1 or DAT the D-50 sends
+// The reverb data of a bulk dump (#69): 03 60 00 - 04 0E 7F, right after the 64 patches, 0x1780 SysEx bytes of a nibble each, low first,
+// kept as the D-50 keeps them (0x56C5: two a RAM byte, 3008 bytes: its reverb types 17..32, 16 x 188 coefficients for its reverb chip).
+// The engine cannot sound them (its reverb is a model, d5_effects.h), but they are kept, so that a librarian's dump read back from the
+// FM-1 has them. Only once a dump brought them (reverb_have), until another bank is chosen; a power cycle loses them, as the bank's edits.
+constexpr uint32_t kReverbAt = kInternal + D50_BANK_PATCHES * D50_PATCH_BYTES, kReverbBytes = 0x1780;
+static_assert(kReverbAt == (3U << 14 | 0x60U << 7), "03 60 00");
+uint8_t reverb_data[kReverbBytes / 2U] D50_POOL;
+bool reverb_have;
+bool in_reverb(uint32_t a) { return a >= kReverbAt && a - kReverbAt < kReverbBytes; }
 
 uint32_t addr_of(const uint8_t *a) { return static_cast<uint32_t>(a[0]) << 14 | static_cast<uint32_t>(a[1]) << 7 | a[2]; }
 // the byte at an address, nullptr where nothing is
@@ -828,8 +838,23 @@ uint8_t *byte_at(uint32_t a)
     if (a >= kInternal && a - kInternal < bank_patches * D50_PATCH_BYTES) return bank + (a - kInternal);
     return nullptr;
 }
-// the end of the area an address is in (the temporary area or the bank)
-uint32_t end_of(uint32_t a) { return a < D50_PATCH_BYTES ? D50_PATCH_BYTES : kInternal + bank_patches * D50_PATCH_BYTES; }
+// something is at the address (the temporary area, the bank, the reverb data once a dump brought it)
+bool there(uint32_t a) { return byte_at(a) || (reverb_have && in_reverb(a)); }
+// the byte at an address, 0 where nothing is
+uint8_t value_at(uint32_t a)
+{
+    if (const uint8_t *b = byte_at(a)) return *b;
+    if (!reverb_have || !in_reverb(a)) return 0;
+    const uint32_t i = a - kReverbAt;
+    return static_cast<uint8_t>((i & 1U) ? reverb_data[i / 2U] >> 4 : reverb_data[i / 2U] & 15U);
+}
+// the end of the area an address is in (the temporary area, or the internal memory: the bank, with the reverb data after a whole one)
+uint32_t end_of(uint32_t a)
+{
+    if (a < D50_PATCH_BYTES) return D50_PATCH_BYTES;
+    if (in_reverb(a) || (reverb_have && bank_patches == D50_BANK_PATCHES)) return kReverbAt + kReverbBytes;
+    return kInternal + bank_patches * D50_PATCH_BYTES;
+}
 uint8_t roland_sum(const uint8_t *p, unsigned n)
 {
     unsigned s = 0;
@@ -858,6 +883,14 @@ uint8_t temp_max(uint32_t a)
 void write_at(uint32_t a, const uint8_t *d, unsigned len)
 {
     for (unsigned i = 0; i < len; ++i) {
+        if (in_reverb(a + i)) {                  // the reverb data (#69): a nibble, as the D-50 keeps it
+            if (!reverb_have) memset(reverb_data, 0, sizeof reverb_data);
+            reverb_have = true;
+            const uint32_t r = a + i - kReverbAt;
+            uint8_t &w = reverb_data[r / 2U];
+            w = static_cast<uint8_t>((r & 1U) ? (w & 15U) | (d[i] & 15U) << 4 : (w & 0xF0U) | (d[i] & 15U));
+            continue;
+        }
         uint8_t *b = byte_at(a + i);
         if (!b) continue;
         if (a + i < D50_PATCH_BYTES) {
@@ -912,12 +945,12 @@ static void d50_handshake(const uint8_t *p, uint32_t n)
         const uint32_t a = addr_of(p + 4);
         uint32_t size = addr_of(p + 7);
         if (!ready) { answer(dev, kRjc); return; }
-        if (cmd == kWsd) {                        // taken anywhere, as a DT1 is: what is not here (the reverb data at 03 60 00 of a whole
-            reply.receiving = true;               // bulk dump) is taken and ignored, so a dump is not stopped halfway
+        if (cmd == kWsd) {                        // taken anywhere, as a DT1 is: what is not here is taken and ignored, so a dump is not
+            reply.receiving = true;               // stopped halfway
             answer(dev, kAck);
             return;
         }
-        if (!byte_at(a) || !size) { sysex_error = D50_ERR_ADDRESS; answer(dev, kRjc); return; }   // (nothing there to send)
+        if (!there(a) || !size) { sysex_error = D50_ERR_ADDRESS; answer(dev, kRjc); return; }   // (nothing there to send)
         if (size > end_of(a) - a) size = end_of(a) - a;
         reply.dev = dev;
         reply.cmd = kDat;
@@ -988,8 +1021,8 @@ extern "C" int d50_sysex(const uint8_t *p, uint32_t n)
         }
         const uint32_t a = addr_of(p + 4);
         uint32_t size = addr_of(p + 7);
-        // only what is there: the temporary area or the bank, cut at its end
-        if (!byte_at(a)) {
+        // only what is there: the temporary area, the bank or the reverb data, cut at its end
+        if (!there(a)) {
             sysex_error = D50_ERR_ADDRESS;
             return 1;
         }
@@ -1031,10 +1064,7 @@ extern "C" unsigned d50_sysex_reply(uint8_t *frame)
     frame[5] = static_cast<uint8_t>(reply.at >> 14 & 127U);
     frame[6] = static_cast<uint8_t>(reply.at >> 7 & 127U);
     frame[7] = static_cast<uint8_t>(reply.at & 127U);
-    for (unsigned i = 0; i < len; ++i) {
-        const uint8_t *b = byte_at(reply.at + i);
-        frame[8 + i] = b ? *b : 0U;
-    }
+    for (unsigned i = 0; i < len; ++i) frame[8 + i] = value_at(reply.at + i);
     frame[8 + len] = roland_sum(frame + 5, 3U + len);
     frame[9 + len] = 0xF7;
     if (reply.cmd == kDat) {                      // the next only after the ACK (kAck moves on, kErr sends this one again)
@@ -1073,6 +1103,7 @@ extern "C" int d50_bank(unsigned which)
     }
     bank_now = which;
     bank_patches = n;
+    reverb_have = false;                         // (the reverb data was the last bank's dump: #69)
     if (program_now >= n) program_now = 0;
     return 1;                                    // (the caller then chooses the program: d50_program builds it)
 }
