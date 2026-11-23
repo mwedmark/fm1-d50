@@ -371,6 +371,11 @@ struct ReverbType {
     float pol_r = 1.0f;     // polarity of the right wet side (-1 inverts)
     bool cross = false;     // fm1-d50 (#9): mode 3, a ping-pong: the echoes go left, right, left .. (a recording of a real D-50's
                             // Cross Delay bounces between the sides); tap_l_ms the left line, tap_r_ms the right (0: as the left)
+    float pre_ms = 0.0f;    // fm1-d50 (#9): modes 0..2, the pre-delay: the send reaches the room this long after the note (0: none, no
+                            // cost). At most about 54 ms at 32 kHz (the free words of the first pool segment). Nothing is measured yet:
+                            // all types are 0 until a reference gives the first reflection's time. The gates follow the undelayed send.
+    float damp = 1.0f;      // fm1-d50 (#9): modes 0..2, the damping of the three tail loops: the Boss chip's filter coefficient times
+                            // this (1 = the chip's; above 1 darker, below 1 brighter). Kept where each loop's feedback stays stable.
 };
 
 inline constexpr ReverbType kReverbTypes[32] = {
@@ -390,8 +395,8 @@ inline constexpr ReverbType kReverbTypes[32] = {
     {3, 0, 1.20f, 148, 256, 0.40f,  0.0f,   0.0f, 0.0000f,  0.40f, 1.0f, true}, // 14 Cross Delay (148 ms; as 23)
     {1, 3, 1.05f,   0,   0, 0.0f, 200.0f,   0.0f, 0.0000f}, // 15 Short Gate (200 ms)
     {1, 3, 1.05f,   0,   0, 0.0f, 480.0f,   0.0f, 0.0000f}, // 16 Long Gate (480 ms)
-    {1, 5, 0.89f,   0,   0, 0.0f,   0.0f,   0.0f, 0.5000f}, // 17 Bright Hall (2.7 s, easier damping)
-    {1, 6, 0.80f,   0,   0, 0.0f,   0.0f,   0.0f, 0.4600f}, // 18 Large Cave (dark: loop damping x1.25, T60 4.4; fb < 0.53 or it rings)
+    {1, 5, 0.89f,   0,   0, 0.0f,   0.0f,   0.0f, 0.5000f, 1.0f, 1.0f, false, 0.0f, 0.85f}, // 17 Bright Hall (2.7 s, easier damping x0.85)
+    {1, 6, 0.80f,   0,   0, 0.0f,   0.0f,   0.0f, 0.4600f, 1.0f, 1.0f, false, 0.0f, 1.25f}, // 18 Large Cave (dark: loop damping x1.25, T60 4.4; fb < 0.53 or it rings)
     {2, 5, 0.77f,   0,   0, 0.0f,   0.0f,   0.0f, 0.0000f}, // 19 Steel Pan (plate, metallic)
     {3, 0, 1.20f, 248,   0, 0.53f,  0.0f,   0.0f, 0.0000f, -0.5f}, // 20 Delay (248 ms; VST: right direct, left inverted, T60 2.7)
     {3, 0, 1.20f, 338,   0, 0.53f,  0.0f,   0.0f, 0.0000f, -0.5f}, // 21 Delay (338 ms; as 20)
@@ -556,7 +561,8 @@ private:
 #else
 class Reverb {
 public:
-    void configure(const ReverbSpec& spec, float sr) {
+    // pre_ms and damp < 0: the type's own. Other values (calibration and tests): this pre-delay in ms, this damping scale.
+    void configure(const ReverbSpec& spec, float sr, float pre_ms = -1.0f, float damp = -1.0f) {
         spec_ = spec;
         sr_ = sr;
         const ReverbType& t = kReverbTypes[clamp_index(spec.type, 32)];
@@ -573,11 +579,11 @@ public:
         if (mode_ < 3) {
             const BossMode& m = boss_mode(mode_);
             // Panel types 17 and 18 (rows 16/17) tune the damping: the bright
-            // hall eases both, the cave tightens the loop. Rows, not panel
+            // hall eases both, the cave tightens the loop. (Rows, not panel
             // numbers: the swapped comparison once gave Bright Hall the
-            // cave's damping, and it rang at 140 Hz forever.
-            const float filt_scale = spec.type == 16 ? 0.85f
-                                   : (spec.type == 17 ? 1.25f : 1.0f);
+            // cave's damping, and it rang at 140 Hz forever.)
+            // fm1-d50 (#9): those two factors are the table's `damp` now (the same values).
+            damp_ = damp >= 0.0f ? damp : t.damp;
             const float lpf = (spec.type == 16 ? 0x80 : m.lpf_amp) / 256.0f;
             const float scale = sr / 32000.0f;  // geometry is 32 kHz native
             for (int a = 0; a < 3; ++a) {
@@ -592,7 +598,21 @@ public:
             for (int c = 0; c < 3; ++c) {
                 comb_[c].bind(slot(6900 + 4600 * c, 4600),
                               static_cast<int>(m.comb_sizes[1 + c] * scale),
-                              m.filter[1 + c] / 256.0f * filt_scale, fb);
+                              comb_filter(m.filter[1 + c], damp_, fb), fb);
+            }
+            // fm1-d50 (#9): the pre-delay line in the words the allpasses' slots leave free (after the third allpass, up to the entrance)
+            pre_n_ = 0;
+            const float pre = pre_ms >= 0.0f ? pre_ms : t.pre_ms;
+            if (pre > 0.0f) {
+                const int off = 3900 + static_cast<int>(m.all_sizes[2] * scale) + 2;
+                int room = 5850 - off - 2;               // the longest delay in samples
+                int n = static_cast<int>(pre * 0.001f * sr + 0.5f);
+                if (n > room) n = room;
+                if (n > 0) {
+                    pre_.bind(slot(off, n + 2), n + 2);
+                    pre_.clear();
+                    pre_n_ = n;
+                }
             }
             boss_ = &m;
             sr_scale_ = scale;
@@ -662,11 +682,10 @@ public:
     void set_feedback(float fb, float damp_scale = 1.0f) {
         if (mode_ >= 3) return;
         const BossMode& m = *boss_;
-        const float filt_scale = (spec_.type == 16 ? 0.85f : (spec_.type == 17 ? 1.25f : 1.0f)) * damp_scale;
         for (int c = 0; c < 3; ++c) {
             comb_[c].bind(slot(6900 + 4600 * c, 4600),
                           static_cast<int>(m.comb_sizes[1 + c] * sr_scale_),
-                          m.filter[1 + c] / 256.0f * filt_scale, fb);
+                          comb_filter(m.filter[1 + c], damp_ * damp_scale, fb), fb);
         }
     }
 
@@ -712,7 +731,13 @@ public:
         }
         if (mode_ < 3) {
             const BossMode& m = *boss_;
-            entr_.process(x);
+            float xin = x;
+            if (pre_n_ > 0) {                    // fm1-d50 (#9): the pre-delay; at(1) is the word just written
+                pre_.put(x);
+                pre_.next();
+                xin = pre_.at(pre_n_ + 1);
+            }
+            entr_.process(xin);
             float link = entr_.out_at(tap_entr_);
             link = ap_[0].process(link);
             link = ap_[1].process(link);
@@ -827,6 +852,14 @@ private:
     static constexpr float kEarlyMix = D5_REV_EARLY;
     static constexpr float kTailMix = D5_REV_TAIL;
 
+    // The comb's damping coefficient: the chip's value (/256) times the type's damp, and so that the loop's DC gain fb / (1 - filter) stays
+    // under 0.97 (the loop is stable under 1; a damp above 1 raises the coefficient, and with a long decay it would ring on).
+    D5_INL static float comb_filter(int chip, float damp, float fb) {
+        float f = chip / 256.0f * damp;
+        const float cap = 1.0f - fb / 0.97f;
+        if (f > cap) f = cap;
+        return f < 0.0f ? 0.0f : f;
+    }
     D5_INL static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
     D5_INL static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
 
@@ -856,6 +889,9 @@ private:
     ReverbSample pool_[kPool] = {};
 #endif
     ReverbAllpass ap_[3];
+    ReverbLine pre_;                      // fm1-d50 (#9): the pre-delay's line
+    int pre_n_ = 0;                       // its delay in samples, 0: none
+    float damp_ = 1.0f;
     ReverbEntrance entr_;
     ReverbComb comb_[3];
     const BossMode* boss_ = &boss_mode(1);
