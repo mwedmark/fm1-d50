@@ -179,6 +179,7 @@ Where the FM-1 differs from a D-50 (docs/D50-FIRMWARE.md):
   the direction chosen there, and never answers an RQ1 there. It also takes more than 256 data bytes in one message.
 - It is stricter on a wrong checksum: nothing is written, where a D-50 has already written the data.
 - It has no Exclu switch (all SysEx is always taken) and no memory protect.
+- It has no card memory in SysEx: the D-50's card items of the Data Transfer menu have no counterpart, and the FM-1's other banks (C) are not reachable by address. `02 00 00` is the bank that is chosen.
 - It starts a dump itself from the Data Transfer page (below), as the D-50 does from its menu; a computer may also ask for one (RQ1, RQD) at any time.
 
 **Data Transfer** (the EDIT page after MIDI Channel), the D-50's own menu for a librarian that waits for the synth to begin, as D50 Librarian's download does. K1 chooses the item, SAVE starts it (as the D-50's Enter; on this page SAVE does not save the settings), and leaving the page (EDIT, SEL) ends a transfer under way. The items are the D-50's, of the whole internal memory (`02 00 00`: the bank in RAM, with the reverb data once a dump brought them):
@@ -190,7 +191,7 @@ Where the FM-1 differs from a D-50 (docs/D50-FIRMWARE.md):
 | Bulk Dump.O | DT1s of 256 bytes one-way, the whole memory. Start the librarian's receive first. |
 | Bulk Load.O | Nothing: DT1s are taken as ever. |
 
-Bulk Dump and Bulk Dump.O always send the D-50's own size (`02 0F 00`); with no reverb data in the FM-1 (none was ever loaded by a dump) that part goes out as zeros, so a librarian that expects the whole memory takes it. The screen says Complete . when it is done, and Error Reject when the computer gave up (RJC) or asked for something else. Not yet tried against a real librarian; the card items of the D-50's menu have no counterpart.
+Bulk Dump and Bulk Dump.O always send the D-50's own size (`02 0F 00`); with no reverb data in the FM-1 (none was ever loaded by a dump) that part goes out as zeros, so a librarian that expects the whole memory takes it. The screen says Complete . when it is done, and Error Reject when the computer gave up (RJC) or asked for something else. Tried with D50 Librarian (one-way only: Bulk Dump.O and Bulk Load.O, issue #51); not against a real D-50. The card items of the D-50's menu have no counterpart.
 
 **Bank 1 is kept**, as a D-50 keeps its internal memory: what SysEx writes into it (the patches at `02 00 00` and the reverb data) is saved
 in the flash and is there after a power cycle, an update and new D-50 data. Until the first save it is the factory bank of your data file.
