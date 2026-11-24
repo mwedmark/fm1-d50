@@ -219,6 +219,7 @@ only: on a card the screen says ONLY TO BANK I (the cards are read-only).
 | `0B` | Reads the load: where the time goes, the CPU load and its peak, the voices, the cores and the missed audio blocks. |
 | `0C bits` | Leaves out the reverb (1), the chorus (2) or the EQ (4), to see what each costs. |
 | `0D c` | Reads what SysEx came in: the frames that reached the D-50 and their DT1s, the F0s, F7s and bytes the USB interrupt saw, and which of the internal memory's 136 places of 256 bytes a DT1 began at, both as the app got them and as the interrupt saw them (issue #84). `c` 1 starts the counts again. |
+| `0E 00` | Reads the last 32 DT1s that reached the D-50, oldest first: each one's address, number of data bytes and first data byte (issue #51: what a librarian or an editor sends). |
 
 **From the platform** ([fm1-base](https://github.com/charlesvestal/fm1-base)): the update of the firmware and of the D-50 data, backup and restore, and the companion's services. The
 [install page](https://mwedmark.github.io/fm1-d50/install/) and fm1-base's tools use them; music software does not need them.
