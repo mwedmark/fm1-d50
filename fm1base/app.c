@@ -241,13 +241,20 @@ void app_panic(void) { d50_panic(); }
  *                              reached the app, v1 their DT1s, v2 the DT1s not of the D-50's 264 or 136 bytes; what the USB interrupt saw
  *                              (app_sysex_byte): v3 the F0s, v4 the F7s, v5 the bytes (5 x 7 bits each, as cmd 11's). m the 256-byte
  *                              places of the internal memory (02 00 00 + 256 k, k 0..135) a DT1 to the app began at, u those the
- *                              interrupt saw, 7 a byte (k 0 the lowest bit of m0). c 1: all of it from zero after the answer */
+ *                              interrupt saw, 7 a byte (k 0 the lowest bit of m0). c 1: all of it from zero after the answer
+ *   F0 7D S F 02 0E 00 F7   ->  F0 7D S F 02 4E n e0..e31 F7: the last DT1s that reached the app (#51), oldest first, n of them (0..32),
+ *                              each 6 bytes: its address (3), its data bytes (2, 7 bits each, low first) and its first data byte */
 static uint32_t cpu_peak;                        /* the highest plat_cpu_pct since the last cmd 11 (app_frame) */
 #define SXLOG_PLACES 136u                        /* the internal memory and the reverb data in 256-byte DT1s: 02 00 00 .. 04 0E 7F */
 static struct {
     uint32_t frames, dt1, odd;
     uint8_t at[(SXLOG_PLACES + 6u) / 7u];
 } sxlog;
+#define SXLOG_LAST 32u
+static struct {                                  /* the last DT1s (cmd 14): address, data bytes, first data byte */
+    uint8_t e[SXLOG_LAST][6];
+    uint32_t n;
+} sxlast;
 static volatile struct {                         /* the USB interrupt's (app_sysex_byte) */
     uint32_t f0, f7, bytes, pos, addr;
     uint8_t at[(SXLOG_PLACES + 6u) / 7u];
@@ -282,6 +289,16 @@ static void sxlog_frame(const uint8_t *p, uint32_t n)   /* every frame app_sysex
     if (n >= 8u && p[0] == 0x41u && p[2] == 0x14u && p[3] == 0x12u) {
         const uint32_t a = (uint32_t)p[4] << 14 | (uint32_t)p[5] << 7 | p[6];
         sxlog.dt1++;
+        {
+            uint8_t *e = sxlast.e[sxlast.n++ % SXLOG_LAST];
+            const uint32_t len = n - 8u;         /* (41 dev 14 12, the address, the data, the sum) */
+            e[0] = p[4];
+            e[1] = p[5];
+            e[2] = p[6];
+            e[3] = (uint8_t)(len & 0x7Fu);
+            e[4] = (uint8_t)(len >> 7 & 0x7Fu);
+            e[5] = n > 8u ? p[7] : 0u;
+        }
         if (n != 264u && n != 136u)
             sxlog.odd++;
         if (a >= 0x8000u && (a - 0x8000u) % 256u == 0u && (a - 0x8000u) / 256u < SXLOG_PLACES) {
@@ -341,6 +358,20 @@ int app_sysex(const uint8_t *p, uint32_t n)
         plat_unlock(f);
         *d = 0xF7;
         (void)plat_sysex_send(r, sizeof r);
+        return 1;
+    }
+    if (p[4] == 14u) {
+        uint8_t r[6 + 1 + SXLOG_LAST * 6u + 1] = {0xF0, 0x7D, 'S', 'F', 2, 0x4E}, *d = r + 7;
+        const uint32_t have = sxlast.n < SXLOG_LAST ? sxlast.n : SXLOG_LAST;
+        uint32_t i, k;
+        r[6] = (uint8_t)have;
+        for (i = 0; i < have; i++) {
+            const uint8_t *e = sxlast.e[(sxlast.n - have + i) % SXLOG_LAST];
+            for (k = 0; k < 6u; k++)
+                *d++ = e[k];
+        }
+        *d++ = 0xF7;
+        (void)plat_sysex_send(r, (uint32_t)(d - r));
         return 1;
     }
     if (p[4] == 12u) {
