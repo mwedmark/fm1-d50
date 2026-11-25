@@ -147,7 +147,14 @@ inline constexpr uint8_t kTvaBiasCurve[13] = {
 // ceiling -- 155 + envelope 100 = 255, the chip's full scale.
 inline int tva_chip_level(int p35, int p36, int p14, bool is_pcm,
                           int p37, int p38, int key, int vel127) {
-    const int d50 = p36 - 50;
+    // fm1-d50 (issue #95): the Velocity Range's distance from 50 counts 6/16 of the ROM's figure, both the headroom it takes and the
+    // velocity term. At the full value Pizzagogo's Lower (p36 94) moved 23 dB from velocity 24 to 120, where a reference recording of
+    // the patch moves about 8 dB over its strikes; 6/16 gives 9.6. Velocity 100 lands within 0.8 dB of before on every factory patch
+    // (Fantasia unchanged): soft strikes are what change. Fitted on one recording; 16 restores the ROM's.
+#ifndef D5_TVA_VELO_Q16
+#define D5_TVA_VELO_Q16 6
+#endif
+    const int d50 = (p36 - 50) * D5_TVA_VELO_Q16 / 16;
     const int mag = d50 < 0 ? -d50 : d50;
     int base = p35 + 31 - (mag + (mag >> 1)) - (is_pcm ? 0 : p14 >> 1);
     if (base < 0) base = 0;
