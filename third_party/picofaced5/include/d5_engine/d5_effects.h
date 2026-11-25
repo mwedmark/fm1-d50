@@ -72,7 +72,8 @@ public:
     void set_high_shelf(float freq, float gain_db, float sr) {
         const float A = std::pow(10.0f, gain_db / 40.0f);
         const float w = 2.0f * kPi * freq / sr;
-        const float cs = std::cos(w), alpha = std::sin(w) * 0.70710678f, sA = std::sqrt(A);
+        const float cs = std::cos(w), alpha = std::sin(w) * 0.70710678f;
+        const float sA = std::pow(10.0f, gain_db / 80.0f);   // sqrt(A) (fm1-base has no sqrtf)
         set(A * ((A + 1) + (A - 1) * cs + 2 * sA * alpha), -2 * A * ((A - 1) + (A + 1) * cs),
             A * ((A + 1) + (A - 1) * cs - 2 * sA * alpha),
             (A + 1) - (A - 1) * cs + 2 * sA * alpha, 2 * ((A - 1) - (A + 1) * cs), (A + 1) - (A - 1) * cs - 2 * sA * alpha);
