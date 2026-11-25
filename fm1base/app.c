@@ -13,6 +13,7 @@ typedef struct {
     uint8_t lcd;                         /* the D-50's display (issues #23, #26; was a reserved byte, 0): the view, the low bits its dot pitch */
     uint8_t midi;                        /* the D-50's MIDI (issue #51; a record without it reads 0): the basic channel, and MIDI_OMNI_OFF */
     uint8_t setup;                       /* the FM-1 Setup page's (issue #22; was the record's padding, 0): SETUP_STORE_SAVE */
+    int8_t vcurve;                       /* the keys' velocity curve, -5 .. +5 (issue #93; the record's padding, so an older one reads 0) */
 } settings_t;
 #define SETUP_STORE_SAVE 0x01u           /* the internal memory kept in the flash only with SAVE; 0 (the default): by itself after a dump */
 #define SETUP_VOICES_SHIFT 1u            /* the polyphony cap (issue #8): 16 less each tone's voices at most, so 0 (an older record) is 16 */
@@ -34,6 +35,7 @@ enum { MIDI_CONTROL_BCH, MIDI_CONTROL_GCH, MIDI_CONTROL_MDEOFF };   /* the basic
 #define LCD_PITCH_DEFAULT 1u             /* square dots, as the D-50's */
 static settings_t set;
 static uint8_t set_dirty;
+#define VCURVE_MAX 5                     /* touch_curve's range (lib/touch.h): 0 as measured, + makes 127 harder to reach */
 static uint32_t setup_voices(void) { return 16u - ((set.setup & SETUP_VOICES_MASK) >> SETUP_VOICES_SHIFT); }   /* 1..16 */
 static uint32_t midi_control(void)
 {
@@ -417,6 +419,9 @@ static void settings_load(void)
     set.midi &= MIDI_CHANNEL | MIDI_OMNI_OFF | MIDI_CONTROL_MASK | MIDI_LOCAL_OFF;   /* (Control was masked away before: #60, #67) */
     set.setup &= SETUP_STORE_SAVE | SETUP_VOICES_MASK;
     d50_voices(setup_voices());
+    if (set.vcurve < -VCURVE_MAX || set.vcurve > VCURVE_MAX)
+        set.vcurve = 0;
+    touch_curve(set.vcurve);                     /* (lib/touch.c keeps it over touch_on) */
     d50_device(set.midi & MIDI_CHANNEL);         /* the SysEx device ID: the basic channel's (issue #51) */
 }
 
@@ -790,9 +795,13 @@ static void page_edit(uint32_t field, int32_t step)
         }
         return;
     }
-    if (g->own == LCD_OWN_SETUP) {               /* the FM-1 Setup page (#22): K1 Store, Auto or SAVE; K2 the polyphony cap (#8) */
+    if (g->own == LCD_OWN_SETUP) {               /* the FM-1 Setup page (#22): K1 Store, Auto or SAVE; K2 the polyphony cap (#8); K3 the
+                                                  * keys' velocity curve (#93) */
         if (field == 0u) {
             set.setup = (uint8_t)(step > 0 ? set.setup | SETUP_STORE_SAVE : set.setup & ~SETUP_STORE_SAVE);
+        } else if (field == 2u) {
+            set.vcurve = (int8_t)clamp((int32_t)set.vcurve + step, -VCURVE_MAX, VCURVE_MAX);
+            touch_curve(set.vcurve);
         } else {
             uint32_t v = (uint32_t)clamp((int32_t)setup_voices() + step, g->f[1].lo, g->f[1].hi);
             set.setup = (uint8_t)((set.setup & ~SETUP_VOICES_MASK) | (16u - v) << SETUP_VOICES_SHIFT);
@@ -1382,6 +1391,7 @@ static void draw(void)
             if (g->own == LCD_OWN_SETUP) {
                 own[0] = (uint8_t)(set.setup & SETUP_STORE_SAVE ? 1u : 0u);
                 own[1] = (uint8_t)setup_voices();
+                own[2] = (uint8_t)(set.vcurve + VCURVE_MAX);   /* (shown -5 .. +5: LCD_SHOW_CURVE) */
             } else if (g->own == LCD_OWN_MIDI)
                 midi_values(own);
             lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb, g->own == LCD_OWN_TONE ? pb + page_base(g) : own,
