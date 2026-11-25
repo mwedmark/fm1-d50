@@ -235,12 +235,12 @@ public:
         // 1018 Hz under full pressure at range 14, past the 961 Hz the
         // ceiling alone allows. The final clamp is the register's range.
         float cv = base_cv_ + env_units_ * 100.0f * env;
-        // fm1-d50 (issue #98): the brightness above the middle D5_TVF_BASE_OFFSET chip units off (-24 = an octave and a half), never
-        // under the middle, so a cutoff under it keeps its level. Pizzagogo's Lower (cutoff 44) was 10-20 dB over a reference recording
-        // in 4-15 kHz; 24 units under, within 3 dB from 1 to 15 kHz, and the user heard it closest. About what the base's move from
-        // cutoff + 78 to 2 * cutoff + 54 (02.09.2026) added at that cutoff. 0 restores it.
+        // fm1-d50 (issues #98, #101): the brightness above the middle D5_TVF_BASE_OFFSET chip units off, never under the middle, so a
+        // cutoff under it keeps its level. 0 by default: a real D-50's steady square (Synthmania's "SQUARE waveform", C3..C6 at cutoff
+        // 60 and 100) matches the base as it stands within 0.3-0.6 dB on its odd harmonics, where -24 (#98, fitted on one Pizzagogo
+        // recording of unknown source) put cutoff 60 22 dB too dark. Kept for later references.
 #ifndef D5_TVF_BASE_OFFSET
-#define D5_TVF_BASE_OFFSET -24
+#define D5_TVF_BASE_OFFSET 0
 #endif
         if (cv > 128.0f) {
             cv += static_cast<float>(D5_TVF_BASE_OFFSET);
