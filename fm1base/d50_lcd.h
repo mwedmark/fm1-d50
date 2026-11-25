@@ -237,8 +237,8 @@ static const lcd_page_t lcd_pages[LCD_PAGES] = {
     /* the Data Transfer menu (lcd_transfer_screen below; app.c's page_edit takes K1 as the item): its own screen, no fields here */
     {"Data Transfer", "", 1, {{0, 0, 3, 0, LCD_SHOW_NUM}}, LCD_OWN_PATCH},
     /* the FM-1's own settings, which a D-50 has not (issue #22; the words are ours): K1 Store, when the internal memory is kept in the flash,
-     * Auto (by itself after a dump) or SAVE (with SAVE) */
-    {"FM-1 Setup", "Store $$$$", 1, {{0, 0, 1, 6, LCD_SHOW_STORE}}, LCD_OWN_SETUP},
+     * Auto (by itself after a dump) or SAVE (with SAVE); K2 Voices, the polyphony cap (#8): each tone's voices at most, 1..16 */
+    {"FM-1 Setup", "Store $$$$  Voices$$$", 2, {{0, 0, 1, 6, LCD_SHOW_STORE}, {1, 1, 16, 18, LCD_SHOW_NUM}}, LCD_OWN_SETUP},
 };
 static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p, const uint8_t *own, uint32_t cursor)
 {

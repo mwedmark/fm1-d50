@@ -52,6 +52,9 @@ void d50_cc(unsigned cc, unsigned value);
  * Transpose -12..12 semitones (a key of d50_key sounds its note moved, MIDI's notes are not: #64; its note-off ends the one it sounded). Both are kept over a program change. */
 void d50_tune(unsigned value);
 void d50_transpose(int semitones);
+/* The polyphony cap (issue #8): each tone's voices at most, 1..16 (16, the D-50's: 16 in Whole, 8 a tone in the other key modes). Kept over
+ * a program change; the CPU guard caps under it, never above (d50_voice_limit) */
+void d50_voices(unsigned n);
 /* RPN 1, Fine Tuning, sets Master Tune as on the D-50 (issue #66): d50_midi_tune is the tune now (the low 8 bits, 0..100) and a count of
  * the times MIDI set it (the bits above), for the panel to follow. d50_rpn_reset: the RPN null and Fine Tuning's bytes not received, as the
  * D-50 does on a basic channel change and when mono starts with Control G.CH. */
@@ -145,7 +148,7 @@ void d50_render(int32_t *out, unsigned n);
 unsigned d50_voices_sounding(void);
 unsigned d50_reverb(void);                               /* 1: the reverb has its lines (in the pool), 0: dry */
 unsigned d50_cores(void);                                /* 2: a share of the sounding voices renders on CPU1 (fm1.toml cpu2) */
-unsigned d50_voice_limit(void);                          /* the CPU guard's cap on each tone's voices, 4..16 */
+unsigned d50_voice_limit(void);                          /* the CPU guard's cap on each tone's voices, 4..16, at most d50_voices' */
 unsigned d50_split_share(void);                          /* CPU1's share of the sounding voices, in sixteenths */
 /* The CPU guard: the audio interrupt's share of the block just done, in % (app.c, from plat_cpu_pct). Audio interrupt. */
 void d50_guard(unsigned percent);

@@ -211,7 +211,9 @@ A save takes about a second; held notes end when it starts. It writes the flash 
 (the power, a new SysEx write) leaves the one before.
 
 **FM-1 Setup** (the EDIT page after Data Transfer): the FM-1's own settings, which a D-50 has not; kept with SAVE. K1 is **Store**, Auto or
-SAVE (above).
+SAVE (above). K2 is **Voices**, the polyphony cap: each tone's voices at most, 1 to 16 (16 at start, the D-50's own: 16 notes in Whole, 8 a
+tone in the other key modes). It holds over a program change; voices over a lower cap sound on to their release. The CPU guard, which takes a
+voice away when the load is too high, never goes above it.
 
 **WRITE**, as the D-50's: **SAVE held 2 seconds** writes the current patch, with its edits (the edit pages', the joystick's, SysEx into the
 temporary area `00 00 00`), into its own place in bank 1 (I-11 .. I-88), and bank 1 is saved in the flash at once, whatever Store is. The

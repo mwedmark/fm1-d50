@@ -119,9 +119,11 @@ d5::Patch::Split split;
 // fade to show.
 unsigned guard_hold, guard_calm;
 int guard_cap = 16;
+// The player's polyphony cap (issue #8, d50_voices: the FM-1 Setup page): each tone's voices at most, 1..16; the guard's cap never above it
+volatile int voice_max = 16;                     // (written by the task, at once: an engine started after it begins with it)
 
 enum : unsigned { kEvNote = 1, kEvBend = 2, kEvPanic = 3, kEvCc = 4, kEvPressure = 5, kEvTune = 6, kEvTranspose = 7, kEvMode = 8, kEvSep = 9,
-                  kEvRpnReset = 10, kEvSensing = 11, kQueue = 64 };
+                  kEvRpnReset = 10, kEvSensing = 11, kEvVoices = 12, kQueue = 64 };
 // The mono mode (issue #60): up to 8 parts, each one note at a time with its own bend. The audio interrupt's.
 constexpr unsigned kMonoParts = 8;
 struct Mono {
@@ -342,7 +344,7 @@ extern "C" int d50_bind_flash(void)
     split.begin = &split_begin;
     split.wait = &split_wait;
 #endif
-    guard_cap = 16;
+    guard_cap = voice_max;
     guard_hold = guard_calm = 0;
     mono_set(mono.mode, mono.parts);             // (a new engine: the mode as it was, nothing sounding)
     attach_reverb();                             // before configure, which binds the reverb's lines
@@ -381,6 +383,11 @@ extern "C" void d50_sensing_lost(void) { push(kEvSensing << 24); }
 extern "C" void d50_cc(unsigned cc, unsigned value) { push(kEvCc << 24 | (cc & 127U) << 8 | (value & 127U)); }
 extern "C" unsigned d50_midi_tune(void) { return tune_serial << 8 | static_cast<unsigned>(ctl.tune); }
 extern "C" void d50_tune(unsigned value) { push(kEvTune << 24 | (value > 100U ? 100U : value)); }
+extern "C" void d50_voices(unsigned n)
+{
+    voice_max = static_cast<int>(n < 1U ? 1U : n > 16U ? 16U : n);
+    push(kEvVoices << 24);                       // (the interrupt applies it to the sounding patch)
+}
 extern "C" void d50_transpose(int semitones) { push(kEvTranspose << 24 | static_cast<unsigned>(semitones < -12 ? -12 : semitones > 12 ? 12 : semitones) + 12U); }
 extern "C" void d50_pressure(unsigned value) { push(kEvPressure << 24 | (value & 127U)); }
 
@@ -486,9 +493,9 @@ void after_configure()
 {
     const d5::PatchSpec &s = spec_at(spec_done & 1U);
     ctl.bend_range = -1;
-    guard_cap = 16;                              // (the CPU guard's cap was the last patch's)
+    guard_cap = voice_max;                       // (the CPU guard's cap was the last patch's)
     guard_hold = guard_calm = 0;
-    patch->cap_voices(16);
+    patch->cap_voices(voice_max);
     ctl.porta_switch = s.upper.voice.porta_switch;
     ctl.porta_time = s.upper.voice.porta_time;
     for (unsigned i = 0; i < 4; ++i) ctl.held[i] = 0;
@@ -1295,7 +1302,7 @@ extern "C" void d50_guard(unsigned percent)
             if (guard_cap > 4) patch->cap_voices(--guard_cap);
             guard_hold = 8;
         }
-    } else if (percent < 60U && guard_cap < 16) {
+    } else if (percent < 60U && guard_cap < voice_max) {
         if (++guard_calm >= 86U) { patch->cap_voices(++guard_cap); guard_calm = 0; }
     } else {
         guard_calm = 0;
@@ -1368,6 +1375,11 @@ extern "C" void d50_render(int32_t *out, unsigned n)
             break;
         }
         case kEvTune: ctl.tune = static_cast<int>(e & 127U); apply_bend(); break;
+        case kEvVoices:                          // (voices over a lower cap sound on to their release: Tone::set_voice_limit)
+            guard_cap = voice_max;
+            guard_calm = 0;
+            if (patch) patch->cap_voices(guard_cap);
+            break;
         case kEvSensing: sensing_lost(); break;
         case kEvRpnReset:                        // (0x5BEC, 0x4F89: the RPN null, Fine Tuning's bytes not received; #66)
             ctl.rpn = 0x3FFF;
