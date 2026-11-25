@@ -15,6 +15,8 @@ typedef struct {
     uint8_t setup;                       /* the FM-1 Setup page's (issue #22; was the record's padding, 0): SETUP_STORE_SAVE */
 } settings_t;
 #define SETUP_STORE_SAVE 0x01u           /* the internal memory kept in the flash only with SAVE; 0 (the default): by itself after a dump */
+#define SETUP_VOICES_SHIFT 1u            /* the polyphony cap (issue #8): 16 less each tone's voices at most, so 0 (an older record) is 16 */
+#define SETUP_VOICES_MASK (15u << SETUP_VOICES_SHIFT)
 #define SET_OLD_BYTES 8u                 /* the record before midi (one without it loads, with midi 0: channel 1, omni on) */
 #define MIDI_CHANNEL 0x0Fu               /* the basic channel, 0 .. 15 (1 .. 16 on the screen): also the SysEx device ID, as the D-50's */
 #define MIDI_OMNI_OFF 0x10u              /* omni off: only the basic channel plays. Omni on (the default): every channel, as before #51 */
@@ -32,6 +34,7 @@ enum { MIDI_CONTROL_BCH, MIDI_CONTROL_GCH, MIDI_CONTROL_MDEOFF };   /* the basic
 #define LCD_PITCH_DEFAULT 1u             /* square dots, as the D-50's */
 static settings_t set;
 static uint8_t set_dirty;
+static uint32_t setup_voices(void) { return 16u - ((set.setup & SETUP_VOICES_MASK) >> SETUP_VOICES_SHIFT); }   /* 1..16 */
 static uint32_t midi_control(void)
 {
     uint32_t c = (set.midi & MIDI_CONTROL_MASK) >> MIDI_CONTROL_SHIFT;
@@ -412,7 +415,8 @@ static void settings_load(void)
         set.magic = SET_MAGIC;
     }
     set.midi &= MIDI_CHANNEL | MIDI_OMNI_OFF | MIDI_CONTROL_MASK | MIDI_LOCAL_OFF;   /* (Control was masked away before: #60, #67) */
-    set.setup &= SETUP_STORE_SAVE;
+    set.setup &= SETUP_STORE_SAVE | SETUP_VOICES_MASK;
+    d50_voices(setup_voices());
     d50_device(set.midi & MIDI_CHANNEL);         /* the SysEx device ID: the basic channel's (issue #51) */
 }
 
@@ -786,8 +790,14 @@ static void page_edit(uint32_t field, int32_t step)
         }
         return;
     }
-    if (g->own == LCD_OWN_SETUP) {               /* the FM-1 Setup page (#22): K1 Store, Auto or SAVE */
-        set.setup = (uint8_t)(step > 0 ? set.setup | SETUP_STORE_SAVE : set.setup & ~SETUP_STORE_SAVE);
+    if (g->own == LCD_OWN_SETUP) {               /* the FM-1 Setup page (#22): K1 Store, Auto or SAVE; K2 the polyphony cap (#8) */
+        if (field == 0u) {
+            set.setup = (uint8_t)(step > 0 ? set.setup | SETUP_STORE_SAVE : set.setup & ~SETUP_STORE_SAVE);
+        } else {
+            uint32_t v = (uint32_t)clamp((int32_t)setup_voices() + step, g->f[1].lo, g->f[1].hi);
+            set.setup = (uint8_t)((set.setup & ~SETUP_VOICES_MASK) | (16u - v) << SETUP_VOICES_SHIFT);
+            d50_voices(v);
+        }
         set_dirty = 1;
         ui.redraw = 1;
         return;
@@ -1369,9 +1379,10 @@ static void draw(void)
         else if (ui.page != LCD_PAGE_PLAY) {
             const lcd_page_t *g = &lcd_pages[ui.page];
             uint8_t own[4] = {0, 0, 0, 0};
-            if (g->own == LCD_OWN_SETUP)
+            if (g->own == LCD_OWN_SETUP) {
                 own[0] = (uint8_t)(set.setup & SETUP_STORE_SAVE ? 1u : 0u);
-            else if (g->own == LCD_OWN_MIDI)
+                own[1] = (uint8_t)setup_voices();
+            } else if (g->own == LCD_OWN_MIDI)
                 midi_values(own);
             lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb, g->own == LCD_OWN_TONE ? pb + page_base(g) : own,
                             g->fields > 4u ? ui.cursor : LCD_PAGE_FIELDS);
