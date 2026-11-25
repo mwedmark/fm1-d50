@@ -14,11 +14,14 @@ typedef struct {
     uint8_t midi;                        /* the D-50's MIDI (issue #51; a record without it reads 0): the basic channel, and MIDI_OMNI_OFF */
     uint8_t setup;                       /* the FM-1 Setup page's (issue #22; was the record's padding, 0): SETUP_STORE_SAVE */
     int8_t vcurve;                       /* the keys' velocity curve, -5 .. +5 (issue #93; the record's padding, so an older one reads 0) */
+    int8_t tune_off;                     /* Master Tune 0..100 less 50 (issue #57; 0, 440.0 Hz, in an older record) */
+    int8_t transpose;                    /* Key Transpose -12..12 (issue #57; 0 in an older record) */
 } settings_t;
 #define SETUP_STORE_SAVE 0x01u           /* the internal memory kept in the flash only with SAVE; 0 (the default): by itself after a dump */
 #define SETUP_VOICES_SHIFT 1u            /* the polyphony cap (issue #8): 16 less each tone's voices at most, so 0 (an older record) is 16 */
 #define SETUP_VOICES_MASK (15u << SETUP_VOICES_SHIFT)
 #define SET_OLD_BYTES 8u                 /* the record before midi (one without it loads, with midi 0: channel 1, omni on) */
+#define SET_V2_BYTES 12u                 /* the record before tune and transpose (#57): it loads, with 440.0 Hz and no transpose */
 #define MIDI_CHANNEL 0x0Fu               /* the basic channel, 0 .. 15 (1 .. 16 on the screen): also the SysEx device ID, as the D-50's */
 #define MIDI_OMNI_OFF 0x10u              /* omni off: only the basic channel plays. Omni on (the default): every channel, as before #51 */
 #define MIDI_CONTROL_SHIFT 5u            /* the D-50's MIDI-1 Control (system byte 14, #60): the control channel in mono, 0 in an older record */
@@ -391,6 +394,7 @@ int app_sysex(const uint8_t *p, uint32_t n)
 /* -------------------------------------------------------------------- backup --- */
 /* (the resource region's transfer is the restore's, so the backup is built: the settings are all it holds) */
 static void settings_load(void);
+static void tune_apply(void);
 int app_backup_playing(void) { return d50_voices_sounding() != 0u; }
 void app_backup_flush(void)
 {
@@ -403,6 +407,7 @@ void app_backup_restored(void)
     settings_load();
     d50_bank(set.bank);
     d50_program(set.program);
+    tune_apply();
 }
 
 /* ------------------------------------------------------------------ settings --- */
@@ -411,7 +416,8 @@ static void settings_load(void)
     int n;
     memset(&set, 0, sizeof set);
     n = plat_store_load(OBJ_SETTINGS, &set, sizeof set);
-    if ((n != (int)sizeof set && n != (int)SET_OLD_BYTES) || set.magic != SET_MAGIC || set.octave < -2 || set.octave > 2 ||
+    if ((n != (int)sizeof set && n != (int)SET_OLD_BYTES && n != (int)SET_V2_BYTES) || set.magic != SET_MAGIC || set.octave < -2 ||
+        set.octave > 2 ||
         set.program > 63u) {
         memset(&set, 0, sizeof set);
         set.magic = SET_MAGIC;
@@ -422,6 +428,10 @@ static void settings_load(void)
     if (set.vcurve < -VCURVE_MAX || set.vcurve > VCURVE_MAX)
         set.vcurve = 0;
     touch_curve(set.vcurve);                     /* (lib/touch.c keeps it over touch_on) */
+    if (set.tune_off < -50 || set.tune_off > 50)
+        set.tune_off = 0;
+    if (set.transpose < -12 || set.transpose > 12)
+        set.transpose = 0;
     d50_device(set.midi & MIDI_CHANNEL);         /* the SysEx device ID: the basic channel's (issue #51) */
 }
 
@@ -674,6 +684,7 @@ void app_init(void)
     d50_program(set.program);
     bound = d50_bind_flash();
     set.bank = (uint8_t)d50_current_bank();
+    tune_apply();                            /* (after the bind: it empties the engine's queue) */
 }
 
 /* ------------------------------------------------------------------------ UI --- */
@@ -689,7 +700,7 @@ static struct {
     uint8_t save_long;                           /* SAVE held long enough to have written the patch (this press: #83) */
     uint32_t save_ms;                            /* when SAVE was pressed */
     uint8_t write_to;                            /* a WRITE's save under way: the place it wrote, 1..64 (0 none: #83) */
-    int8_t tune_off;                            /* Master Tune 0..100 (#54) less 50 (so 0 = 440.0 Hz at start); not kept over a power cycle */
+    int8_t tune_off;                            /* Master Tune 0..100 (#54) less 50 (so 0 = 440.0 Hz): the panel's kept in set (#57), RPN 1's not */
     uint8_t tx_program;                         /* with Local off, the program change the encoders send (#67), 0..63 */
     int8_t transpose;                            /* Key Transpose -12..12 (#54) */
     uint8_t lower;                               /* the selected tone, the joystick's X: 0 the upper, 1 the lower (#58) */
@@ -699,6 +710,17 @@ static struct {
     uint8_t xfer_on;                             /* a transfer started from the page is under way (d50_transfer) */
     uint32_t boot_until;                         /* the power-on message (#81) until this plat_ms; 0 when it has gone */
 } ui;
+
+/* Master Tune and Key Transpose as SAVE kept them (issue #57). The D-50 keeps both over a power cycle: at start-up 0x233C copies its
+ * system bytes from the battery-backed 0xBF00 into 0xC5C0 (defaults from 0x2374 only when one is out of range), and a panel change
+ * goes into both (0x3BF0). RPN 1 (Fine Tuning) writes 0xC5C0 alone (0x4DC4), so a tune from MIDI is not kept: here neither. */
+static void tune_apply(void)
+{
+    ui.tune_off = set.tune_off;
+    ui.transpose = set.transpose;
+    d50_tune((unsigned)(50 + ui.tune_off));
+    d50_transpose(ui.transpose);
+}
 #define BOOT_MS 2000u                            /* how long the power-on message stays (ours: the D-50's time is not known) */
 #include "d50_lcd.h"
 /* A byte of the temporary area (the current patch, 7 blocks of 64: the upper's partial 1, partial 2 and common, the lower's, the patch block)
@@ -1278,11 +1300,15 @@ static void input(void)
         if ((e = plat_enc(EN_K1)) != 0) {
             ui.tune_off = (int8_t)clamp((int32_t)ui.tune_off + e, -50, 50);
             d50_tune((unsigned)(50 + ui.tune_off));
+            set.tune_off = ui.tune_off;          /* kept with SAVE (#57): the D-50 writes a panel change into its battery copy (0x3BF0) */
+            set_dirty = 1;
             ui.redraw = 1;
         }
         if ((e = plat_enc(EN_K2)) != 0) {
             ui.transpose = (int8_t)clamp((int32_t)ui.transpose + e, -12, 12);
             d50_transpose(ui.transpose);
+            set.transpose = ui.transpose;
+            set_dirty = 1;
             ui.redraw = 1;
         }
     } else if (lcd_pages[ui.page].fields > 4u) { /* more values than knobs (#8's EQ): K1 moves the cursor, K2 changes its value */

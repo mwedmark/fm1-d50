@@ -73,9 +73,9 @@ The view and the colour are saved with SAVE.
 | K2 | The joystick's Y, as on a D-50: the tone balance, the Upper against the Lower tone (the LCD's Bal) |
 | K3 | The LCD's dot height (true-size view) |
 | K4 | The selected tone for K1 and for the EQ and Chorus pages, as the D-50's UPPER and LOWER keys: right the Lower, left the Upper (the Upper at start) |
-| SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at start), K2 Key Transpose (−12 to +12): the FM-1's keys only, as on a D-50; notes from MIDI are not moved. Not kept over a power cycle |
+| SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at first), K2 Key Transpose (−12 to +12): the FM-1's keys only, as on a D-50; notes from MIDI are not moved. Both kept with SAVE, as the D-50 keeps them over a power cycle; a Master Tune from MIDI (RPN 1) is not kept, as on a D-50 |
 | EDIT | The edit pages in turn (Output Mode, Chase, EQ, Chorus, MIDI Channel: BasicCH, Omni, Control, Local; Data Transfer, below; FM-1 Setup, below), then the play screen |
-| SAVE | Saves the patch, bank, octave, view, colour, the MIDI settings and the FM-1 Setup page; and bank 1, when SysEx changed it and it is not yet saved (below). Held 2 s: WRITE (below) |
+| SAVE | Saves the patch, bank, octave, view, colour, the MIDI settings, Master Tune and Key Transpose and the FM-1 Setup page; and bank 1, when SysEx changed it and it is not yet saved (below). Held 2 s: WRITE (below) |
 
 The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.
 
