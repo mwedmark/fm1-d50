@@ -209,6 +209,7 @@ class Chorus {
 public:
     void configure(const ChorusSpec& spec, float sr) {
         spec_ = spec;
+        mix_gains();
         sr_ = sr;
         phase_ = 0.0f;
         primed_ = false;
@@ -220,7 +221,7 @@ public:
 
     // Changing the mix must not touch the delay line: turning a knob while a
     // chord rings should not restart the chorus.
-    void set_balance(float b) { spec_.balance = clamp01(b); }
+    void set_balance(float b) { spec_.balance = clamp01(b); mix_gains(); }
     // Type and depth are read per sample, the rate only sets the LFO step:
     // none of them needs the delay line cleared, so a knob turn is silent.
     void set_type(int t) { spec_.type = t < 0 ? 0 : (t > 7 ? 7 : t); primed_ = false; }   // fm1-d50: re-primes the strided delays
@@ -315,13 +316,31 @@ public:
         phase_ += inc_;
         if (phase_ >= 1.0f) phase_ -= 1.0f;
 
-        const float b = clamp01(spec_.balance);
-        const float dry = x * (1.0f - b);
-        l = dry + wl * b;
-        r = dry - wr * b;
+        const float dry = x * dry_g_;
+        l = dry + wl * wet_g_;
+        r = dry - wr * wet_g_;
     }
 
 private:
+    // fm1-d50 (issue #103): the balance's dry and wet gains in the reverb's crossfade -- the wet full from 50 up, the dry full up to
+    // 50 -- scaled to the power of the plain fade (1 - b, b), so the level stays where it was and only the wet's share moves. The
+    // plain fade left 38 factory patches on Chorus 1 narrower than Synthmania's real D-50 demos, the more so the lower the balance
+    // (-2.1 dB side to mid at balance 10-34, -1.4 at 35-59, -0.1 at 60-100); with this, -0.6 / -0.7 / -0.3. Balance 0 and 100 are
+    // as before. D5_CHORUS_PLAIN_FADE restores the plain fade.
+    void mix_gains() {
+        const float b = clamp01(spec_.balance);
+#ifdef D5_CHORUS_PLAIN_FADE
+        dry_g_ = 1.0f - b;
+        wet_g_ = b;
+#else
+        const float w = b < 0.5f ? 2.0f * b : 1.0f, d = b > 0.5f ? 2.0f * (1.0f - b) : 1.0f;
+        const float k = std::pow(((1.0f - b) * (1.0f - b) + b * b) / (w * w + d * d), 0.5f);
+        dry_g_ = d * k;
+        wet_g_ = w * k;
+#endif
+    }
+    float dry_g_ = 0.5f, wet_g_ = 0.5f;
+
     static constexpr float kPi = 3.14159265358979323846f;
     D5_INL static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
     D5_INL static int clamp_index(int v, int n) { return v < 0 ? 0 : (v >= n ? n - 1 : v); }
