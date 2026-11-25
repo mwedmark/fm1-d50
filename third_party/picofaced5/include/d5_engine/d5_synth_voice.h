@@ -160,6 +160,13 @@ public:
         base_cv_ = spec.cutoff * 200.0f + 54.0f
                    + (spec.cutoff_keyfollow - spec.pitch_keyfollow)
                      * (85.0f / 64.0f) * static_cast<float>(key_rel60);
+        // fm1-d50 (issue #98): the base D5_TVF_BASE_OFFSET chip units off (-24 = an octave and a half). With the base above, Pizzagogo's
+        // Lower (cutoff 44) was 10-20 dB over a reference recording in 4-15 kHz; 24 units under it, within 3 dB from 1 to 15 kHz, and the
+        // user heard it closest. About what the move from cutoff + 78 to 2 * cutoff + 54 (02.09.2026) added at that cutoff. 0 restores it.
+#ifndef D5_TVF_BASE_OFFSET
+#define D5_TVF_BASE_OFFSET -24
+#endif
+        base_cv_ += static_cast<float>(D5_TVF_BASE_OFFSET);
         // TVF bias: past the bias point, in its direction, the cutoff
         // tilts by magnitude/64 chip units per semitone (0x081B-0x0830,
         // same /64 as everything else in that accumulator).
