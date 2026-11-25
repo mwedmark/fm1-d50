@@ -8,11 +8,13 @@ sites, without the front page, the manual and the emulator: the emulator is the 
 Roland data (the workflow builds it without the resource region), so the page installs the firmware only; the D-50's data
 is put in by the person who has it (INSTALL.md). Needs fm1-base at the commit tools/ci/fetch_platform.sh checked out.
 """
+import datetime
 import hashlib
 import json
 import re
 import shutil
 import sys
+from html import escape as html_escape
 from pathlib import Path
 
 base, app, pkg, version, out = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4], Path(sys.argv[5])
@@ -50,4 +52,14 @@ for key, val in (("RES", conf.get("resources_what", "the D-50's data")), ("RES_J
     html = html.replace("{{" + key + "}}", val)
 with open(out / "install" / "index.html", "w", encoding="utf-8", newline="\n") as f:    # (LF on Windows too)
     f.write(html.replace("/*LIB*/", lib).replace("/*META*/", meta).replace("/*APP*/", "null"))
+
+# The build, visible on both pages (issue #109): the version (main-<sha>, or the release tag) and the UTC build time.
+built = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+stamp = f'<p class="small build" id="build" style="font-size:.85rem;opacity:.7;margin:.8rem 0 0">Build {html_escape(version)}, {built}</p>\n'
+for page, close in ((out / "install" / "index.html", "</footer>"), (out / "index.html", "</main>")):
+    text = page.read_text(encoding="utf-8")
+    if text.count(close) != 1:
+        raise SystemExit(f"{page} must contain {close} once")
+    with open(page, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text.replace(close, stamp + close))
 print(f"install page: {out / 'install' / 'index.html'} ({product}, {name}, sha256 {hashlib.sha256(raw).hexdigest()[:12]})")
