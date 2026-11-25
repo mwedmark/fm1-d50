@@ -11,7 +11,7 @@ claims, and nobody here has checked, is said so. Nothing was built or run for th
 | Its internal ROM | 8 KB mask ROM in the CPU (IC25), e.g. `d78312g-022`. The 1.xx firmware has another one (`-017`), which is not dumped. | MAME |
 | Program ROM | 64 KB EPROM (IC22). Versions 1.04, 1.06, 1.10, 2.10, 2.20, 2.21, 2.22. D-550: 1.00-1.02. | MAME |
 | LA chip | Old boards **MB87136A** (R15229851, PGA), new boards R15229896 "LA32" (QFP). **The same two part numbers as in the MT-32.** | MAME `roland_d50.cpp` and `roland_mt32.cpp` |
-| LA clock | 32.768 MHz (a commented-out line in MAME). 32.768 MHz / 1024 = 32 000 Hz, the MT-32's rate. Not measured on a D-50. | MAME; PicoVintage README says 32 kHz is "the MT-32's figure" |
+| LA clock | 32.768 MHz (a commented-out line in MAME). 32.768 MHz / 1024 = 32 000 Hz, the MT-32's rate. **Confirmed on a D-50 within about 1 cent** (2026-11-25, section 6). | MAME; PicoVintage README says 32 kHz is "the MT-32's figure"; section 6 |
 | Wave ROM | **512 KB** (0x80000). New boards: one TC534000 at IC30. Old boards: two 256 KB TC532000 (IC30 A, IC29 B). | MAME, PicoVintage |
 | PCM waves | 100. Waves 1-76 are described by a table in the EPROM (start page and length class), 77-100 are combination waves computed from two tables. So **the wave table needs the EPROM too**, not only the wave ROM. | PicoVintage PROJEKTSTAND.md, not checked here |
 | Chorus | A chorus ASIC, MB87137 (IC8 on the old board). | MAME (a comment) |
@@ -119,6 +119,23 @@ the chorus, and the analog output stage.
 2. Milestone 2 as planned: one synth partial on the device from Munt's wave generator, the TVA, MIDI on/off, 32 kHz, measured in fm1-emu.
 3. In parallel, the PC reference (new milestone 1b): the uPD78312 + Nuked LA32 on the PC, first only to find the LA32 writes in the firmware.
 
+## 6. Measured against a real D-50 (2026-11-25)
+
+**The PCM rate is 32 kHz (issue #12).** Synthmania's D-50 page has recordings of single PCM waves from a real D-50 ("Waveform demos"). The engine played each of the same waves alone on key 60, at coarse C4, dry and without modulation. A wrong sample rate would move the whole spectrum by one factor. So each recording's long-term spectrum, on a log-frequency axis, was cross-correlated with the engine's, in 1-cent steps with a parabolic peak:
+
+| Wave | D-50 against the engine | Rate it implies | Correlation |
+|---|---|---|---|
+| 33 Steam | +0.7 cents | 32 014 Hz | 0.93 |
+| 39 Lips1 | +1.0 cents | 32 018 Hz | 0.94 |
+| 47 Pizz | +0.5 cents | 32 009 Hz | 0.93 |
+| 95 Loop19 | +1.0 cents | 32 018 Hz | 0.89 |
+| 98 Loop22 | +0.7 cents | 32 013 Hz | 0.96 |
+| 68 Spect1 | no clear peak within half a semitone (its best match is two octaves down, at a low correlation: probably played on another key) | - | 0.05 |
+
+Five waves agree on 32 kHz within about 1 cent (0.06 %), which is the measurement's own spread. PicoFaceD5's transposition rule (IC25 `0x0F49`) with the 32 kHz blob plays the PCM partials at the D-50's pitch. One assumption: the demos were played on C4. A whole number of semitones off would not show, but even one would mean a rate as unlikely as 30.2 or 33.9 kHz.
+
+The same page's controlled square wave (C3-C6 at TVF cutoff 60 and 100) matches the synth partials' TVF base within 0.3-0.6 dB on its odd harmonics (issue #101). Its factory preset demos, music with the notes unknown, set the chorus balance's crossfade (issue #103). The recordings are Synthmania's: they stay on the maintainer's computer (`roms/ref`, which git ignores) and are not in the repository.
+
 ## Sources
 
 - MAME, `src/mame/roland/roland_d50.cpp` and `roland_mt32.cpp`: https://github.com/mamedev/mame/blob/master/src/mame/roland/roland_d50.cpp
@@ -126,4 +143,5 @@ the chorus, and the analog output stage.
 - gearmulator 88emu: https://github.com/dsp56300/gearmulator/blob/main/doc/88emu_readme.md
 - Munt: https://github.com/munt/munt (`mt32emu/src/LA32WaveGenerator.h`)
 - PicoVintageSynthCollection: https://github.com/Michi71/PicoVintageSynthCollection (README, `instruments/PicoFaceD5/README.md`, `doc/PROJEKTSTAND.md`, `include/d5_engine/d5_pcm_voice.h`)
+- Recordings of a real D-50 (waveform demos, factory preset demos, a patch analysis): https://www.synthmania.com/d-50.htm
 - Wave ROM sizes discussed: https://www.fmjsoft.com/fmt/syxrd.htm, https://gearspace.com/threads/roland-d-50-filter-cutoff-slope-series-mode.1357116/
