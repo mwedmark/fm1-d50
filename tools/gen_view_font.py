@@ -13,8 +13,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 # (name, file, px, first, last)
-FACES = [("NAME", "BarlowSemiCondensed-Bold.ttf", 43, 32, 126),     # the patch name: nearly three times B's 15 px (45 leaves Afterthought too wide)
-         ("STAT", "BarlowSemiCondensed-SemiBold.ttf", 36, 32, 95)]  # the status lines: three times XS's 12 px (capitals)
+FACES = [("NAME", "BarlowSemiCondensed-Bold.ttf", 43, 32, 126)]    # the patch name: nearly three times B's 15 px (45 leaves Afterthought too wide)
 
 
 def render(path, px, first, last):

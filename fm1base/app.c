@@ -1376,9 +1376,9 @@ void app_input_only(void) { input(); }
 /* ------------------------------------------------------------------- the FM-1 view's large text (#107) --- */
 /* The screen's bands: the header (0..31, as before), the middle (the patch, or the D-50's LCD) and the status lines below */
 #define VIEW_MID_Y 34u
-#define VIEW_MID_H 126u
-#define VIEW_LOW_Y 160u
-#define VIEW_LOW_H 80u
+#define VIEW_MID_H 144u
+#define VIEW_LOW_Y 180u
+#define VIEW_LOW_H 60u
 
 static uint32_t view_glyph(const view_face_t *f, uint32_t ch)
 {
@@ -1434,14 +1434,15 @@ static int32_t view_text(int32_t x, int32_t y, const view_face_t *f, const char 
 {
     return view_text_n(x, y, f, s, 0xFFFFu, c);
 }
-/* a status item: its label in grey, a space, its value in white; returns the end x (w: its width, without drawing) */
+/* a status item in M (#107: twice its first size): its label in grey, a space, its value in white; returns the end x
+ * (without draw: where it would end) */
 static int32_t view_item(int32_t x, int32_t y, const char *label, const char *value, int draw)
 {
-    const int32_t sp = VIEW_STAT.adv[' ' - VIEW_STAT.first];
+    const int32_t sp = (int32_t)text_w(&FONT_M, " ");
     if (!draw)
-        return x + view_width(&VIEW_STAT, label, 0xFFFFu) + sp + view_width(&VIEW_STAT, value, 0xFFFFu);
-    x = view_text(x, y, &VIEW_STAT, label, C_GRAY);
-    return view_text(x + sp, y, &VIEW_STAT, value, C_WHITE);
+        return x + (int32_t)text_w(&FONT_M, label) + sp + (int32_t)text_w(&FONT_M, value);
+    x = cv_text(x, y, &FONT_M, label, C_GRAY);
+    return cv_text(x + sp, y, &FONT_M, value, C_WHITE);
 }
 /* The patch name in the large face, on one line or two (#107): a break at a space first, else after a hyphen or before a
  * capital that follows a small letter (DigitalNative/Dance), the two lines as even as they can be; else as much as fits */
@@ -1582,29 +1583,29 @@ static void draw(void)
         view_name(d50_program_name(p));          /* the FM-1 view (#107): the name large, on one line or two */
     }
     cv_blit(0, VIEW_MID_Y);
-    cv_begin(240, VIEW_LOW_H, C_BLACK);          /* the status (#107): two lines, three times the size they had */
+    cv_begin(240, VIEW_LOW_H, C_BLACK);          /* the status (#107): two lines in M, twice the size they had */
     {
         char v[12];
         int32_t w;
         uint_text(d50_voices_sounding(), v);
-        view_item(8, 0, "VOICES", v, 1);
+        view_item(8, 2, "VOICES", v, 1);
         {                                        /* (the right-hand item's label only when it fits beside the left-hand one) */
             const int32_t end = view_item(8, 0, "VOICES", v, 0) + 14;
             uint_text(plat_cpu_pct(), v);
             text_cat(v, "%");
             w = view_item(0, 0, "CPU", v, 0);
             if (232 - w >= end)
-                view_item(232 - w, 0, "CPU", v, 1);
+                view_item(232 - w, 2, "CPU", v, 1);
             else
-                view_text(232 - view_width(&VIEW_STAT, v, 0xFFFFu), 0, &VIEW_STAT, v, C_WHITE);
+                cv_text(232 - (int32_t)text_w(&FONT_M, v), 2, &FONT_M, v, C_WHITE);
         }
         v[0] = set.octave < 0 ? '-' : set.octave > 0 ? '+' : 0;
         v[1] = 0;
         uint_text((uint32_t)(set.octave < 0 ? -set.octave : set.octave), v + text_len(v));
-        view_item(8, 36, "OCT", v, 1);
+        view_item(8, 30, "OCT", v, 1);
         uint_text(d50_voice_limit(), v);
-        w = view_item(0, 36, d50_reverb() ? "LIMIT" : "DRY", v, 0);
-        view_item(232 - w, 36, d50_reverb() ? "LIMIT" : "DRY", v, 1);
+        w = view_item(0, 30, d50_reverb() ? "LIMIT" : "DRY", v, 0);
+        view_item(232 - w, 30, d50_reverb() ? "LIMIT" : "DRY", v, 1);
     }
     cv_blit(0, VIEW_LOW_Y);
 }
