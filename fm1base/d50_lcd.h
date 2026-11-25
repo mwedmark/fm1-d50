@@ -200,8 +200,9 @@ enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_EQ, LCD_PAGE_CHO
 enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE, LCD_SHOW_ONOFF, LCD_SHOW_CONTROL, LCD_SHOW_STORE,   /* the value; the value + 1; the
                                                                                         * chase mode's name; ON or OFF; MIDI-1's Control (#60:
                                                                                         * 0x7CB6, 6 each); Auto or SAVE (#22) */
-       LCD_SHOW_LF, LCD_SHOW_HF, LCD_SHOW_HQ, LCD_SHOW_GAIN };   /* the EQ's (#8): its low and high frequency and Q from the firmware's tables
+       LCD_SHOW_LF, LCD_SHOW_HF, LCD_SHOW_HQ, LCD_SHOW_GAIN,     /* the EQ's (#8): its low and high frequency and Q from the firmware's tables
                                                                   * (0x7B1D), a gain 0..24 as -12..+12 */
+       LCD_SHOW_CURVE };                                          /* the keys' velocity curve (#93): 0..10 as -5..+5 */
 enum { LCD_OWN_PATCH, LCD_OWN_MIDI, LCD_OWN_SETUP, LCD_OWN_TONE };   /* whose the values are: the patch block's, app.c's (lcd_page_screen
                                                                       * own[]), or the selected tone's common block (own, its 64 bytes) */
 typedef struct {
@@ -237,8 +238,10 @@ static const lcd_page_t lcd_pages[LCD_PAGES] = {
     /* the Data Transfer menu (lcd_transfer_screen below; app.c's page_edit takes K1 as the item): its own screen, no fields here */
     {"Data Transfer", "", 1, {{0, 0, 3, 0, LCD_SHOW_NUM}}, LCD_OWN_PATCH},
     /* the FM-1's own settings, which a D-50 has not (issue #22; the words are ours): K1 Store, when the internal memory is kept in the flash,
-     * Auto (by itself after a dump) or SAVE (with SAVE); K2 Voices, the polyphony cap (#8): each tone's voices at most, 1..16 */
-    {"FM-1 Setup", "Store $$$$  Voices$$$", 2, {{0, 0, 1, 6, LCD_SHOW_STORE}, {1, 1, 16, 18, LCD_SHOW_NUM}}, LCD_OWN_SETUP},
+     * Auto (by itself after a dump) or SAVE (with SAVE); K2 Voices, the polyphony cap (#8): each tone's voices at most, 1..16; K3 VCrv, the
+     * keys' velocity curve (#93), -5..+5 */
+    {"FM-1 Setup", "Store $$$$  Voices$$$  VCrv$$$", 3,
+     {{0, 0, 1, 6, LCD_SHOW_STORE}, {1, 1, 16, 18, LCD_SHOW_NUM}, {2, 0, 10, 27, LCD_SHOW_CURVE}}, LCD_OWN_SETUP},
 };
 static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p, const uint8_t *own, uint32_t cursor)
 {
@@ -267,10 +270,11 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
             lcd_put(1, f->col, eq_f + 3u * (v + (f->show == LCD_SHOW_HF ? 8u : 0u)), 3);
         } else if (f->show == LCD_SHOW_HQ) {
             lcd_put(1, f->col, eq_q + 3u * v, 3);
-        } else if (f->show == LCD_SHOW_GAIN) {          /* (the sign before the digits: ours) */
-            uint32_t a = v >= 12u ? v - 12u : 12u - v;
-            t[0] = a >= 10u ? (v < 12u ? '-' : '+') : ' ';
-            t[1] = a >= 10u ? '1' : v < 12u ? '-' : v > 12u ? '+' : ' ';
+        } else if (f->show == LCD_SHOW_GAIN || f->show == LCD_SHOW_CURVE) {   /* (the sign before the digits: ours) */
+            const uint32_t mid = f->show == LCD_SHOW_GAIN ? 12u : 5u;
+            uint32_t a = v >= mid ? v - mid : mid - v;
+            t[0] = a >= 10u ? (v < mid ? '-' : '+') : ' ';
+            t[1] = a >= 10u ? '1' : v < mid ? '-' : v > mid ? '+' : ' ';
             t[2] = (char)('0' + a % 10u);
             lcd_put(1, f->col, t, 3);
         } else if (f->show == LCD_SHOW_ONOFF) {
