@@ -3,6 +3,7 @@
  * d50/ (d50.h, d50.cpp), compiled in d50_unit.cpp. Part of the platform's unity build (device/unity.c), after
  * the platform: gfx.c and announce.c are in scope. FM1-BASE.md. */
 #include "../d50/d50.h"
+#include "d50_view_font.h"            /* the FM-1 view's large faces (#107): tools/gen_view_font.py */
 
 #define SET_MAGIC 0x44353031u            /* "D501": the settings record */
 typedef struct {
@@ -1372,14 +1373,153 @@ static void input(void)
 
 void app_input_only(void) { input(); }
 
+/* ------------------------------------------------------------------- the FM-1 view's large text (#107) --- */
+/* The screen's bands: the header (0..31, as before), the middle (the patch, or the D-50's LCD) and the status lines below */
+#define VIEW_MID_Y 34u
+#define VIEW_MID_H 144u
+#define VIEW_LOW_Y 180u
+#define VIEW_LOW_H 60u
+
+static uint32_t view_glyph(const view_face_t *f, uint32_t ch)
+{
+    if (ch < f->first || ch > f->last)
+        ch = ch >= 'a' && ch <= 'z' && f->last < 'a' ? ch - 32u : '?';
+    if (ch < f->first || ch > f->last)
+        ch = '?';
+    return ch - f->first;
+}
+static int32_t view_width(const view_face_t *f, const char *s, uint32_t n)
+{
+    int32_t w = 0;
+    for (; n && *s; s++, n--)
+        w += f->adv[view_glyph(f, (uint8_t)*s)];
+    return w;
+}
+/* n characters of s at (x, y), y the line's top, each pixel's coverage blended over the canvas (as cv_text); returns the end x */
+static int32_t view_text_n(int32_t x, int32_t y, const view_face_t *f, const char *s, uint32_t n, uint16_t c)
+{
+    const uint32_t r = c >> 11, g = (c >> 5) & 63u, b = c & 31u;
+    for (; n && *s; s++, n--) {
+        const uint32_t gi = view_glyph(f, (uint8_t)*s);
+        const uint8_t *d = f->data + f->off[gi];
+        const int32_t bx = x + (int8_t)d[0], by = y + d[1] + cv_oy;
+        const uint32_t w = d[2], rows = d[3], bpr = (w + 1u) / 2u;
+        uint32_t i, j;
+        d += 4;
+        for (j = 0; j < rows; j++) {
+            const int32_t py = by + (int32_t)j;
+            if (py < cv_y0 || py >= cv_y1)
+                continue;
+            for (i = 0; i < w; i++) {
+                const int32_t px = bx + (int32_t)i;
+                const uint32_t a = (uint32_t)(d[j * bpr + i / 2u] >> (i & 1u ? 0 : 4)) & 15u;
+                uint16_t *q;
+                if (!a || (uint32_t)px >= cv_w)
+                    continue;
+                q = &cv_px[(uint32_t)py * cv_w + (uint32_t)px];
+                if (a == 15u) {
+                    *q = swap16(c);
+                } else {
+                    const uint32_t bg = swap16(*q), br = bg >> 11, bgg = (bg >> 5) & 63u, bb = bg & 31u;
+                    *q = swap16(((r * a + br * (15u - a)) / 15u) << 11 | ((g * a + bgg * (15u - a)) / 15u) << 5 |
+                                (b * a + bb * (15u - a)) / 15u);
+                }
+            }
+        }
+        x += f->adv[gi];
+    }
+    return x;
+}
+static int32_t view_text(int32_t x, int32_t y, const view_face_t *f, const char *s, uint16_t c)
+{
+    return view_text_n(x, y, f, s, 0xFFFFu, c);
+}
+/* a status item in M (#107: twice its first size): its label in grey, a space, its value in white; returns the end x
+ * (without draw: where it would end) */
+static int32_t view_item(int32_t x, int32_t y, const char *label, const char *value, int draw)
+{
+    const int32_t sp = (int32_t)text_w(&FONT_M, " ");
+    if (!draw)
+        return x + (int32_t)text_w(&FONT_M, label) + sp + (int32_t)text_w(&FONT_M, value);
+    x = cv_text(x, y, &FONT_M, label, C_GRAY);
+    return cv_text(x + sp, y, &FONT_M, value, C_WHITE);
+}
+/* The patch name in the large face, on one line or two (#107): a break at a space first, else after a hyphen or before a
+ * capital that follows a small letter (DigitalNative/Dance), the two lines as even as they can be; else as much as fits */
+static void view_name(const char *name)
+{
+    const uint8_t *hg = VIEW_NAME.data + VIEW_NAME.off['H' - VIEW_NAME.first];   /* the capitals' top row and height */
+    const int32_t maxw = 228, top = hg[1], cap = hg[3], pitch = cap + 14;
+    uint32_t n = 0, i, best = 0, kind;
+    int32_t bw = 0x7FFFFFFF;
+    while (name[n])
+        n++;
+    while (n && name[n - 1] == ' ')
+        n--;
+    if (view_width(&VIEW_NAME, name, n) <= maxw) {
+        view_text_n(6, (int32_t)(VIEW_MID_H - (uint32_t)(cap + 10)) / 2 - top, &VIEW_NAME, name, n, C_WHITE);
+        return;
+    }
+    for (kind = 0; kind < 2u && !best; kind++)   /* 0: the spaces, 1: hyphens and capitals */
+        for (i = 1; i < n; i++) {
+            const int at_space = name[i] == ' ';
+            const int other = name[i - 1] == '-' ||
+                              (name[i] >= 'A' && name[i] <= 'Z' && name[i - 1] >= 'a' && name[i - 1] <= 'z');
+            uint32_t j = i;
+            int32_t w1, w2, m;
+            if (kind == 0u ? !at_space : !other)
+                continue;
+            while (j < n && name[j] == ' ')
+                j++;
+            w1 = view_width(&VIEW_NAME, name, i);
+            w2 = view_width(&VIEW_NAME, name + j, n - j);
+            m = w1 > w2 ? w1 : w2;
+            if (m <= maxw && m < bw) {
+                bw = m;
+                best = i;
+            }
+        }
+    if (!best)                                   /* no break fits: as many characters as fit, then the rest */
+        for (best = n - 1u; best > 1u && view_width(&VIEW_NAME, name, best) > maxw; best--)
+            ;
+    {
+        const int32_t y = (int32_t)(VIEW_MID_H - (uint32_t)(pitch + cap + 10)) / 2 - top;
+        uint32_t j = best;
+        while (j < n && name[j] == ' ')
+            j++;
+        view_text_n(6, y, &VIEW_NAME, name, best, C_WHITE);
+        view_text_n(6, y + pitch, &VIEW_NAME, name + j, n - j, C_WHITE);
+    }
+}
+
+/* the D-50's 11..88; with several banks "2-37" (issue #7) */
+static void patch_number(char *t, uint32_t p)
+{
+    uint32_t j = 0;
+    if (d50_banks() > 1u) {
+        t[j++] = (char)('1' + set.bank);
+        t[j++] = '-';
+    }
+    t[j++] = (char)('1' + p / 8u);
+    t[j++] = (char)('1' + p % 8u);
+    t[j] = 0;
+}
 static void draw(void)
 {
     char t[32];
     uint32_t now = plat_ms(), p = set.program;
+    const int own_view = bound && !ui.boot_until && !(set.lcd & LCD_SHOWN) && ui.page == LCD_PAGE_PLAY;   /* the FM-1 view */
     cv_begin(240, 32, C_BLACK);
     if (now < ui.msg_until && !(bound && (set.lcd & LCD_SHOWN))) {   /* (with the LCD, the message is in it) */
         int32_t x = cv_text(10, 6, &FONT_B, ui.msg[0], C_WHITE);
         cv_text(x + 8, 6, &FONT_B, ui.msg[1], C_HI);
+    } else if (own_view) {                       /* the FM-1 view (#107): the patch number large, then D-50 at the right */
+        int32_t x;
+        patch_number(t, p);
+        x = cv_text(8, 0, &FONT_L, t, C_HI);
+        if (d50_chase_on())
+            cv_text(x + 12, 10, &FONT_XS, "CHASE", C_HI);
+        cv_text(232 - (int32_t)text_w(&FONT_B, "D-50"), 6, &FONT_B, "D-50", C_WHITE);
     } else {
         cv_text(10, 6, &FONT_B, "D-50", C_WHITE);
         cv_text(70, 10, &FONT_XS, "fm1-base", C_DIM);
@@ -1392,12 +1532,12 @@ static void draw(void)
             cv_text(180, 10, &FONT_XS, "CHASE", C_HI);
     }
     cv_blit(0, 0);
-    cv_begin(240, 120, C_BLACK);
+    cv_begin(240, VIEW_MID_H, C_BLACK);
     if (ui.boot_until) {                         /* the D-50's power-on message (#81): always the LCD at true size, whatever the view */
         uint32_t pitch = lcd_pitch();
         lcd_scheme = lcd_scheme_of();
         lcd_boot_screen();
-        lcd_draw((int32_t)(120u - lcd_height(pitch)) / 2, pitch);
+        lcd_draw((int32_t)(VIEW_MID_H - lcd_height(pitch)) / 2, pitch);
     } else if (!bound) {
         cv_text(10, 20, &FONT_M, "NO D-50 DATA", C_HI);
     } else if ((set.lcd & LCD_SHOWN) || ui.page != LCD_PAGE_PLAY) {   /* the D-50's play screen or an edit page (the FM-1 view: folded);
@@ -1436,45 +1576,38 @@ static void draw(void)
                 lcd_message(ui.msg[0], ui.msg[1]);
         }
         if (set.lcd & LCD_TRUE)
-            lcd_draw((int32_t)(120u - lcd_height(pitch)) / 2, pitch);
+            lcd_draw((int32_t)(VIEW_MID_H - lcd_height(pitch)) / 2, pitch);
         else
-            lcd_draw_folded((int32_t)(120u - LCD_FOLDED_HEIGHT) / 2);
+            lcd_draw_folded((int32_t)(VIEW_MID_H - LCD_FOLDED_HEIGHT) / 2);
     } else {
-        {                                    /* the D-50's 11..88; with several banks "2-37" (issue #7) */
-            uint32_t j = 0;
-            if (d50_banks() > 1u) {
-                t[j++] = (char)('1' + set.bank);
-                t[j++] = '-';
-            }
-            t[j++] = (char)('1' + p / 8u);
-            t[j++] = (char)('1' + p % 8u);
-            t[j] = 0;
-        }
-        cv_text(10, 4, &FONT_XS, "PATCH", C_GRAY);
-        cv_text(10, 18, &FONT_L, t, C_HI);
-        cv_text(10, 60, &FONT_B, d50_program_name(p), C_WHITE);
+        view_name(d50_program_name(p));          /* the FM-1 view (#107): the name large, on one line or two */
     }
-    cv_blit(0, 40);
-    cv_begin(240, 40, C_BLACK);
-    t[0] = 0;
-    text_cat(t, "VOICES ");
-    uint_text(d50_voices_sounding(), t + 7);
-    text_cat(t, "  CPU ");
-    uint_text(plat_cpu_pct(), t + text_len(t));
-    text_cat(t, "%  ");
-    uint_text(d50_cores(), t + text_len(t));
-    text_cat(t, d50_cores() > 1u ? " CORES" : " CORE");
-    cv_text(10, 4, &FONT_XS, t, C_GRAY);
-    t[0] = 0;
-    text_cat(t, "OCT ");
-    if (set.octave < 0)
-        text_cat(t, "-");
-    uint_text((uint32_t)(set.octave < 0 ? -set.octave : set.octave), t + text_len(t));
-    text_cat(t, "  LIMIT ");
-    uint_text(d50_voice_limit(), t + text_len(t));
-    text_cat(t, d50_reverb() ? "  REVERB" : "");
-    cv_text(10, 20, &FONT_XS, t, C_GRAY);
-    cv_blit(0, 180);
+    cv_blit(0, VIEW_MID_Y);
+    cv_begin(240, VIEW_LOW_H, C_BLACK);          /* the status (#107): two lines in M, twice the size they had */
+    {
+        char v[12];
+        int32_t w;
+        uint_text(d50_voices_sounding(), v);
+        view_item(8, 2, "VOICES", v, 1);
+        {                                        /* (the right-hand item's label only when it fits beside the left-hand one) */
+            const int32_t end = view_item(8, 0, "VOICES", v, 0) + 14;
+            uint_text(plat_cpu_pct(), v);
+            text_cat(v, "%");
+            w = view_item(0, 0, "CPU", v, 0);
+            if (232 - w >= end)
+                view_item(232 - w, 2, "CPU", v, 1);
+            else
+                cv_text(232 - (int32_t)text_w(&FONT_M, v), 2, &FONT_M, v, C_WHITE);
+        }
+        v[0] = set.octave < 0 ? '-' : set.octave > 0 ? '+' : 0;
+        v[1] = 0;
+        uint_text((uint32_t)(set.octave < 0 ? -set.octave : set.octave), v + text_len(v));
+        view_item(8, 30, "OCT", v, 1);
+        uint_text(d50_voice_limit(), v);
+        w = view_item(0, 30, d50_reverb() ? "LIMIT" : "DRY", v, 0);
+        view_item(232 - w, 30, d50_reverb() ? "LIMIT" : "DRY", v, 1);
+    }
+    cv_blit(0, VIEW_LOW_Y);
 }
 
 void app_ui_init(void)
