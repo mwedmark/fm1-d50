@@ -66,6 +66,19 @@ public:
             1 + alpha / A, -2 * cs, 1 - alpha / A);
     }
 
+    // fm1-d50 (issue #97): a cut in the high band as a shelf (RBJ, slope S = 1) at the band's frequency: it holds from there to the top.
+    // Pizzagogo's Upper (High 1.4 kHz, Q 0.3, -10 dB) through the peak gave back the top octave (-2 dB at 8 kHz, 0 at 15 kHz), and its
+    // pizzicato kept treble a reference recording has not; as a shelf it sits at or under the reference, and the user heard it closer.
+    void set_high_shelf(float freq, float gain_db, float sr) {
+        const float A = std::pow(10.0f, gain_db / 40.0f);
+        const float w = 2.0f * kPi * freq / sr;
+        const float cs = std::cos(w), alpha = std::sin(w) * 0.70710678f;
+        const float sA = std::pow(10.0f, gain_db / 80.0f);   // sqrt(A) (fm1-base has no sqrtf)
+        set(A * ((A + 1) + (A - 1) * cs + 2 * sA * alpha), -2 * A * ((A - 1) + (A + 1) * cs),
+            A * ((A + 1) + (A - 1) * cs - 2 * sA * alpha),
+            (A + 1) - (A - 1) * cs + 2 * sA * alpha, 2 * ((A - 1) - (A + 1) * cs), (A + 1) - (A - 1) * cs - 2 * sA * alpha);
+    }
+
     void reset() { z1_ = z2_ = 0.0f; }
 
     float D5_HOT(process)(float x) {
@@ -92,6 +105,9 @@ private:
 // Panel value to Hz, the tables printed in the MIDI implementation.
 inline constexpr float kLowEqFreq[16] = {
     63, 75, 88, 105, 125, 150, 175, 210, 250, 300, 350, 420, 500, 600, 700, 840};
+#ifndef D5_EQ_HIGH_SHELF
+#define D5_EQ_HIGH_SHELF 1   // fm1-d50 (issue #97): 1 a cut in the high band is a shelf, 0 every high band the peak with its Q as before
+#endif
 inline constexpr float kHighEqFreq[22] = {
     250, 300, 350, 420, 500, 600, 700, 840, 1000, 1200, 1400, 1700,
     2000, 2400, 2800, 3400, 4000, 4800, 5700, 6700, 8000, 9500};
@@ -121,7 +137,14 @@ public:
         const int hf = clamp_index(spec.high_freq, 22);
         const int hq = clamp_index(spec.high_q, 9);
         low_.set_low_shelf(kLowEqFreq[lf], spec.low_gain_db, sr);
+#if D5_EQ_HIGH_SHELF
+        if (spec.high_gain_db < 0.0f)            // a cut: the shelf (issue #97; its Q unused), a boost the peak as before
+            high_.set_high_shelf(kHighEqFreq[hf], spec.high_gain_db, sr);
+        else
+            high_.set_peaking(kHighEqFreq[hf], kHighEqQ[hq], spec.high_gain_db, sr);
+#else
         high_.set_peaking(kHighEqFreq[hf], kHighEqQ[hq], spec.high_gain_db, sr);
+#endif
         // A boost costs headroom: Roland's D-50 VST pulls the whole signal
         // down by half the boost (+12 dB low shelf: shelf +5.5, the rest
         // -6.2; +6: +2.5 and -3.5), cuts leave the rest alone. Shape,
