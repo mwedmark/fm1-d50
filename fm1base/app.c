@@ -685,6 +685,7 @@ static struct {
     int8_t transpose;                            /* Key Transpose -12..12 (#54) */
     uint8_t lower;                               /* the selected tone, the joystick's X: 0 the upper, 1 the lower (#58) */
     uint8_t page;                                /* the edit page (#31): d50_lcd.h LCD_PAGE_*, LCD_PAGE_PLAY none */
+    uint8_t cursor;                              /* the value K2 changes on a page of more than four (#8's EQ: K1 moves it) */
     uint8_t xfer_item;                           /* the Data Transfer page's item: d50.h D50_XFER_* (K1) */
     uint8_t xfer_on;                             /* a transfer started from the page is under way (d50_transfer) */
     uint32_t boot_until;                         /* the power-on message (#81) until this plat_ms; 0 when it has gone */
@@ -762,7 +763,15 @@ static void transfer_start(void)
         app_say("NO D-50 DATA", "");
     }
 }
-/* A parameter changed on an edit page: the patch block's (#31), or the MIDI page's settings (#51; kept with SAVE) */
+/* Where a page's bytes are in the temporary area: the patch block's (#31), or the selected tone's common block (#8: the tone K4 chose on
+ * the play screen, as the D-50's UPPER and LOWER keys choose the tone its tone pages edit) */
+static uint32_t page_base(const lcd_page_t *g)
+{
+    if (g->own == LCD_OWN_TONE)
+        return (ui.lower ? 5u : 2u) * 64u;
+    return 6u * 64u;
+}
+/* A parameter changed on an edit page: the patch block's (#31), the selected tone's (#8), or the MIDI page's settings (#51; kept with SAVE) */
 static void page_edit(uint32_t field, int32_t step)
 {
     const lcd_page_t *g = &lcd_pages[ui.page];
@@ -783,7 +792,7 @@ static void page_edit(uint32_t field, int32_t step)
         ui.redraw = 1;
         return;
     }
-    if (g->own) {
+    if (g->own != LCD_OWN_TONE && g->own) {
         uint8_t v[4];
         const uint32_t old = set.midi;
         midi_values(v);
@@ -795,7 +804,7 @@ static void page_edit(uint32_t field, int32_t step)
         ui.redraw = 1;
         return;
     }
-    (void)patch_edit(6u * 64u + g->f[field].byte, step, g->f[field].lo, g->f[field].hi);
+    (void)patch_edit(page_base(g) + g->f[field].byte, step, g->f[field].lo, g->f[field].hi);
 }
 static void uint_text(uint32_t v, char *b);
 /* The D-50's joystick on the play screen (#43), as its firmware has it (docs/D50-FIRMWARE.md, #58): K1 the stick's X, the balance between
@@ -1131,6 +1140,7 @@ static void input(void)
             app_say("CHASE", on ? "ON" : "OFF");
         } else if (k == B_EDIT && bound) {       /* the edit pages in turn, then the play screen (#31) */
             ui.page = ui.page == LCD_PAGE_TUNE ? LCD_PAGE_PLAY : (uint8_t)((ui.page + 1u) % LCD_PAGES);
+            ui.cursor = 0;
         } else if (k == B_SEL && bound) {        /* the TUNE/FUNCTION page, and back to the play screen (#54) */
             ui.page = ui.page == LCD_PAGE_TUNE ? LCD_PAGE_PLAY : LCD_PAGE_TUNE;
         } else if (k == B_HOME) {                /* (on its release, or after HOME_LONG_MS held: below) */
@@ -1256,6 +1266,13 @@ static void input(void)
             d50_transpose(ui.transpose);
             ui.redraw = 1;
         }
+    } else if (lcd_pages[ui.page].fields > 4u) { /* more values than knobs (#8's EQ): K1 moves the cursor, K2 changes its value */
+        if ((e = plat_enc(EN_K1)) != 0) {
+            ui.cursor = (uint8_t)clamp((int32_t)ui.cursor + e, 0, (int32_t)lcd_pages[ui.page].fields - 1);
+            ui.redraw = 1;
+        }
+        if ((e = plat_enc(EN_K2)) != 0)
+            page_edit(ui.cursor, e);
     } else if (ui.page != LCD_PAGE_PLAY) {       /* K1..K4: an edit page's parameters, left to right */
         static const uint8_t knob[4] = {EN_K1, EN_K2, EN_K3, EN_K4};
         for (k = 0; k < 4u; k++)
@@ -1350,12 +1367,16 @@ static void draw(void)
         else if (ui.page == LCD_PAGE_TRANSFER)
             lcd_transfer_screen(set.bank ? 'C' : 'I', p, ui.xfer_item, ui.xfer_on ? d50_transfer_state() : D50_XFER_IDLE);
         else if (ui.page != LCD_PAGE_PLAY) {
+            const lcd_page_t *g = &lcd_pages[ui.page];
             uint8_t own[4] = {0, 0, 0, 0};
-            if (lcd_pages[ui.page].own == LCD_OWN_SETUP)
+            if (g->own == LCD_OWN_SETUP)
                 own[0] = (uint8_t)(set.setup & SETUP_STORE_SAVE ? 1u : 0u);
-            else
+            else if (g->own == LCD_OWN_MIDI)
                 midi_values(own);
-            lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb, own);
+            lcd_page_screen(ui.page, set.bank ? 'C' : 'I', p, pb, g->own == LCD_OWN_TONE ? pb + page_base(g) : own,
+                            g->fields > 4u ? ui.cursor : LCD_PAGE_FIELDS);
+            if (g->own == LCD_OWN_TONE)          /* which tone the page edits (ours: K4 on the play screen chooses it) */
+                lcd_put(0, 16, ui.lower ? "Lower" : "Upper", 5);
         } else {
             lcd_play_screen(set.bank ? 'C' : 'I', p, pb);
         }

@@ -6,6 +6,8 @@
 
 enum { LCD_ROWS = 2, LCD_COLS = 40 };
 static char lcd_buf[LCD_ROWS][LCD_COLS];
+/* The cursor (the glyphs' eighth row, lit): lcd_cur_len characters of the lower line from lcd_cur_col, none when 0 (issue #8's EQ page) */
+static uint8_t lcd_cur_col, lcd_cur_len;
 
 /* The character ROM's glyphs, codes 0x20..0x7F, the rows top to bottom, 5 bits each (bit 4 the left dot); the eighth row is the cursor's,
  * always dark here. The set is the HD44780 A00's, as the D-50's display module's: 0x5C is the yen sign, 0x7E and 0x7F are the arrows the
@@ -83,6 +85,11 @@ static void lcd_clear(void)
     for (r = 0; r < LCD_ROWS; r++)
         for (c = 0; c < LCD_COLS; c++)
             lcd_buf[r][c] = ' ';
+    lcd_cur_len = 0;
+}
+static uint32_t lcd_cursor_at(uint32_t row, uint32_t col)
+{
+    return row == 1u && col >= lcd_cur_col && col < (uint32_t)lcd_cur_col + lcd_cur_len;
 }
 
 static void lcd_put(uint32_t row, uint32_t col, const char *s, uint32_t n)   /* n characters of s (to its end), from row, col */
@@ -177,6 +184,7 @@ static void lcd_message(const char *a, const char *b)
     uint32_t c;
     for (c = 0; c < LCD_COLS; c++)
         lcd_buf[1][c] = ' ';
+    lcd_cur_len = 0;
     for (c = 14; *a && c < LCD_COLS; )
         lcd_buf[1][c++] = *a++;
     if (*b && c + 1u < LCD_COLS) {
@@ -187,19 +195,23 @@ static void lcd_message(const char *a, const char *b)
 
 /* The edit pages (issue #31, the first of #8): the firmware's title (16 characters, 0xF940 on) above its parameters line, each value in the
  * template's three $ columns from a byte of the patch block. The title line's layout (the patch number at the right) is ours. */
-enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_MIDI, LCD_PAGE_TRANSFER, LCD_PAGE_SETUP, LCD_PAGES,
-       LCD_PAGE_TUNE = LCD_PAGES };                                                          /* (the tune page is SEL's, not EDIT's: #54) */
-enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE, LCD_SHOW_ONOFF, LCD_SHOW_CONTROL, LCD_SHOW_STORE };   /* the value; the value + 1; the
+enum { LCD_PAGE_PLAY, LCD_PAGE_OUTPUT, LCD_PAGE_CHASE, LCD_PAGE_EQ, LCD_PAGE_CHORUS, LCD_PAGE_MIDI, LCD_PAGE_TRANSFER, LCD_PAGE_SETUP,
+       LCD_PAGES, LCD_PAGE_TUNE = LCD_PAGES };                                               /* (the tune page is SEL's, not EDIT's: #54) */
+enum { LCD_SHOW_NUM, LCD_SHOW_NUM1, LCD_SHOW_CHASE, LCD_SHOW_ONOFF, LCD_SHOW_CONTROL, LCD_SHOW_STORE,   /* the value; the value + 1; the
                                                                                         * chase mode's name; ON or OFF; MIDI-1's Control (#60:
                                                                                         * 0x7CB6, 6 each); Auto or SAVE (#22) */
-enum { LCD_OWN_PATCH, LCD_OWN_MIDI, LCD_OWN_SETUP };   /* whose the values are: the patch block's, or app.c's (lcd_page_screen own[]) */
+       LCD_SHOW_LF, LCD_SHOW_HF, LCD_SHOW_HQ, LCD_SHOW_GAIN };   /* the EQ's (#8): its low and high frequency and Q from the firmware's tables
+                                                                  * (0x7B1D), a gain 0..24 as -12..+12 */
+enum { LCD_OWN_PATCH, LCD_OWN_MIDI, LCD_OWN_SETUP, LCD_OWN_TONE };   /* whose the values are: the patch block's, app.c's (lcd_page_screen
+                                                                      * own[]), or the selected tone's common block (own, its 64 bytes) */
 typedef struct {
     uint8_t byte, lo, hi, col, show;                      /* the patch block's byte, its range, its column on the lower line, how shown */
 } lcd_field_t;
+#define LCD_PAGE_FIELDS 5u                                 /* (more than the four knobs: the page has a cursor, app.c) */
 typedef struct {
     const char *title, *line;
     uint8_t fields;
-    lcd_field_t f[4];
+    lcd_field_t f[LCD_PAGE_FIELDS];
     uint8_t own;                                          /* LCD_OWN_*: the values are the patch's, or the caller's (lcd_page_screen own[]) */
 } lcd_page_t;
 static const lcd_page_t lcd_pages[LCD_PAGES] = {
@@ -208,6 +220,15 @@ static const lcd_page_t lcd_pages[LCD_PAGES] = {
      {{29, 0, 3, 4, LCD_SHOW_NUM1}, {30, 0, 31, 12, LCD_SHOW_NUM1}, {31, 0, 100, 20, LCD_SHOW_NUM}, {32, 0, 100, 28, LCD_SHOW_NUM}}},
     {"Chase Edit", "Mode$$$ Levl$$$ Time$$$", 3,                         /* 0x6FC4 */
      {{34, 0, 2, 4, LCD_SHOW_CHASE}, {35, 0, 100, 12, LCD_SHOW_NUM}, {36, 0, 100, 20, LCD_SHOW_NUM}}},
+    /* the selected tone's EQ and chorus (#8): the firmware's titles (0xF9E0, 0xF9F0) and lines (0x71A4, 0x71CC), the tone common block's
+     * bytes 37..41 (low frequency 0..15, low gain, high frequency 0..21, high Q 0..8, high gain) and 42..45 (type 1..8, rate, depth,
+     * balance). Five values and four knobs: the EQ page has a cursor (app.c) */
+    {"EQ Edit", " Lf $$$  Lg $$$  Hf $$$  HQ $$$  Hg $$$ ", 5,
+     {{37, 0, 15, 4, LCD_SHOW_LF}, {38, 0, 24, 12, LCD_SHOW_GAIN}, {39, 0, 21, 20, LCD_SHOW_HF}, {40, 0, 8, 28, LCD_SHOW_HQ},
+      {41, 0, 24, 36, LCD_SHOW_GAIN}}, LCD_OWN_TONE},
+    {"Chorus Edit", "Type$$$ Rate$$$ Dpth$$$  Bal$$$", 4,
+     {{42, 0, 7, 4, LCD_SHOW_NUM1}, {43, 0, 100, 12, LCD_SHOW_NUM}, {44, 0, 100, 20, LCD_SHOW_NUM}, {45, 0, 100, 28, LCD_SHOW_NUM}},
+     LCD_OWN_TONE},
     /* the MIDI settings (issue #51), not the patch's: the basic channel (also the SysEx device ID), omni, MIDI-1's Control (#60:
      * B.CH, G.CH, MdeOff; "Ctrl" for the room) and Local (#67). The title is the firmware's (0xF900's list); the line is ours, K1 to K4
      * left to right */
@@ -219,9 +240,12 @@ static const lcd_page_t lcd_pages[LCD_PAGES] = {
      * Auto (by itself after a dump) or SAVE (with SAVE) */
     {"FM-1 Setup", "Store $$$$", 1, {{0, 0, 1, 6, LCD_SHOW_STORE}}, LCD_OWN_SETUP},
 };
-static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p, const uint8_t *own)
+static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const uint8_t *p, const uint8_t *own, uint32_t cursor)
 {
     static const char chase[] = " ULULLULU";                                         /* 3 each, mode 0..2 (0x7B98) */
+    /* the EQ's tables, 3 each (0x7B1D): the high Q 0..8, then the frequencies: the low 0..15 from the first, the high 0..21 from the ninth */
+    static const char eq_q[] = "0.30.50.71.01.42.03.04.26.0";
+    static const char eq_f[] = "63 74 88 105125150175210250300350420500600700840" "1.01.21.41.72.02.42.83.44.04.85.76.78.09.5";
     const lcd_page_t *g = &lcd_pages[page];
     const uint8_t *pb = g->own ? own : p + 6u * 64u;
     char t[4];
@@ -239,6 +263,16 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
         uint32_t v = pb[f->byte] < f->lo ? f->lo : pb[f->byte] > f->hi ? f->hi : pb[f->byte];
         if (f->show == LCD_SHOW_CHASE) {
             lcd_put(1, f->col, chase + 3u * v, 3);
+        } else if (f->show == LCD_SHOW_LF || f->show == LCD_SHOW_HF) {
+            lcd_put(1, f->col, eq_f + 3u * (v + (f->show == LCD_SHOW_HF ? 8u : 0u)), 3);
+        } else if (f->show == LCD_SHOW_HQ) {
+            lcd_put(1, f->col, eq_q + 3u * v, 3);
+        } else if (f->show == LCD_SHOW_GAIN) {          /* (the sign before the digits: ours) */
+            uint32_t a = v >= 12u ? v - 12u : 12u - v;
+            t[0] = a >= 10u ? (v < 12u ? '-' : '+') : ' ';
+            t[1] = a >= 10u ? '1' : v < 12u ? '-' : v > 12u ? '+' : ' ';
+            t[2] = (char)('0' + a % 10u);
+            lcd_put(1, f->col, t, 3);
         } else if (f->show == LCD_SHOW_ONOFF) {
             lcd_put(1, f->col, v ? " ON" : "OFF", 3);
         } else if (f->show == LCD_SHOW_STORE) {
@@ -253,6 +287,10 @@ static void lcd_page_screen(uint32_t page, char memory, uint32_t program, const 
             t[2] = (char)('0' + v % 10u);
             lcd_put(1, f->col, t, 3);
         }
+    }
+    if (cursor < g->fields) {                             /* under the value being changed */
+        lcd_cur_col = g->f[cursor].col;
+        lcd_cur_len = 3;
     }
 }
 
@@ -313,7 +351,7 @@ static void lcd_draw(int32_t y, uint32_t pitch)
             uint8_t ch = (uint8_t)lcd_buf[r][c];
             const uint8_t *g = ch >= 0x20u && ch < 0x80u ? lcd_font[ch - 0x20u] : lcd_font[0];
             for (dy = 0; dy < 8u; dy++) {
-                uint32_t bits = dy < 7u ? g[dy] : 0u;
+                uint32_t bits = dy < 7u ? g[dy] : lcd_cursor_at(r, c) ? 0x1Fu : 0u;
                 for (dx = 0; dx < 5u; dx++)
                     cv_rect((int32_t)(c * 6u + dx), y + (int32_t)(dy * pitch), 1, (int32_t)pitch,
                             bits >> (4u - dx) & 1u ? LCD_ON : LCD_OFF);
@@ -338,7 +376,7 @@ static void lcd_draw_folded(int32_t y)
             uint8_t ch = at < LCD_COLS ? (uint8_t)lcd_buf[r / 2u][at] : (uint8_t)' ';
             const uint8_t *g = ch >= 0x20u && ch < 0x80u ? lcd_font[ch - 0x20u] : lcd_font[0];
             for (dy = 0; dy < 8u; dy++) {
-                uint32_t bits = dy < 7u ? g[dy] : 0u;
+                uint32_t bits = dy < 7u ? g[dy] : at < LCD_COLS && lcd_cursor_at(r / 2u, at) ? 0x1Fu : 0u;
                 for (dx = 0; dx < 5u; dx++)
                     cv_rect((int32_t)(c * 10u + dx * 2u), y + (int32_t)(dy * 2u), dx < 4u ? 2 : 1, 2,
                             bits >> (4u - dx) & 1u ? LCD_ON : LCD_OFF);
