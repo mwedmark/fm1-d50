@@ -38,7 +38,12 @@ volatile uint32_t d50_prof_sum[9];               // 0 parts, 1 lists, 2 CPU0's v
                                                  // 6 the LFO steps (part of 1), 7 all of d50_render, 8 app.c's resampling
 volatile unsigned d50_prof_skip;
 }
+#ifdef PLAT_HOST                                  // (the host simulator has no TIMER4: a word that stays 0)
+static volatile uint32_t d50_t4_host;
+#define D50_T4 d50_t4_host
+#else
 #define D50_T4 (*(volatile uint32_t *)0x10804U)
+#endif
 static inline __attribute__((always_inline)) void d50_mark(int k)
 {
     const uint32_t t = D50_T4;
