@@ -1,284 +1,285 @@
-# fm1-d50: en Roland D-50 på M-VAVE FM-1
+# fm1-d50: a Roland D-50 on the M-VAVE FM-1
 
-fm1-d50 förvandlar M-VAVE FM-1 till en Roland D-50, LA-synthen från 1987. Den spelar D-50:ns egna patchar med D-50:ns delton-struktur (partials),
-PCM-vågor och effekter, från FM-1:ans tangenter eller över MIDI.
+fm1-d50 turns the M-VAVE FM-1 into a Roland D-50, the 1987 LA synthesizer. It plays the D-50's own patches with the D-50's partial structure,
+PCM waves and effects, from the FM-1's keys or over MIDI.
 
-- Ljudet kommer från [PicoFaceD5](third_party/picofaced5)s D-50-motor.
-- Plattformen under den är [fm1-base](https://github.com/charlesvestal/fm1-base).
+- The sound is [PicoFaceD5](third_party/picofaced5)'s D-50 engine.
+- The platform under it is [fm1-base](https://github.com/charlesvestal/fm1-base).
 
-![D-50:ns spelskärm på FM-1](docs/img/lcd_true_green.png)
+![The D-50's play screen on the FM-1](docs/img/lcd_true_green.png)
 
-**BYOR: Bring Your Own ROM.** fm1-d50 innehåller ingen Roland-data, och det gör inte heller någon release eller installationssidan. D-50:ns PCM-vågor och
-patchbanker kommer från din egen D-50, och du gör en datafil av dem på din egen dator. Det här behöver du ha och göra:
+**BYOR: Bring Your Own ROM.** fm1-d50 contains no Roland data, and neither does any release or the install page. The D-50's PCM waves and
+patch banks come from your own D-50, and you make a data file from them on your own computer. What you bring and do:
 
-- D-50:ns **PCM-ROM-kretsar** (de två kretsarna på 256 KB, eller de sena korten med en krets på 512 KB) och dess **programminne (EPROM)**, dumpade till filer;
-- **en till sex bankdumpar** (`.syx`, en D-50-bulkdump med 64 patchar vardera);
-- Python 3 och Node.js samt en utcheckning av det här repot, för att köra två kommandon som skapar datafilen `d50_fm1base.fmd5`.
+- the D-50's **PCM ROM chips** (the two 256 KB chips, or the late boards' one 512 KB chip) and its **program EPROM**, dumped to files;
+- **one to six bank dumps** (`.syx`, a D-50 bulk dump of 64 patches each);
+- Python 3 and Node.js, and a checkout of this repository, to run two commands that make the data file `d50_fm1base.fmd5`.
 
-Stegen, med kretsarnas CRC-32, finns i [INSTALL.md](INSTALL.md). Utan datafilen startar firmwaren och skärmen visar `NO D-50 DATA`.
+The steps, with the chips' CRC-32s, are in [INSTALL.md](INSTALL.md). Without the data file the firmware starts and the screen says `NO D-50 DATA`.
 
-Det är ett pågående arbete. Den här README:n beskriver det som fungerar nu och växer med det.
+It is a work in progress. This README describes what works now and will grow with it.
 
-## Vad som fungerar
+## What works
 
-- **D-50:ns ljud:**
-  - 16 stämmor vid 32 kHz, omsamplade till FM-1:ans 44,1 kHz.
-  - Alla tangentlägen (Whole, Dual, Split, Separate och deras Solo-varianter), med D-50:ns reverb, chorus och EQ.
-  - Processorn går på 396 MHz. En vakt tonar ut en stämma innan ljudet skulle hacka.
-- **Sex banker, 384 patchar:** fabrikskortet och PN-D50-kortbiblioteket.
-- **Spela:**
-  - **Anslagsstyrka (velocity)**, från FM-1:ans tangenter.
-  - **Eftertryck (aftertouch)**, från hur hårt en nedhållen tangent trycks.
-  - **Pitchbend** och **modulation**, från MIDI.
-  - **Portamento** och **hållpedal**, med patchens Portamento Mode och Hold Mode (U, L eller båda) som på en D-50: i split- och
-    separate-lägena håller pedalen bara de toner som Hold Mode anger.
-- **Chase Play:** D-50:ns eko av en not från en ton till den andra.
-- **SysEx:** D-50:ns DT1 och RQ1 för aktuell patch och banken i RAM, så att D-50-editorer och bibliotekarier kan läsa och skicka patchar.
-- **D-50:ns display:** originalets LCD, med spelskärmen som en riktig D-50 visar den.
-  - Den finns i två vyer och tre färger, beskrivna nedan.
+- **The D-50's sound:**
+  - 16 voices at 32 kHz, resampled to the FM-1's 44.1 kHz.
+  - Every key mode (Whole, Dual, Split, Separate and their Solo variants), with the D-50's reverb, chorus and EQ.
+  - The CPU runs at 396 MHz. A guard fades a voice out before the audio would drop out.
+- **Six banks, 384 patches:** the factory card and the PN-D50 card library.
+- **Playing:**
+  - **Velocity**, from the FM-1's keys.
+  - **Aftertouch**, from how hard a held key is pressed.
+  - The **bender** and the **modulation**, from MIDI.
+  - **Portamento** and the **hold pedal**, with the patch's Portamento Mode and Hold Mode (U, L or both) as on a D-50: in the split and
+    separate modes the pedal holds only the tones Hold Mode names.
+- **Chase Play:** the D-50's echo of a note from one tone to the other.
+- **SysEx:** the D-50's DT1 and RQ1 for the current patch and the bank in RAM, so D-50 editors and librarians can read and send patches.
+- **The D-50's display:** the LCD of the original, its play screen as a real D-50 shows it.
+  - It comes in two views and three colours, described below.
 
-## Skärmen
+## The screen
 
-Vid start visar skärmen D-50:ns startmeddelande i två sekunder, alltid i LCD:n i sann storlek och oavsett vald vy:
-`******  Linear Synthesizer  D-50  ******` över `Roland Corporation`, som i D-50:ns bruksanvisning. Därefter följer den valda vyn.
+At start the screen shows the D-50's power-on message for two seconds, always in the LCD at true size and whatever view is chosen:
+`******  Linear Synthesizer  D-50  ******` above `Roland Corporation`, as in the D-50's Owner's Manual. Then the chosen view
+follows.
 
-HOME stegar genom tre vyer:
+HOME steps through three views:
 
-1. **FM-1-skärmen**, med patchen, dess namn och belastningen. Senare blir detta en vy som använder FM-1:ans skärm för D-50 på dess eget sätt.
-2. **LCD:n i sann storlek:** 2 rader med 40 tecken, en pixel per punkt. K3 ställer in punkthöjden.
-3. **LCD:n vikt:** varje rad delad i två vid kolumn 24, i en storlek som är lätt att läsa.
+1. **The FM-1 screen**, with the patch, its name and the load. Later this becomes a view that uses the FM-1's screen for the D-50 in its own way.
+2. **The LCD at true size:** 2 lines of 40 characters, one pixel a dot. K3 sets the dot height.
+3. **The LCD folded:** each line split in two at column 24, at a size that is easy to read.
 
-![Den vikta vyn](docs/img/lcd_folded_green.png)
+![The folded view](docs/img/lcd_folded_green.png)
 
-Håll HOME i 3 sekunder för att stega genom LCD:ns färger:
-- **Grön:** en vanlig LCD.
-- **Bärnsten (amber)** och **blå:** bakgrundsbelysningen hos riktiga D-50:or.
+Hold HOME for 3 seconds to step through the LCD's colours:
+- **Green:** an ordinary LCD.
+- **Amber** and **blue:** the backlights of real D-50s.
 
-![Bärnsten](docs/img/lcd_folded_amber.png)
-![Blå](docs/img/lcd_folded_blue.png)
+![Amber](docs/img/lcd_folded_amber.png)
+![Blue](docs/img/lcd_folded_blue.png)
 
-Vyn och färgen sparas med SAVE.
+The view and the colour are saved with SAVE.
 
-## Panelen
+## The panel
 
-| Kontroll | Vad den gör |
+| Control | What it does |
 | --- | --- |
-| Tangenter | Spela; F3 till G5, med velocity och eftertryck |
-| OCT − / OCT + | Oktav, −2 till +2 |
-| SELECT- / PRESET-vredet | Patchen, genom alla banker: 1-11 till 6-88 |
-| ARP | D-50:ns CHASE-knapp: Chase Play på eller av |
-| HOME | Vyn; hållen 3 s, LCD:ns färg |
-| K1 | Joystickens X, som på en D-50: vald tons delton-balans, delton 1 mot delton 2 |
-| K2 | Joystickens Y, som på en D-50: tonbalansen, den övre mot den nedre tonen (LCD:ns Bal) |
-| K3 | LCD:ns punkthöjd (vyn i sann storlek) |
-| K4 | Vald ton för K1 och för EQ- och Chorus-sidorna, som D-50:ns UPPER- och LOWER-knappar: höger Lower, vänster Upper (Upper vid start) |
-| SEL | D-50:ns TUNE/FUNCTION-sida, och tillbaka: K1 Master Tune (427,5 till 452,6 Hz i 100 steg, först 440,0), K2 Key Transpose (−12 till +12): bara FM-1:ans tangenter, som på en D-50; toner från MIDI flyttas inte. Båda sparas med SAVE, som D-50:n behåller dem över en strömcykel; en Master Tune från MIDI (RPN 1) sparas inte, som på en D-50 |
-| EDIT | Redigeringssidorna i tur och ordning (Output Mode, Chase, EQ, Chorus, MIDI Channel: BasicCH, Omni, Control, Local; Data Transfer, nedan; FM-1 Setup, nedan), sedan spelskärmen |
-| SAVE | Sparar patchen, banken, oktaven, vyn, färgen, MIDI-inställningarna, Master Tune och Key Transpose samt sidan FM-1 Setup; och bank 1, när SysEx har ändrat den och den ännu inte är sparad (nedan). Hållen 2 s: WRITE (nedan) |
+| Keys | Play; F3 to G5, with velocity and aftertouch |
+| OCT − / OCT + | Octave, −2 to +2 |
+| SELECT / PRESET encoders | The patch, through all banks: 1-11 to 6-88 |
+| ARP | The D-50's CHASE button: Chase Play on or off |
+| HOME | The view; held 3 s, the LCD's colour |
+| K1 | The joystick's X, as on a D-50: the selected tone's partial balance, partial 1 against partial 2 |
+| K2 | The joystick's Y, as on a D-50: the tone balance, the Upper against the Lower tone (the LCD's Bal) |
+| K3 | The LCD's dot height (true-size view) |
+| K4 | The selected tone for K1 and for the EQ and Chorus pages, as the D-50's UPPER and LOWER keys: right the Lower, left the Upper (the Upper at start) |
+| SEL | The D-50's TUNE/FUNCTION page, and back: K1 Master Tune (427.5 to 452.6 Hz in 100 steps, 440.0 at first), K2 Key Transpose (−12 to +12): the FM-1's keys only, as on a D-50; notes from MIDI are not moved. Both kept with SAVE, as the D-50 keeps them over a power cycle; a Master Tune from MIDI (RPN 1) is not kept, as on a D-50 |
+| EDIT | The edit pages in turn (Output Mode, Chase, EQ, Chorus, MIDI Channel: BasicCH, Omni, Control, Local; Data Transfer, below; FM-1 Setup, below), then the play screen |
+| SAVE | Saves the patch, bank, octave, view, colour, the MIDI settings, Master Tune and Key Transpose and the FM-1 Setup page; and bank 1, when SysEx changed it and it is not yet saved (below). Held 2 s: WRITE (below) |
 
-Joystickens balanser är ändringar av aktuell patch, liksom redigeringssidornas: de gäller tills en annan patch väljs. På en redigeringssida (EDIT) är K1 till K4 i stället den sidans parametrar.
+The joystick's balances are edits of the current patch, as the edit pages' are: they last until another patch is chosen. On an edit page (EDIT), K1 to K4 are that page's parameters instead.
 
-**EQ** och **Chorus** redigerar den valda tonen (K4 på spelskärmen; sidans översta rad säger Upper eller Lower), med D-50-firmwarens egna sidor:
-EQ `Lf Lg Hf HQ Hg` (låg frekvens 63 till 840 Hz, dess förstärkning −12 till +12, hög frekvens 250 Hz till 9,5 kHz, dess Q 0,3 till 6,0 samt förstärkning), och
-Chorus `Type Rate Dpth Bal` (typ 1 till 8, övriga 0 till 100). EQ har fem värden på fyra rattar: K1 flyttar markören (ett streck under värdet),
-K2 ändrar värdet ovanför. Chorus är K1 till K4, från vänster till höger. WRITE sparar dem med patchen.
+**EQ** and **Chorus** edit the selected tone (K4 on the play screen; the page's top line says Upper or Lower), with the D-50 firmware's own pages:
+EQ `Lf Lg Hf HQ Hg` (the low frequency 63 to 840 Hz, its gain −12 to +12, the high frequency 250 Hz to 9.5 kHz, its Q 0.3 to 6.0 and gain), and
+Chorus `Type Rate Dpth Bal` (type 1 to 8, the others 0 to 100). EQ has five values for four knobs: K1 moves the cursor (a line under the value),
+K2 changes the value above it. Chorus is K1 to K4, left to right. WRITE keeps them with the patch.
 
 ## MIDI
 
-Den tar emot och skickar över USB. Sidan **MIDI Channel** (EDIT) har D-50:ns inställningar, sparade med SAVE:
+It receives and sends over USB. The **MIDI Channel** page (EDIT) has the D-50's settings, kept with SAVE:
 
-- **BasicCH** (K1), 1 till 16, standard 1: kanalen den spelar på med omni av, och dess SysEx-enhets-ID, som på en D-50 (enhets-ID är
-  baskanalen minus ett: kanal 1 är `00`).
-- **Omni** (K2), standard ON: ON spelar alla kanaler, som förut; OFF bara baskanalen.
-- **Control** (K3), D-50:ns MIDI-1-inställning, standard B.CH: kanalen som programbyte, eftertryck och kontroller kommer in på i
-  monoläget (nedan). B.CH är baskanalen och G.CH den globala kanalen, den under den. MdeOff ignorerar Mono och Poly, och att välja det
-  avslutar monoläget.
-- **Local** (K4), standard ON, som på en D-50: OFF låter FM-1:ans tangenter bara skickas (nedan), inte låta, för att spela ett annat instrument eller en DAW.
-  Deras eftertryck skickas också bara. Vreden skickar då ett programbyte utan att byta patch (skärmen säger PROG OUT); MIDI
-  in spelar som alltid. CC 122 på baskanalen sätter det (0 av, 127 på). Att slå av det avslutar de toner tangenterna låter.
+- **BasicCH** (K1), 1 to 16, default 1: the channel it plays on with omni off, and its SysEx device ID, as on a D-50 (the device ID is the
+  basic channel less one: channel 1 is `00`).
+- **Omni** (K2), default ON: ON plays every channel, as before; OFF only the basic channel.
+- **Control** (K3), the D-50's MIDI-1 setting, default B.CH: the channel the program change, aftertouch and controllers come on in the
+  mono mode (below). B.CH is the basic channel and G.CH the global channel, the one below it. MdeOff ignores Mono and Poly, and choosing it
+  ends the mono mode.
+- **Local** (K4), default ON, as on a D-50: OFF lets the FM-1's keys only be sent (below), not sound, to play another instrument or a DAW.
+  Their aftertouch is only sent too. The encoders then send a program change without changing the patch (the screen says PROG OUT); MIDI
+  in plays as ever. CC 122 on the basic channel sets it (0 off, 127 on). Turning it off ends the notes the keys sound.
 
-**Vad den skickar**, som en D-50, på patchens **TxCH** (en patchinställning: B, baskanalen, eller 1 till 16):
+**What it sends**, as a D-50 does, on the patch's **TxCH** (a patch setting: B, the basic channel, or 1 to 16):
 
-- **Tangenterna:** note-on med velocity och note-off (som velocity 0), flyttade av Key Transpose. När sista tangenten släpps skickas CC 123 All Notes Off.
-- **Eftertryck**, från hur hårt en nedhållen tangent trycks.
-- **Ett programbyte** (0 till 63, i banken) när en patch väljs med vreden, men inte när MIDI valde den.
-- **När TxCH ändras** med en ny patch: de nedhållna tangenternas note-off och All Notes Off på den gamla kanalen, sedan CC 124 Omni Off och CC 127 Poly på den nya.
+- **The keys:** note-on with velocity and note-off (as velocity 0), moved by Key Transpose. When the last key is released, CC 123 All Notes Off.
+- **Aftertouch**, from how hard a held key is pressed.
+- **A program change** (0 to 63, in the bank) when a patch is chosen with the encoders, but not when MIDI chose it.
+- **When TxCH changes** with a new patch: the held keys' note-offs and All Notes Off on the old channel, then CC 124 Omni Off and CC 127 Poly on the new one.
 
-Joysticken (K1, K2) skickas inte, eftersom en D-50:s inte gör det. FM-1 har ingen egen pitchbend, hävarm eller pedaler att skicka.
+The joystick (K1, K2) is not sent, as a D-50's is not. The FM-1 has no bender, lever or pedals of its own to send.
 
-**Monoläget** (CC 126 på baskanalen, med omni av), som på en D-50: värdet är antalet kanaler, från baskanalen
-och uppåt (0 och 9 till 16 ger 8, och inte längre än kanal 16). Varje kanal är en egen monofonisk stämma, med egen pitchbend, oavsett
-patchens tangentläge: en ny not på en kanal avslutar den kanalens senaste. Det är till en MIDI-gitarr, en kanal per sträng, eller en sekvenser-
-stämma per kanal. Med omni på spelar Mono polyfont. **CC 127 (Poly)** avslutar det; från då spelar även Solo-tangentlägena (Whole-S, Dual-S,
-Split-US och så vidare) polyfont, som på en D-50, tills Mono eller MdeOff. Var och en stänger av tonerna. Läget sparas inte över en
-strömcykel (inte heller en D-50:s); skärmen säger MONO eller POLY.
+**The mono mode** (CC 126 on the basic channel, with omni off), as on a D-50: the value is the number of channels, from the basic channel
+up (0 and 9 to 16 give 8, and no further than channel 16). Each channel is a monophonic part of its own, with its own bender, whatever the
+patch's key mode is: a new note on a channel ends that channel's last one. It is for a MIDI guitar, a channel a string, or a sequencer
+part a channel. With omni on, Mono plays polyphonically. **CC 127 (Poly)** ends it; from then on, the Solo key modes (Whole-S, Dual-S,
+Split-US and so on) play polyphonically too, as on a D-50, until Mono or MdeOff. Each turns the notes off. The mode is not kept over a
+power cycle (a D-50's is not either); the screen says MONO or POLY.
 
-**Separate-tangentlägena** (SEP och SEP-S), som på en D-50: FM-1:ans tangenter och baskanalen spelar patchens Lower-ton,
-polyfont. Patchens egen SepCH (en patchinställning, OFF eller 1 till 16) spelar Upper: polyfont i SEP, en not i taget i SEP-S. Varje
-ton har egen pitchbend, modulation, eftertryck, portamento och hållpedal. SepCH tar noter, pitchbend, eftertryck och CC 1, 5, 6, 64, 65,
-98 till 101 och 123, men ingen volym och inget programbyte. Som på en D-50 går ett meddelande på SepCH också genom baskanalens test, så med
-omni på (eller SepCH som baskanalen) spelar det båda tonerna. Med SepCH OFF låter bara Lower. Ingen av de sex bankerna har en sådan patch;
-en bibliotekarie kan göra en.
+**The Separate key modes** (SEP and SEP-S), as on a D-50: the FM-1's keys and the basic channel play the patch's Lower tone,
+polyphonically. The patch's own SepCH (a patch setting, OFF or 1 to 16) plays the Upper: polyphonically in SEP, one note at a time in SEP-S. Each
+tone has its own bender, modulation, aftertouch, portamento and hold pedal. SepCH takes notes, the bender, aftertouch and CC 1, 5, 6, 64, 65,
+98 to 101 and 123, but no volume and no program change. As on a D-50, a message on SepCH also goes through the basic channel's test, so with
+omni on (or SepCH the basic channel) it plays both tones. With SepCH OFF only the Lower sounds. None of the six banks has such a patch;
+a librarian can make one.
 
-| Meddelande | Vad det gör |
+| Message | What it does |
 | --- | --- |
-| Note on och off | Spela, med velocity |
-| Programbyte | Patchen, 0 till 63, i banken som CC0 valde |
-| CC0 | Banken för nästa programbyte, 0 till 5 |
-| Pitch bend | Pitchbend, över patchens omfång eller RPN 0:s |
-| Channel pressure | Eftertryck |
+| Note on and off | Play, with velocity |
+| Program change | The patch, 0 to 63, in the bank CC0 chose |
+| CC0 | The bank for the next program change, 0 to 5 |
+| Pitch bend | The bender, over the patch's range or RPN 0's |
+| Channel pressure | Aftertouch |
 | CC1 | Modulation |
-| CC5, CC65 | Portamento-tid och -brytare |
-| CC7 | Volym |
-| CC64 | Hållpedal |
-| CC80 | Chase Play på (64 och uppåt) eller av |
-| CC81 | Joystickens tonbalans (K2, Y): 0 till 127 över 0 till 100, den övre mot den nedre tonen. Vår egen: D-50:n har ingen kontroller för det |
-| CC82 | Joystickens deltonbalans (K1, X): 0 till 127 över 0 till 100, för den valda tonen (K4). Vår egen |
-| CC100, CC101, CC6, CC38 | RPN 0: pitchbend-omfånget (upp till 12). RPN 1, Fine Tuning: Master Tune, som på en D-50, när båda dataentry-byten har kommit (mitten är 440,0 Hz, ungefär ±50 cent över halva omfånget; TUNE/FUNCTION-sidan visar det) |
-| CC98, CC99 | En NRPN: dataentryna efter den tas inte emot, tills nästa RPN |
+| CC5, CC65 | Portamento time and switch |
+| CC7 | Volume |
+| CC64 | Hold pedal |
+| CC80 | Chase Play on (64 and up) or off |
+| CC81 | The joystick's tone balance (K2, Y): 0 to 127 over 0 to 100, the Upper against the Lower tone. Ours: the D-50 has no controller for it |
+| CC82 | The joystick's partial balance (K1, X): 0 to 127 over 0 to 100, of the selected tone (K4). Ours |
+| CC100, CC101, CC6, CC38 | RPN 0: the bender range (up to 12). RPN 1, Fine Tuning: Master Tune, as on a D-50, once both data entry bytes have come (the centre is 440.0 Hz, about ±50 cents over half the range; the TUNE/FUNCTION page shows it) |
+| CC98, CC99 | An NRPN: the data entries after it are not taken, until the next RPN |
 | CC120, CC123 | All sound off, all notes off |
-| CC122 | Local, som på en D-50: 0 av, 127 på, på baskanalen (ovan) |
-| Active Sensing (FE) | Som på en D-50: efter en FE avslutar cirka 0,7 s utan någon MIDI alls tonerna och sätter pitchbend, hävarm, eftertryck, volym, pedal och RPN tillbaka i viloläge (skärmen säger SENSING LOST), tills nästa FE |
-| CC124, CC125 | Omni off, omni on, som på en D-50: bara på baskanalen och med värdet 0. De sätter MIDI Channel-sidans Omni (sparas med SAVE) och stänger av tonerna |
-| CC126, CC127 | Mono (värdet: kanalerna) och Poly (värde 0), som på en D-50: bara på baskanalen, inte med Control MdeOff (ovan) |
-| SysEx DT1, RQ1 | Roland, modell 14h: det temporära området på 00 00 00 och det interna minnet på 02 00 00 (nedan) |
+| CC122 | Local, as on a D-50: 0 off, 127 on, on the basic channel (above) |
+| Active Sensing (FE) | As on a D-50: after an FE, about 0.7 s with no MIDI at all ends the notes and sets the bender, lever, aftertouch, volume, pedal and RPN back to rest (the screen says SENSING LOST), until the next FE |
+| CC124, CC125 | Omni off, omni on, as on a D-50: only on the basic channel and with the value 0. They set the MIDI Channel page's Omni (kept with SAVE) and turn the notes off |
+| CC126, CC127 | Mono (the value: the channels) and Poly (value 0), as on a D-50: only on the basic channel, not with Control MdeOff (above) |
+| SysEx DT1, RQ1 | Roland, model 14h: the temporary area at 00 00 00 and the internal memory at 02 00 00 (below) |
 
 ## SysEx
 
-**D-50:ns egen** (`F0 41 dev 14 ...`, Roland, modell 14h), åt båda hållen som D-50:ns Data Transfer-meny har: enkelriktat ("Bulk Dump.O",
-"Bulk Load.O") och med handskakning ("Bulk Dump", "Bulk Load").
+**The D-50's own** (`F0 41 dev 14 ...`, Roland, model 14h), both ways the D-50's Data Transfer menu has: one-way ("Bulk Dump.O",
+"Bulk Load.O") and with the handshake ("Bulk Dump", "Bulk Load").
 
-Enkelriktat:
+One-way:
 
-| Meddelande | Vad det gör |
+| Message | What it does |
 | --- | --- |
-| DT1 (`12`) | Skriver data på en adress; kontrollsumman kontrolleras. |
-| RQ1 (`11`) | Läser data från en adress; FM-1 svarar med DT1 på upp till 256 byte, ett i taget allteftersom datorn läser. |
+| DT1 (`12`) | Writes data at an address; the checksum is checked. |
+| RQ1 (`11`) | Reads data from an address; the FM-1 answers with DT1s of up to 256 bytes, one at a time as the computer reads. |
 
-Med handskakning (Rolands dåtida protokoll; ännu inte prövat mot en riktig D-50 eller en bibliotekarie):
+With the handshake (Roland's protocol of the time; not yet tried against a real D-50 or a librarian):
 
-| Meddelande | Vad FM-1 gör |
+| Message | What the FM-1 does |
 | --- | --- |
-| WSD (`40`, adress, storlek) | Svarar ACK: datorn får skicka. |
-| DAT (`42`, adress, data) | Skriver datan som en DT1 gör och svarar ACK; ERR när kontrollsumman är fel (datorn skickar igen). |
-| EOD (`45`) | Svarar ACK: överföringen är klar. |
-| RQD (`41`, adress, storlek) | Skickar datan som DAT på upp till 256 byte, var och en efter datorns ACK på den förra, sedan EOD; RJC när inget finns på den adressen. |
-| ACK (`43`), ERR (`4E`), RJC (`4F`) | Från datorn: nästa DAT, den senaste igen, eller stopp. |
+| WSD (`40`, address, size) | Answers ACK: the computer may send. |
+| DAT (`42`, address, data) | Writes the data as a DT1 does and answers ACK; ERR when the checksum is wrong (the computer sends it again). |
+| EOD (`45`) | Answers ACK: the transfer is done. |
+| RQD (`41`, address, size) | Sends the data as DATs of up to 256 bytes, each after the computer's ACK of the one before, then EOD; RJC when nothing is at that address. |
+| ACK (`43`), ERR (`4E`), RJC (`4F`) | From the computer: the next DAT, the last one again, or stop. |
 
-Utan D-50-data i FM-1 besvaras WSD och RQD med RJC.
+Without D-50 data on the FM-1, WSD and RQD are answered with RJC.
 
-| Adress | Vad det är |
+| Address | What it is |
 | --- | --- |
-| `00 00 00` | Det temporära området: aktuell patchs 448 byte (övre delton 1 och 2, common, nedre delton 1 och 2, common, patch; 64 byte vardera). En DT1 eller DAT här ändrar ljudet direkt. En byte över sin parameters maximum hoppas över, som på en D-50 (resten av meddelandet skrivs). |
-| `02 00 00` | Det interna minnet: den valda banken, 448 byte per patch (64 patchar, upp till `03 60 00`). Bank 1 (skärmens I) är D-50:ns interna minne och sparas i flashminnet (nedan); på en annan bank (ett kort, C) varar det som skrivs tills en annan bank väljs. |
-| `03 60 00` | Reverb-datan i en bulkdump, till `04 0E 7F` (en nibble per byte: D-50:ns reverbtyper 17 till 32 för dess reverbkrets). Sparas som D-50:n sparar den och skickas tillbaka, efter patcharna när hela minnet efterfrågas (`02 00 00`, storlek `02 0F 00`), så att en bibliotekariedump som läses tillbaka från FM-1 är hel. FM-1:ans reverb är en modell och använder den inte. På bank 1 sparas den i flashminnet med patcharna; på ett kort tills en annan bank väljs. |
-| Allt annat | Tas emot och ignoreras. D-50:n har inget annat område i SysEx: inget systemområde, eftersom dess MIDI- och funktionsinställningar inte nås med SysEx. |
+| `00 00 00` | The temporary area: the current patch's 448 bytes (upper partial 1 and 2, common, lower partial 1 and 2, common, patch; 64 bytes each). A DT1 or DAT here changes the sound at once. A byte above its parameter's maximum is skipped, as on a D-50 (the rest of the message is written). |
+| `02 00 00` | The internal memory: the bank chosen, 448 bytes a patch (64 patches, up to `03 60 00`). Bank 1 (the screen's I) is the D-50's internal memory and is kept in the flash (below); on another bank (a card, C) what is written lasts until another bank is chosen. |
+| `03 60 00` | The reverb data of a bulk dump, to `04 0E 7F` (a nibble a byte: the D-50's reverb types 17 to 32 for its reverb chip). Kept as the D-50 keeps it and sent back, after the patches when the whole memory is asked for (`02 00 00`, size `02 0F 00`), so a librarian's dump read back from the FM-1 is whole. The FM-1's reverb is a model and does not use it. On bank 1 kept in the flash with the patches; on a card until another bank is chosen. |
+| Anything else | Taken and ignored. The D-50 has no other area in SysEx: no system area, since its MIDI and function settings are not reachable by SysEx. |
 
-FM-1 tar emot och besvarar bara D-50-meddelanden för sitt eget enhets-ID (baskanalen minus ett, sidan MIDI Channel); den svarar
-med det ID:t. Ett felaktigt meddelande visar sitt fel på skärmen (fel format, kontrollsumma eller adress).
+The FM-1 takes and answers only the D-50 messages for its own device ID (the basic channel less one, the MIDI Channel page); it answers
+with that ID. A faulty message shows its error on the screen (wrong format, checksum or address).
 
-Där FM-1 skiljer sig från en D-50 (docs/D50-FIRMWARE.md):
+Where the FM-1 differs from a D-50 (docs/D50-FIRMWARE.md):
 
-- Den tar emot mer: det interna minnet och handskakningen när som helst, åt båda hållen, där en D-50 tar dem bara på sin Data Transfer-skärm i
-  den riktning som väljs där, och aldrig besvarar en RQ1 där. Den tar också emot fler än 256 databyte i ett meddelande.
-- Den är strängare med en felaktig kontrollsumma: ingenting skrivs, där en D-50 redan har skrivit datan.
-- Den har ingen Exclu-brytare (all SysEx tas alltid emot) och inget minnesskydd.
-- Den har inget kortminne i SysEx: D-50:ns kortposter i Data Transfer-menyn har ingen motsvarighet, och FM-1:ans övriga banker (C) nås inte med adress. `02 00 00` är den bank som är vald.
-- Den startar en dump själv från Data Transfer-sidan (nedan), som D-50:n gör från sin meny; en dator får också begära en (RQ1, RQD) när som helst.
+- It takes more: the internal memory and the handshake at any time, both ways, where a D-50 takes them only on its Data Transfer screen in
+  the direction chosen there, and never answers an RQ1 there. It also takes more than 256 data bytes in one message.
+- It is stricter on a wrong checksum: nothing is written, where a D-50 has already written the data.
+- It has no Exclu switch (all SysEx is always taken) and no memory protect.
+- It has no card memory in SysEx: the D-50's card items of the Data Transfer menu have no counterpart, and the FM-1's other banks (C) are not reachable by address. `02 00 00` is the bank that is chosen.
+- It starts a dump itself from the Data Transfer page (below), as the D-50 does from its menu; a computer may also ask for one (RQ1, RQD) at any time.
 
-**Data Transfer** (EDIT-sidan efter MIDI Channel), D-50:ns egen meny för en bibliotekarie som väntar på att synthen ska börja, som D50 Librarians nedladdning gör. K1 väljer post, SAVE startar den (som D-50:ns Enter; på den här sidan sparar SAVE inte inställningarna), och att lämna sidan (EDIT, SEL) avslutar en pågående överföring. Posterna är D-50:ns, för hela det interna minnet (`02 00 00`: banken i RAM, med reverb-datan när en dump har fört in den):
+**Data Transfer** (the EDIT page after MIDI Channel), the D-50's own menu for a librarian that waits for the synth to begin, as D50 Librarian's download does. K1 chooses the item, SAVE starts it (as the D-50's Enter; on this page SAVE does not save the settings), and leaving the page (EDIT, SEL) ends a transfer under way. The items are the D-50's, of the whole internal memory (`02 00 00`: the bank in RAM, with the reverb data once a dump brought them):
 
-| Post | Vad FM-1 skickar |
+| Item | What the FM-1 sends |
 | --- | --- |
-| Bulk Dump | WSD, sedan en DAT på 256 byte på var och en av datorns ACK, sedan EOD. Starta bibliotekariens mottagning först, sedan det här. |
-| Bulk Load | RQD; datorn svarar med sin WSD och DAT (när som helst, de tas emot som alltid). |
-| Bulk Dump.O | DT1 på 256 byte enkelriktat, hela minnet. Starta bibliotekariens mottagning först. |
-| Bulk Load.O | Ingenting: DT1 tas emot som alltid. |
+| Bulk Dump | WSD, then a DAT of 256 bytes on each of the computer's ACKs, then EOD. Start the librarian's receive first, then this. |
+| Bulk Load | RQD; the computer answers with its WSD and DATs (any time, they are taken as ever). |
+| Bulk Dump.O | DT1s of 256 bytes one-way, the whole memory. Start the librarian's receive first. |
+| Bulk Load.O | Nothing: DT1s are taken as ever. |
 
-Bulk Dump och Bulk Dump.O skickar alltid D-50:ns egen storlek (`02 0F 00`); utan reverb-data i FM-1 (ingen har någonsin laddats av en dump) går den delen ut som nollor, så att en bibliotekarie som väntar sig hela minnet tar emot den. Skärmen säger Complete . när det är klart, och Error Reject när datorn gav upp (RJC) eller bad om något annat. Prövat med D50 Librarian (bara enkelriktat: Bulk Dump.O och Bulk Load.O, ärende #51); inte mot en riktig D-50. D-50:ns kortposter har ingen motsvarighet.
+Bulk Dump and Bulk Dump.O always send the D-50's own size (`02 0F 00`); with no reverb data in the FM-1 (none was ever loaded by a dump) that part goes out as zeros, so a librarian that expects the whole memory takes it. The screen says Complete . when it is done, and Error Reject when the computer gave up (RJC) or asked for something else. Tried with D50 Librarian (one-way only: Bulk Dump.O and Bulk Load.O, issue #51); not against a real D-50. The card items of the D-50's menu have no counterpart.
 
-**Bank 1 sparas**, som en D-50 sparar sitt interna minne: det SysEx skriver i den (patcharna på `02 00 00` och reverb-datan) sparas
-i flashminnet och finns kvar efter en strömcykel, en uppdatering och ny D-50-data. Fram till första sparningen är det fabriksbanken i din datafil.
-De andra bankerna är kort: det som skrivs i en varar tills en annan bank väljs.
+**Bank 1 is kept**, as a D-50 keeps its internal memory: what SysEx writes into it (the patches at `02 00 00` and the reverb data) is saved
+in the flash and is there after a power cycle, an update and new D-50 data. Until the first save it is the factory bank of your data file.
+The other banks are cards: what is written into one lasts until another bank is chosen.
 
-- **Store Auto** (standard): den sparas av sig själv när SysEx har varit tyst i 1,5 sekunder efter sin sista skrivning i bank 1 (och ingen
-  Data Transfer pågår), så att en hel dump sparas en gång. Skärmen säger SAVING, sedan SAVED och Complete . på LCD:n.
-- **Store SAVE**: den sparas bara när du trycker på SAVE (SAVE-knappen lyser medan det finns något att spara). Om du väljer en annan bank först
-  förloras det som inte sparats.
+- **Store Auto** (the default): it is saved by itself once SysEx has been quiet for 1.5 seconds after its last write into bank 1 (and no
+  Data Transfer is under way), so a whole dump is saved once. The screen says SAVING, then SAVED and Complete . on the LCD.
+- **Store SAVE**: it is saved only when you press SAVE (the SAVE key lights while there is something to save). Choosing another bank first
+  loses what was not saved.
 
-En sparning tar ungefär en sekund; nedhållna toner avslutas när den börjar. Den skriver flashminnet i två kopior, varje gång den äldre, så att en avbruten sparning
-(strömmen, en ny SysEx-skrivning) lämnar den förra kvar.
+A save takes about a second; held notes end when it starts. It writes the flash in two copies, each time the older one, so a save cut short
+(the power, a new SysEx write) leaves the one before.
 
-**FM-1 Setup** (EDIT-sidan efter Data Transfer): FM-1:ans egna inställningar, som en D-50 inte har; sparas med SAVE. K1 är **Store**, Auto eller
-SAVE (ovan). K2 är **Voices**, polyfonitaket: varje tons stämmor som mest, 1 till 16 (16 vid start, D-50:ns eget: 16 toner i Whole, 8 per
-ton i de andra tangentlägena). Det gäller över ett programbyte; stämmor över ett lägre tak låter vidare till sin release. CPU-vakten, som tar bort en
-stämma när belastningen är för hög, går aldrig över det. K3 är **VCrv**, velocity-kurvan för FM-1:ans tangenter, -5 till +5 (0 vid start, som
-uppmätt): + kräver ett hårt anslag för de högsta velocityvärdena, - når dem med mindre. Den verkar på de 20 avkända tangenterna (F3 till C5); den
-översta radens tangenter och MIDI in behåller sin velocity.
+**FM-1 Setup** (the EDIT page after Data Transfer): the FM-1's own settings, which a D-50 has not; kept with SAVE. K1 is **Store**, Auto or
+SAVE (above). K2 is **Voices**, the polyphony cap: each tone's voices at most, 1 to 16 (16 at start, the D-50's own: 16 notes in Whole, 8 a
+tone in the other key modes). It holds over a program change; voices over a lower cap sound on to their release. The CPU guard, which takes a
+voice away when the load is too high, never goes above it. K3 is **VCrv**, the velocity curve of the FM-1's keys, -5 to +5 (0 at start, as
+measured): + makes a hard strike needed for the top velocities, - reaches them with less. It acts on the 20 sensed keys (F3 to C5); the
+top row's keys and MIDI in keep their velocity.
 
-**WRITE**, som D-50:ns: **SAVE hållen 2 sekunder** skriver aktuell patch, med dess ändringar (redigeringssidornas, joystickens, SysEx in i det
-temporära området `00 00 00`), på sin egen plats i bank 1 (I-11 .. I-88), och bank 1 sparas i flashminnet direkt, oavsett Store. Skärmen
-säger WRITE I-xy, SAVING, sedan SAVED, och LCD:n Complete . Ett kort tryck på SAVE sparar inställningarna som förut, när den släpps. Bara bank 1:
-på ett kort säger skärmen ONLY TO BANK I (korten är skrivskyddade).
+**WRITE**, as the D-50's: **SAVE held 2 seconds** writes the current patch, with its edits (the edit pages', the joystick's, SysEx into the
+temporary area `00 00 00`), into its own place in bank 1 (I-11 .. I-88), and bank 1 is saved in the flash at once, whatever Store is. The
+screen says WRITE I-xy, SAVING, then SAVED, and the LCD Complete . A short press of SAVE saves the settings as before, on its release. Bank 1
+only: on a card the screen says ONLY TO BANK I (the cards are read-only).
 
-**För mätning** (`F0 7D 'S' 'F' 02 ... F7`, sex byte):
+**For measuring** (`F0 7D 'S' 'F' 02 ... F7`, six bytes):
 
-| Kommando | Vad det gör |
+| Command | What it does |
 | --- | --- |
-| `0B` | Läser belastningen: vart tiden går, CPU-belastningen och dess topp, stämmorna, kärnorna och de missade ljudblocken. |
-| `0C bits` | Utelämnar reverb (1), chorus (2) eller EQ (4), för att se vad var och en kostar. |
-| `0D c` | Läser vilken SysEx som kom in: de ramar som nådde D-50 och deras DT1, de F0, F7 och byte som USB-avbrottet såg, och vid vilken av det interna minnets 136 platser på 256 byte en DT1 började, både som appen fick dem och som avbrottet såg dem (ärende #84). `c` 1 startar om räknarna. |
-| `0E 00` | Läser de senaste 32 DT1 som nådde D-50, äldst först: varje adress, antal databyte och första databyte (ärende #51: vad en bibliotekarie eller en editor skickar). |
+| `0B` | Reads the load: where the time goes, the CPU load and its peak, the voices, the cores and the missed audio blocks. |
+| `0C bits` | Leaves out the reverb (1), the chorus (2) or the EQ (4), to see what each costs. |
+| `0D c` | Reads what SysEx came in: the frames that reached the D-50 and their DT1s, the F0s, F7s and bytes the USB interrupt saw, and which of the internal memory's 136 places of 256 bytes a DT1 began at, both as the app got them and as the interrupt saw them (issue #84). `c` 1 starts the counts again. |
+| `0E 00` | Reads the last 32 DT1s that reached the D-50, oldest first: each one's address, number of data bytes and first data byte (issue #51: what a librarian or an editor sends). |
 
-**Från plattformen** ([fm1-base](https://github.com/charlesvestal/fm1-base)): uppdateringen av firmwaren och D-50-datan, säkerhetskopiering och återställning, och följeslagarens tjänster.
-[Installationssidan](https://mwedmark.github.io/fm1-d50/install/) och fm1-bases verktyg använder dem; musikprogram behöver dem inte.
+**From the platform** ([fm1-base](https://github.com/charlesvestal/fm1-base)): the update of the firmware and of the D-50 data, backup and restore, and the companion's services. The
+[install page](https://mwedmark.github.io/fm1-d50/install/) and fm1-base's tools use them; music software does not need them.
 
-## D-50-datan
+## The D-50 data
 
-D-50:ns ljud behöver dess PCM-vågminne, och dess patchar kommer från bankdumpar (`.syx`). Båda är Rolands, så **de finns inte i det här repot och
-distribueras aldrig.** Den som bygger fm1-d50 gör datan av sitt eget ROM och sina egna banker:
+The D-50's sound needs its PCM wave ROM, and its patches come from bank dumps (`.syx`). Both are Roland's, so **they are not in this repository and
+are never distributed.** Anyone who builds fm1-d50 makes the data from their own ROM and their own banks:
 
-1. `third_party/picofaced5/tools/d5_extract/d5_make_blob.py` gör `d5_pcm.bin` av ROM:et.
-2. `tools/d50_pack.js` packar den med upp till sex banker.
+1. `third_party/picofaced5/tools/d5_extract/d5_make_blob.py` makes `d5_pcm.bin` from the ROM.
+2. `tools/d50_pack.js` packs it with up to six banks.
 
 ```bash
 node tools/d50_pack.js roms/gen/d5_pcm.bin roms/out/d50_fm1base.fmd5 --bank bank1.syx --bank bank2.syx
 ```
 
-Ett firmwarepaket byggt med datan är bara för eget bruk.
+A firmware package built with the data is for your own use only.
 
-## Licens
+## Licence
 
-Firmwaren är GPL-3.0. Motorn är [PicoFaceD5](https://github.com/Michi71/PicoVintageSynthCollection) av Michi71, GPL-3.0, använd med
-upphovsmannens medgivande ([Michi71/PicoVintageSynthCollection#194](https://github.com/Michi71/PicoVintageSynthCollection/issues/194)).
-Plattformen, [fm1-base](https://github.com/charlesvestal/fm1-base) med felucca-bsp, är MPL-2.0. Bygget av fm1-base länkar inget slutet
-bibliotek: Bluetooth, som skulle kräva JieLis slutna bibliotek, är avstängt. D-50:ns data är Rolands och ingår aldrig i firmwaren eller
-i det här repot.
+The firmware is GPL-3.0. The engine is [PicoFaceD5](https://github.com/Michi71/PicoVintageSynthCollection) by Michi71, GPL-3.0, used with
+its author's agreement ([Michi71/PicoVintageSynthCollection#194](https://github.com/Michi71/PicoVintageSynthCollection/issues/194)).
+The platform, [fm1-base](https://github.com/charlesvestal/fm1-base) with felucca-bsp, is MPL-2.0. The fm1-base build links no closed
+library: Bluetooth, which would need JieLi's closed libraries, is off. The D-50's data is Roland's and is never part of the firmware or
+of this repository.
 
-## Bygga och installera
+## Building and installing
 
-**[INSTALL.md](INSTALL.md) är guiden för alla andra:** emulatorn i webbläsaren, firmwaren från
-[installationssidan](https://mwedmark.github.io/fm1-d50/install/), och firmwaren med din egen D-50-data.
+**[INSTALL.md](INSTALL.md) is the guide for anyone else:** the emulator in the browser, the firmware from the
+[install page](https://mwedmark.github.io/fm1-d50/install/), and the firmware with your own D-50 data.
 
-Firmwaren byggs med fm1-bases verktyg från mappen `fm1base/` och installeras över USB med fm1-bases installationsprogram. Stegen, flashminnets
-layout och mätningarna finns i [FM1-BASE.md](FM1-BASE.md).
+The firmware is built with fm1-base's tools from the `fm1base/` folder and installed over USB with fm1-base's installer. The steps, the flash
+layout and the measurements are in [FM1-BASE.md](FM1-BASE.md).
 
-## Mer
+## More
 
-- [D50.md](D50.md): D-50:n som mål, och planen
-- [RESEARCH.md](RESEARCH.md): vad som har tagits reda på om D-50:n, med källor
-- [FM1-BASE.md](FM1-BASE.md): fm1-base, bygget och belastningen för varje patch
-- [Ärenden](https://github.com/mwedmark/fm1-d50/issues): vad som arbetas med
+- [D50.md](D50.md): the D-50 as the target, and the plan
+- [RESEARCH.md](RESEARCH.md): what was found out about the D-50, with sources
+- [FM1-BASE.md](FM1-BASE.md): fm1-base, the build, and the load of every patch
+- [Issues](https://github.com/mwedmark/fm1-d50/issues): what is being worked on
 
-## Vad som finns var
+## What is where
 
-- `fm1base/`: appen på fm1-base (panelen, skärmen, MIDI, omsamplaren), dess `fm1.toml` och emulatorsidan (`web/emu/`).
-- `d50/`: limmet mellan firmwaren och motorn (`d50.h`, `d50.cpp`), bankens uppackning, de libm- och std-huvuden som verktygskedjan
-  saknar, och omsamplingsfiltret 32 till 44,1 kHz (`tools/make_resampler.js` skriver det).
-- `third_party/picofaced5/`: motorn.
-- `tools/`: `d50_pack.js` (datan), `d50_host/` (motorn på en PC: renderingar och tester), `ci/` (bygget på GitHub).
-- `rescue_tools/`: originalfirmware tillbaka på en FM-1 som inte startar (`fm1_rescue.py`, med M-VAVE:s V15, `FM-1_015.fwsc`).
+- `fm1base/`: the app on fm1-base (the panel, the screen, MIDI, the resampler), its `fm1.toml` and the emulator page (`web/emu/`).
+- `d50/`: the glue between the firmware and the engine (`d50.h`, `d50.cpp`), the bank's unpacking, the libm and std headers the toolchain
+  lacks, and the 32 to 44.1 kHz resampling filter (`tools/make_resampler.js` writes it).
+- `third_party/picofaced5/`: the engine.
+- `tools/`: `d50_pack.js` (the data), `d50_host/` (the engine on a PC: renders and tests), `ci/` (the GitHub build).
+- `rescue_tools/`: stock firmware back onto an FM-1 that does not start (`fm1_rescue.py`, with M-VAVE's V15, `FM-1_015.fwsc`).
 
-Repot började som en kopia av [fm1-sf2](https://github.com/mwedmark/fm1-sf2), FM-1:ans SoundFont-spelare, och D-50:n gick först på
-M-VAVE:s fm1_open SDK där. Det bygget, SF2-spelaren och dess sidor och verktyg togs bort när D-50:n flyttade till fm1-base; `D50.md` och
-`FM1-BASE.md` beskriver dem fortfarande där de berättar historien.
+The repository began as a copy of [fm1-sf2](https://github.com/mwedmark/fm1-sf2), the FM-1's SoundFont player, and the D-50 first ran on
+M-VAVE's fm1_open SDK there. That build, the SF2 player and its pages and tools were removed when the D-50 moved to fm1-base; `D50.md` and
+`FM1-BASE.md` still describe them where they tell the history.
